@@ -38,6 +38,10 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
   if (!healthy) throw new Error(`Installed package did not become healthy:\n${output}`);
+  const projectsResponse = await fetch(`http://127.0.0.1:${port}/api/projects`, { headers: { cookie: `nexotao_session=${token}` } });
+  const projects = projectsResponse.ok ? await projectsResponse.json() : null;
+  if (!projectsResponse.ok || !Array.isArray(projects?.projects))
+    throw new Error(`Installed package could not open its SQLite repository:\n${output}`);
 
   app.kill("SIGTERM");
   await new Promise((resolve, reject) => {

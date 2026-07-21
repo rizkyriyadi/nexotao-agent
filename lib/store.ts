@@ -1,10 +1,7 @@
-// Local JSON store — the app's database, persisted to ~/.nexotao. No native deps
-// so `npm install` needs no compilation.
-import { promises as fs } from "fs";
-import path from "path";
-import { randomUUID } from "crypto";
-import { DIR, ensureDir, getConfig } from "./config";
-import { redactValue } from "./redact";
+import { randomUUID } from "node:crypto";
+import { asc, desc, eq, inArray } from "drizzle-orm";
+import { getDatabase } from "./db/database";
+import { agentRuns, projects, runRecords, sessions, tasks } from "./db/schema";
 
 export type AgentSpec = { name: string; scope: string };
 export type Project = { id: string; name: string; path: string; mode: "single" | "multi"; agents: AgentSpec[]; createdAt: number };
@@ -13,154 +10,105 @@ export type Session = { id: string; projectId: string; title: string; createdAt:
 export type Col = "backlog" | "todo" | "in_progress" | "review" | "done";
 export type Task = { id: string; ref: string; projectId: string; title: string; col: Col; createdAt: number; runId?: string; agent?: string; summary?: string; updatedAt?: number };
 export type AgentRun = { id: string; projectId: string; agent: string; task: string; summary: string; ok: boolean; ts: number };
-export type RunRecord = {
-  id: string;
-  projectId: string;
-  kind: "chat" | "orchestrator";
-  title: string;
-  status: "running" | "done" | "error" | "cancelled";
-  createdAt: number;
-  updatedAt: number;
-  events: any[]; // full event log — lets a finished run be replayed for viewing
-};
+export type RunRecord = { id: string; projectId: string; kind: "chat" | "orchestrator"; title: string; status: "running" | "done" | "error" | "cancelled"; createdAt: number; updatedAt: number; events: any[] };
 
-export async function read<T>(file: string, key: string): Promise<T[]> {
-  try {
-    return (JSON.parse(await fs.readFile(path.join(DIR, file), "utf8"))[key] ?? []) as T[];
-  } catch {
-    return [];
-  }
-}
-export async function write<T>(file: string, key: string, rows: T[]) {
-  ensureDir();
-  const target = path.join(DIR, file);
-  const cfg = await getConfig();
-  const safeRows = redactValue(rows, [cfg.apiKey, cfg.searchApiKey]);
-  await fs.writeFile(target, JSON.stringify({ [key]: safeRows }, null, 2), { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(target, 0o600);
-}
+const projectFromRow = (row: typeof projects.$inferSelect): Project => ({ id: row.id, name: row.name, path: row.path, mode: row.mode, agents: row.agentSpecs, createdAt: row.createdAt });
+const taskFromRow = (row: typeof tasks.$inferSelect): Task => ({ id: row.id, ref: row.ref, projectId: row.projectId, title: row.title, col: row.col as Col, createdAt: row.createdAt, updatedAt: row.updatedAt, ...(row.runId ? { runId: row.runId } : {}), ...(row.agent ? { agent: row.agent } : {}), ...(row.summary ? { summary: row.summary } : {}) });
+const runFromRow = (row: typeof runRecords.$inferSelect): RunRecord => ({ ...row, events: row.events as any[] });
 
-// Serialize read-modify-write per file so parallel sub-agents don't clobber each
-// other's updates (the JSON store is a shared file — concurrent writes lose data).
-const locks = new Map<string, Promise<unknown>>();
-export function withLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
-  const prev = locks.get(file) ?? Promise.resolve();
-  const run = prev.then(fn, fn);
-  locks.set(file, run.catch(() => {}));
-  return run;
+export async function listProjects() {
+  const database = await getDatabase();
+  return database.read((db) => db.select().from(projects).orderBy(asc(projects.createdAt)).all().map(projectFromRow));
 }
-
-/* ── Projects ─────────────────────────────────────────── */
-export const listProjects = () => read<Project>("projects.json", "projects");
-export async function getProject(id: string) {
-  return (await listProjects()).find((p) => p.id === id) ?? null;
-}
-export function addProject(p: Omit<Project, "id" | "createdAt">): Promise<Project> {
-  return withLock("projects.json", async () => {
-    const rows = await listProjects();
-    const proj: Project = { ...p, id: randomUUID(), createdAt: Date.now() };
-    rows.push(proj);
-    await write("projects.json", "projects", rows);
-    return proj;
-  });
+export async function getProject(id: string) { return (await listProjects()).find((project) => project.id === id) ?? null; }
+export async function addProject(input: Omit<Project, "id" | "createdAt">): Promise<Project> {
+  const database = await getDatabase();
+  const project: Project = { ...input, id: randomUUID(), createdAt: Date.now() };
+  await database.write((db) => db.insert(projects).values({ id: project.id, name: project.name, path: project.path, mode: project.mode, agentSpecs: project.agents, createdAt: project.createdAt }).run());
+  return project;
 }
 export async function getActiveProject(): Promise<Project | null> {
-  const c = await getConfig();
-  if (!c.activeProjectId) return null;
-  return getProject(c.activeProjectId);
+  const { getConfig } = await import("./config");
+  const config = await getConfig();
+  return config.activeProjectId ? getProject(config.activeProjectId) : null;
 }
 
-/* ── Sessions ─────────────────────────────────────────── */
-export const listSessions = async (projectId?: string) => {
-  const rows = await read<Session>("sessions.json", "sessions");
-  return (projectId ? rows.filter((s) => s.projectId === projectId) : rows).sort((a, b) => b.updatedAt - a.updatedAt);
-};
+export async function listSessions(projectId?: string) {
+  const database = await getDatabase();
+  const rows = database.read((db) => db.select().from(sessions).where(projectId ? eq(sessions.projectId, projectId) : undefined).orderBy(desc(sessions.updatedAt)).all());
+  return rows as Session[];
+}
 export async function getSession(id: string) {
-  return (await read<Session>("sessions.json", "sessions")).find((s) => s.id === id) ?? null;
+  const database = await getDatabase();
+  return database.read((db) => db.select().from(sessions).where(eq(sessions.id, id)).get() as Session | undefined) ?? null;
 }
-export function createSession(projectId: string, title: string): Promise<Session> {
-  return withLock("sessions.json", async () => {
-    const rows = await read<Session>("sessions.json", "sessions");
-    const s: Session = { id: randomUUID(), projectId, title: title.slice(0, 80) || "New session", createdAt: Date.now(), updatedAt: Date.now(), messages: [] };
-    rows.push(s);
-    await write("sessions.json", "sessions", rows);
-    return s;
-  });
+export async function createSession(projectId: string, title: string): Promise<Session> {
+  const database = await getDatabase();
+  const now = Date.now();
+  const session: Session = { id: randomUUID(), projectId, title: title.slice(0, 80) || "New session", createdAt: now, updatedAt: now, messages: [] };
+  await database.write((db) => db.insert(sessions).values(session).run());
+  return session;
 }
-export function saveSessionMessages(id: string, messages: Message[], title?: string) {
-  return withLock("sessions.json", async () => {
-    const rows = await read<Session>("sessions.json", "sessions");
-    const s = rows.find((x) => x.id === id);
-    if (!s) return null;
-    s.messages = messages;
-    s.updatedAt = Date.now();
-    if (title && (!s.title || s.title === "New session")) s.title = title.slice(0, 80);
-    await write("sessions.json", "sessions", rows);
-    return s;
+export async function saveSessionMessages(id: string, messages: Message[], title?: string) {
+  const database = await getDatabase();
+  return database.write((db) => {
+    const current = db.select().from(sessions).where(eq(sessions.id, id)).get();
+    if (!current) return null;
+    const nextTitle = title && (!current.title || current.title === "New session") ? title.slice(0, 80) : current.title;
+    db.update(sessions).set({ messages, title: nextTitle, updatedAt: Date.now() }).where(eq(sessions.id, id)).run();
+    return db.select().from(sessions).where(eq(sessions.id, id)).get() as Session;
   });
 }
 
-/* ── Tasks ────────────────────────────────────────────── */
-export const listTasks = async (projectId?: string) => {
-  const rows = await read<Task>("tasks.json", "tasks");
-  return projectId ? rows.filter((t) => t.projectId === projectId) : rows;
-};
-export function addTask(projectId: string, title: string, opts?: { col?: Col; runId?: string; agent?: string; summary?: string }): Promise<Task> {
-  return withLock("tasks.json", async () => {
-    const rows = await read<Task>("tasks.json", "tasks");
-    const n = rows.filter((t) => t.projectId === projectId).length + 1;
-    const t: Task = {
-      id: randomUUID(), ref: `#${n}`, projectId, title: title.trim() || "Untitled",
-      col: opts?.col ?? "todo", createdAt: Date.now(), updatedAt: Date.now(),
-      runId: opts?.runId, agent: opts?.agent, summary: opts?.summary,
-    };
-    rows.push(t);
-    await write("tasks.json", "tasks", rows);
-    return t;
+export async function listTasks(projectId?: string) {
+  const database = await getDatabase();
+  return database.read((db) => db.select().from(tasks).where(projectId ? eq(tasks.projectId, projectId) : undefined).all().map(taskFromRow));
+}
+export async function addTask(projectId: string, title: string, opts?: { col?: Col; runId?: string; agent?: string; summary?: string }): Promise<Task> {
+  const database = await getDatabase();
+  return database.write((db) => {
+    const now = Date.now();
+    const n = db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, projectId)).all().length + 1;
+    const task: Task = { id: randomUUID(), ref: `#${n}`, projectId, title: title.trim() || "Untitled", col: opts?.col ?? "todo", createdAt: now, updatedAt: now, runId: opts?.runId, agent: opts?.agent, summary: opts?.summary };
+    db.insert(tasks).values({ ...task, runId: task.runId ?? null, agent: task.agent ?? null, summary: task.summary ?? null, updatedAt: now }).run();
+    return task;
   });
 }
-export function updateTask(id: string, patch: Partial<Pick<Task, "col" | "title" | "summary">>) {
-  return withLock("tasks.json", async () => {
-    const rows = await read<Task>("tasks.json", "tasks");
-    const t = rows.find((x) => x.id === id);
-    if (t) { Object.assign(t, patch); t.updatedAt = Date.now(); }
-    await write("tasks.json", "tasks", rows);
-    return t ?? null;
+export async function updateTask(id: string, patch: Partial<Pick<Task, "col" | "title" | "summary">>) {
+  const database = await getDatabase();
+  return database.write((db) => {
+    db.update(tasks).set({ ...patch, updatedAt: Date.now() }).where(eq(tasks.id, id)).run();
+    const row = db.select().from(tasks).where(eq(tasks.id, id)).get();
+    return row ? taskFromRow(row) : null;
   });
 }
 
-/* ── Agent history (what each sub-agent worked on) ─────── */
-export const listAgentRuns = async (projectId?: string, agent?: string) => {
-  const rows = await read<AgentRun>("agent-runs.json", "runs");
-  return rows
-    .filter((r) => (projectId ? r.projectId === projectId : true) && (agent ? r.agent === agent : true))
-    .sort((a, b) => b.ts - a.ts);
-};
-export function addAgentRun(projectId: string, r: { agent: string; task: string; summary: string; ok: boolean }): Promise<AgentRun> {
-  return withLock("agent-runs.json", async () => {
-    const rows = await read<AgentRun>("agent-runs.json", "runs");
-    const run: AgentRun = { id: randomUUID(), projectId, ts: Date.now(), ...r };
-    rows.push(run);
-    await write("agent-runs.json", "runs", rows);
-    return run;
-  });
+export async function listAgentRuns(projectId?: string, agent?: string) {
+  const database = await getDatabase();
+  const rows = database.read((db) => db.select().from(agentRuns).orderBy(desc(agentRuns.ts)).all());
+  return rows.filter((row) => (!projectId || row.projectId === projectId) && (!agent || row.agent === agent));
+}
+export async function addAgentRun(projectId: string, input: { agent: string; task: string; summary: string; ok: boolean }): Promise<AgentRun> {
+  const database = await getDatabase();
+  const row: AgentRun = { id: randomUUID(), projectId, ts: Date.now(), ...input };
+  await database.write((db) => db.insert(agentRuns).values(row).run());
+  return row;
 }
 
-/* ── Runs (durable event logs — every AI run, viewable any time) ── */
-export const listRunRecords = async (projectId?: string) => {
-  const rows = await read<RunRecord>("runs.json", "runs");
-  return (projectId ? rows.filter((r) => r.projectId === projectId) : rows).sort((a, b) => b.updatedAt - a.updatedAt);
-};
+export async function listRunRecords(projectId?: string) {
+  const database = await getDatabase();
+  return database.read((db) => db.select().from(runRecords).where(projectId ? eq(runRecords.projectId, projectId) : undefined).orderBy(desc(runRecords.updatedAt)).all().map(runFromRow));
+}
 export async function getRunRecord(id: string) {
-  return (await read<RunRecord>("runs.json", "runs")).find((r) => r.id === id) ?? null;
+  const database = await getDatabase();
+  const row = database.read((db) => db.select().from(runRecords).where(eq(runRecords.id, id)).get());
+  return row ? runFromRow(row) : null;
 }
-export function saveRunRecord(rec: RunRecord) {
-  return withLock("runs.json", async () => {
-    const rows = await read<RunRecord>("runs.json", "runs");
-    const i = rows.findIndex((r) => r.id === rec.id);
-    if (i >= 0) rows[i] = rec; else rows.push(rec);
-    // keep only the most recent 60 runs on disk
-    const trimmed = rows.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 60);
-    await write("runs.json", "runs", trimmed);
+export async function saveRunRecord(record: RunRecord) {
+  const database = await getDatabase();
+  await database.write((db) => {
+    db.insert(runRecords).values(record).onConflictDoUpdate({ target: runRecords.id, set: { title: record.title, status: record.status, events: record.events, updatedAt: record.updatedAt } }).run();
+    const excess = db.select({ id: runRecords.id }).from(runRecords).orderBy(desc(runRecords.updatedAt)).all().slice(60).map((row) => row.id);
+    if (excess.length) db.delete(runRecords).where(inArray(runRecords.id, excess)).run();
   });
 }

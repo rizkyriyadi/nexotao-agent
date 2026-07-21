@@ -12,7 +12,9 @@ export type Config = {
   searchApiKey?: string; // optional Tavily key for reliable web search
 };
 
-export const DIR = path.join(os.homedir(), ".nexotao");
+export const DIR = process.env.NEXOTAO_DATA_DIR
+  ? path.resolve(process.env.NEXOTAO_DATA_DIR)
+  : path.join(os.homedir(), ".nexotao");
 const FILE = path.join(DIR, "config.json");
 
 export function ensureDir() {

@@ -32,7 +32,22 @@ That's it. The UI opens at `http://localhost:4319`. On first launch you'll be wa
 
 ## Where's my data?
 
-Everything is stored locally in `~/.nexotao/` as plain JSON — projects, sessions, tasks, and run history. Nothing leaves your machine except the model calls to the Nexotao API.
+Everything is stored locally in `~/.nexotao/nexotao.sqlite`. Nothing leaves your machine except the model calls to the Nexotao API.
+
+The database uses SQLite through a Drizzle repository boundary. The packaged driver is the SQL.js embedded JavaScript build, which works on every supported Node platform without native compilation. Because this driver does not expose durable WAL mode, commits are serialized and the exported database is replaced atomically. The repository contract stays driver-independent so a native WAL driver can replace it after Linux, macOS, and Windows packaging smoke tests pass.
+
+### Upgrading from JSON storage
+
+On first boot, Nexotao detects the former JSON files, copies them to `~/.nexotao/backups/json-v1-<timestamp>/`, then imports them in one transaction. The migration records its completion in the database, so subsequent boots do not duplicate records. Identifiers, relationships, dependencies, sessions, tasks, and run history are preserved.
+
+### Rolling back the JSON migration
+
+1. Stop Nexotao.
+2. Move `~/.nexotao/nexotao.sqlite` to a safe location; do not delete it until the rollback is verified.
+3. Copy the JSON files from `~/.nexotao/backups/json-v1-<timestamp>/` back into `~/.nexotao/`.
+4. Start the previous Nexotao version.
+
+The backup represents state immediately before migration. Changes made after the SQLite upgrade remain in the moved database and are not visible to a JSON-only version.
 
 ## Requirements
 
