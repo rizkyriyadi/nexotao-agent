@@ -5,6 +5,7 @@ import { ArrowUp, Sparkles, Loader2 } from "lucide-react";
 import { useState } from "react";
 import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
+import { Markdown } from "../ui/markdown";
 import { useWorkspace, target, type Item } from "./workspace-context";
 
 const SUGGESTIONS = [
@@ -75,8 +76,8 @@ export function Chat() {
                 it.text ? (
                   <div key={i}>
                     <p className="label mb-2.5">Agent</p>
-                    <div className="whitespace-pre-wrap text-[15px] leading-[1.65] text-charcoal">
-                      {it.text}
+                    <div>
+                      <Markdown>{it.text}</Markdown>
                       {it.streaming && <span className="nx-caret" />}
                     </div>
                   </div>

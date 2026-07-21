@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Crown, Users, ArrowUp, X, Clock, History, Plus, Loader2 } from "lucide-react";
+import { useState } from "react";
+import { Crown, Users, ArrowUp, History, Plus, Loader2 } from "lucide-react";
 import { useOrch, type Thread, type LogItem } from "./orchestrator-context";
 import { agentPP, LEAD_PP } from "@/lib/avatars";
+import { Markdown } from "../ui/markdown";
 import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
 
@@ -57,7 +58,7 @@ function LogView({ log }: { log: LogItem[] }) {
       {log.length === 0 && <p className="text-[13px] text-pebble">Waiting…</p>}
       {log.map((it, i) =>
         it.kind === "text" ? (
-          <p key={i} className="whitespace-pre-wrap text-[13.5px] leading-[1.6] text-charcoal">{it.text}</p>
+          <Markdown key={i} className="!text-[13.5px]">{it.text}</Markdown>
         ) : (
           <div key={i} className="-mx-2 flex items-center gap-3 rounded-md px-2 py-[5px]">
             <span className={`size-[6px] shrink-0 rounded-full ${it.status === "running" ? "bg-electric-indigo nx-pulse" : it.status === "error" ? "bg-alarm-red" : "bg-pebble"}`} />
@@ -77,8 +78,6 @@ function ago(ts: number) {
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`; return `${Math.floor(s / 86400)}d ago`;
 }
 
-type Hist = { id: string; task: string; summary: string; ok: boolean; ts: number };
-
 function statusDot(s: string) {
   return s === "running" ? "bg-electric-indigo nx-pulse" : s === "error" ? "bg-alarm-red" : "bg-lichen-green";
 }
@@ -86,93 +85,11 @@ function statusDot(s: string) {
 export function Orchestrator() {
   const { started, running, task, threads, selected, runs, setSelected, start, openRun, newRun } = useOrch();
   const [input, setInput] = useState("");
-  const [team, setTeam] = useState<{ name: string; scope: string }[]>([]);
-  const [mode, setMode] = useState<string | null>(null);
-  const [historyAgent, setHistoryAgent] = useState<string | null>(null);
-  const [history, setHistory] = useState<Hist[]>([]);
-
-  useEffect(() => {
-    fetch("/api/config").then((r) => r.json()).then((d) => { setTeam(d.project?.agents ?? []); setMode(d.project?.mode ?? null); }).catch(() => {});
-  }, []);
-
-  function openHistory(name: string) {
-    setHistoryAgent(name);
-    setHistory([]);
-    fetch(`/api/agent-runs?agent=${encodeURIComponent(name)}`).then((r) => r.json()).then((d) => setHistory(d.runs ?? [])).catch(() => {});
-  }
-
-  const historyDrawer = historyAgent && (
-    <div className="fixed inset-0 z-50 flex justify-end bg-charcoal/15" onClick={() => setHistoryAgent(null)}>
-      <div className="scroll-thin h-full w-[440px] overflow-y-auto border-l border-line-strong bg-paper-white" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
-          <div className="flex items-center gap-2.5">
-            <img src={agentPP(team.findIndex((a) => a.name === historyAgent))} alt={historyAgent} className="size-8 rounded-xl object-cover" />
-            <span className="text-[14px] font-medium text-charcoal">{historyAgent}</span>
-          </div>
-          <button onClick={() => setHistoryAgent(null)} className="text-pebble hover:text-charcoal"><X className="size-4" /></button>
-        </div>
-        <div className="px-5 py-4">
-          <p className="label mb-3 flex items-center gap-1.5"><Clock className="size-3.5" /> Task history</p>
-          {history.length === 0 ? (
-            <p className="rounded-xl border border-dashed border-line-strong px-4 py-6 text-center text-[13px] text-pebble">No tasks yet — this agent hasn't run.</p>
-          ) : (
-            <ul className="space-y-2.5">
-              {history.map((h) => (
-                <li key={h.id} className="rounded-xl border border-line p-3.5">
-                  <div className="flex items-center gap-2">
-                    <span className={`size-[6px] shrink-0 rounded-full ${h.ok ? "bg-lichen-green" : "bg-alarm-red"}`} />
-                    <span className="truncate text-[13px] font-medium text-charcoal">{h.task}</span>
-                  </div>
-                  <p className="mt-1.5 text-[12.5px] leading-relaxed text-bark-grey">{h.summary}</p>
-                  <p className="mt-1.5 font-mono text-[11px] text-pebble">{ago(h.ts)}</p>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-    </div>
-  );
 
   if (!started) {
     return (
-      <>
-      {historyDrawer}
       <div className="scroll-thin flex h-full min-w-0 flex-1 flex-col items-center overflow-y-auto px-8 py-10">
-        <div className="w-full max-w-[600px]">
-          {/* the configured team */}
-          {mode === "multi" && team.length > 0 ? (
-            <div className="mb-8">
-              <div className="mb-3 flex items-center gap-2">
-                <Users className="size-4 text-electric-indigo" />
-                <span className="label !text-charcoal">Your agent team</span>
-                <span className="font-mono text-[11px] text-pebble">{team.length} agents</span>
-              </div>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                {team.map((a, i) => (
-                  <button key={i} onClick={() => openHistory(a.name)} className="flex items-center gap-3 rounded-2xl border border-line bg-paper-white p-3.5 text-left transition-colors hover:border-line-strong">
-                    <img src={agentPP(i)} alt={a.name} className="size-9 shrink-0 rounded-xl object-cover" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13.5px] font-medium text-charcoal">{a.name}</p>
-                      <p className="truncate text-[12px] text-bark-grey">{a.scope}</p>
-                    </div>
-                    <Clock className="size-3.5 shrink-0 text-pebble" />
-                  </button>
-                ))}
-              </div>
-            </div>
-          ) : mode === "single" ? (
-            <div className="mb-8 flex items-center gap-3 rounded-2xl border border-line bg-paper-white p-4">
-              <img src={LEAD_PP} alt="Agent" className="size-9 rounded-xl object-cover" />
-              <div>
-                <p className="text-[13.5px] font-medium text-charcoal">Single agent</p>
-                <p className="text-[12px] text-bark-grey">This project uses one agent. Big tasks are still handled — the lead just works solo.</p>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="mt-2 w-full max-w-[560px] text-center">
+        <div className="w-full max-w-[560px] text-center">
           <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-mist-lavender text-electric-indigo">
             <Users className="size-5" />
           </span>
@@ -214,7 +131,6 @@ export function Orchestrator() {
           </div>
         )}
       </div>
-      </>
     );
   }
 
