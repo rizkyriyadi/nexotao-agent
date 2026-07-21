@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveProject } from "@/lib/store";
 import { getConfig } from "@/lib/config";
-import { listIssues, listAgents, updateIssue, seedAgents, type IssueStatus } from "@/lib/issues";
+import { createIssue, listIssues, listAgents, updateIssue, seedAgents, type IssueStatus } from "@/lib/issues";
 import { submitGoal, tick, triggerHeartbeat } from "@/lib/executor";
 import { IssueDomainError } from "@/lib/issue-lifecycle";
 
@@ -26,7 +26,19 @@ function domainErrorResponse(error: unknown) {
 
 /** Submit a goal — creates the root issue for the lead and starts the run. */
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => null) as { goal?: unknown } | null;
+  const body = await req.json().catch(() => null) as { goal?: unknown; title?: unknown; assigneeAgentId?: string | null; priority?: string } | null;
+  if (body && typeof body.title === "string" && body.title.trim()) {
+    const project = await getActiveProject();
+    if (!project) return NextResponse.json({ error: "No active project." }, { status: 400 });
+    try {
+      const issue = await createIssue({
+        projectId: project.id, title: body.title.trim(), assigneeAgentId: body.assigneeAgentId ?? null,
+        priority: body.priority ?? "medium", status: "backlog", actor: { type: "user" },
+        idempotencyKey: req.headers.get("idempotency-key") ?? undefined,
+      });
+      return NextResponse.json({ issue }, { status: 201 });
+    } catch (error) { return domainErrorResponse(error); }
+  }
   if (!body || typeof body.goal !== "string" || !body.goal.trim() || body.goal.length > 20_000) return NextResponse.json({ error: "goal must be a non-empty string" }, { status: 400 });
   const goal = body.goal.trim();
   const cfg = await getConfig();
@@ -44,10 +56,13 @@ export async function POST(req: Request) {
 
 /** Manual issue edits (e.g. moving a card on the board). */
 export async function PATCH(req: Request) {
-  const { id, status } = (await req.json()) as { id: string; status?: IssueStatus };
+  const body = (await req.json()) as { id: string; status?: IssueStatus; stage?: "plan" | "execute" | "integrate"; title?: string; detail?: string; priority?: string; assigneeAgentId?: string | null; blockedBy?: string[] };
+  const { id, status, ...patch } = body;
+  if (!id) return NextResponse.json({ error: "id is required" }, { status: 400 });
   const project = await getActiveProject();
   try {
-    const issue = await updateIssue(id, status ? { status } : {}, { type: "user" });
+    const issue = await updateIssue(id, { ...patch, ...(status !== undefined ? { status } : {}) }, { type: "user" });
+    if (!issue) return NextResponse.json({ error: "Issue not found", code: "not_found" }, { status: 404 });
     if (issue?.assigneeAgentId && status === "todo") {
       await triggerHeartbeat({ agentId: issue.assigneeAgentId, issueId: issue.id, reason: "invoke", eventId: `manual:${issue.updatedAt}` });
     } else if (project) await tick(project.id);

@@ -1,10 +1,10 @@
 import { AppShell } from "@/components/AppShell";
-import { Board } from "@/components/board/Board";
+import { TaskBoard } from "@/components/board/TaskBoard";
 
 export default function BoardPage() {
   return (
     <AppShell active="board">
-      <Board />
+      <TaskBoard />
     </AppShell>
   );
 }
