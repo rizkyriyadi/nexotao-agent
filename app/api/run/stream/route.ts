@@ -1,5 +1,9 @@
 import { getActiveRun, getRun, type RunEvent } from "@/lib/run-manager";
 import { getRunRecord } from "@/lib/store";
+import { getDatabase } from "@/lib/db/database";
+import { ControlPlaneRepositories } from "@/lib/db/repositories";
+import { createRunEventStream } from "@/lib/run-event-stream";
+import { parseRunEventCursor, RunEventDomainError } from "@/lib/run-events";
 
 export const runtime = "nodejs";
 export const maxDuration = 800;
@@ -15,6 +19,25 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const sessionId = url.searchParams.get("session");
   const runId = url.searchParams.get("runId");
+  if (runId) {
+    const repositories = new ControlPlaneRepositories(await getDatabase());
+    if (repositories.getHeartbeat(runId)) {
+      try {
+        const cursor = parseRunEventCursor(req.headers.get("last-event-id") ?? url.searchParams.get("cursor"));
+        return new Response(createRunEventStream(repositories, runId, cursor), {
+          headers: {
+            "Content-Type": "text/event-stream; charset=utf-8",
+            "Cache-Control": "no-cache, no-transform",
+            Connection: "keep-alive",
+            "X-Accel-Buffering": "no",
+          },
+        });
+      } catch (error) {
+        if (error instanceof RunEventDomainError) return Response.json({ error: error.message }, { status: 400 });
+        throw error;
+      }
+    }
+  }
   const run = runId ? getRun(runId) : sessionId ? getActiveRun(sessionId) : undefined;
 
   if (!run) {

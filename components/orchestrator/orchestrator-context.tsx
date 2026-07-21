@@ -5,7 +5,8 @@ import { toast } from "sonner";
 
 export type LogItem =
   | { kind: "text"; text: string }
-  | { kind: "tool"; id: string; name: string; target: string; status: "running" | "done" | "error"; display?: string };
+  | { kind: "tool"; id: string; name: string; target: string; status: "running" | "done" | "error"; display?: string; input?: unknown; output?: string }
+  | { kind: "event"; tone: "neutral" | "success" | "error"; label: string; detail?: string };
 
 export type IssueNode = {
   id: string;
@@ -116,34 +117,69 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
     streamAbort.current = ac;
     streamingRunId.current = runId;
     setLog([]);
-    try {
-      const res = await fetch(`/api/run/stream?runId=${runId}`, { signal: ac.signal });
-      if (!res.body) return;
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      const append = (t: string) => setLog((prev) => {
-        const last = prev[prev.length - 1];
-        if (last && last.kind === "text") { const c = [...prev]; c[c.length - 1] = { kind: "text", text: last.text + t }; return c; }
-        return [...prev, { kind: "text", text: t }];
-      });
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const parts = buf.split("\n\n"); buf = parts.pop() || "";
-        for (const p of parts) {
-          const line = p.trim(); if (!line.startsWith("data:")) continue;
-          const e = JSON.parse(line.slice(5).trim());
-          if (e.type === "idle" || e.type === "done" || e.type === "error") { streamingRunId.current = null; return; }
-          if (e.type === "text") append(e.text);
-          else if (e.type === "approval") setApproval({ runId, id: e.id, name: e.name, input: e.input });
-          else if (e.type === "tool_use") setLog((prev) => [...prev, { kind: "tool", id: e.id, name: e.name, target: tgt(e.name, e.input), status: "running" }]);
-          else if (e.type === "tool_result") setLog((prev) => prev.map((it) => (it.kind === "tool" && it.id === e.id ? { ...it, status: e.ok ? "done" : "error", display: e.display } : it)));
-        }
+    let cursor = 0;
+    let terminal = false;
+    let attempts = 0;
+    const append = (text: string) => setLog((prev) => {
+      const last = prev[prev.length - 1];
+      if (last?.kind === "text") { const copy = [...prev]; copy[copy.length - 1] = { kind: "text", text: last.text + text }; return copy; }
+      return [...prev, { kind: "text", text }];
+    });
+    const addEvent = (raw: any) => {
+      const e = raw.payload !== undefined ? { type: raw.type, ...raw.payload } : raw;
+      if (Number.isSafeInteger(raw.seq) && raw.seq <= cursor) return false;
+      if (Number.isSafeInteger(raw.seq)) cursor = raw.seq;
+      const type = e.type;
+      if (type === "idle") return true;
+      if (type === "reasoning_summary" || type === "output" || type === "text") append(String(e.text ?? ""));
+      else if (type === "approval_wait" || type === "approval") setApproval({ runId, id: e.id, name: e.name, input: e.input });
+      else if (type === "tool_call" || type === "tool_use")
+        setLog((prev) => prev.some((item) => item.kind === "tool" && item.id === e.id) ? prev : [...prev, { kind: "tool", id: e.id, name: e.name, target: tgt(e.name, e.input), input: e.input, status: "running" }]);
+      else if (type === "tool_result") {
+        setLog((prev) => prev.map((item) => item.kind === "tool" && item.id === e.id ? { ...item, status: e.ok ? "done" : "error", display: e.display, output: e.output } : item));
+        setApproval(null);
+      } else if (type === "usage")
+        setLog((prev) => [...prev, { kind: "event", tone: "neutral", label: "Usage", detail: `${e.inputTokens ?? 0} input · ${e.outputTokens ?? 0} output tokens` }]);
+      else if (type === "waiting")
+        setLog((prev) => [...prev, { kind: "event", tone: "neutral", label: "Waiting", detail: String(e.reason ?? "Approval required") }]);
+      else if (["success", "failure", "cancellation", "done", "error", "cancelled"].includes(type)) {
+        const detail = String(e.error ?? e.reason ?? "");
+        setLog((prev) => [...prev, { kind: "event", tone: type === "success" || type === "done" ? "success" : "error", label: type === "success" || type === "done" ? "Run succeeded" : type === "cancellation" || type === "cancelled" ? "Run cancelled" : "Run failed", detail }]);
+        if (type === "failure" || type === "error") toast.error(detail || "Run failed");
+        return true;
       }
-    } catch { /* aborted or ended */ }
-    finally { if (streamingRunId.current === runId) streamingRunId.current = null; }
+      return false;
+    };
+    try {
+      while (!ac.signal.aborted && !terminal && attempts < 6) {
+        try {
+          const res = await fetch(`/api/run/stream?runId=${runId}&cursor=${cursor}`, { signal: ac.signal, headers: cursor ? { "Last-Event-ID": String(cursor) } : {} });
+          if (!res.ok) throw new Error(`Stream failed (${res.status})`);
+          if (!res.body) throw new Error("Stream has no body");
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (!terminal) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const parts = buffer.split("\n\n");
+            buffer = parts.pop() ?? "";
+            for (const part of parts) {
+              const dataLine = part.split("\n").find((line) => line.startsWith("data:"));
+              if (!dataLine) continue;
+              if (addEvent(JSON.parse(dataLine.slice(5).trim()))) { terminal = true; break; }
+            }
+          }
+          if (terminal) break;
+          attempts += 1;
+        } catch {
+          if (ac.signal.aborted) return;
+          attempts += 1;
+        }
+        if (attempts < 6) await new Promise((resolve) => setTimeout(resolve, Math.min(250 * 2 ** attempts, 4_000)));
+      }
+    } finally { if (streamingRunId.current === runId) streamingRunId.current = null; }
   }, []);
 
   const select = useCallback((id: string) => {

@@ -38,11 +38,13 @@ function ago(ts: number) {
 
 /* ── transcript (grouped tool accordions + markdown) ───────────── */
 type ToolItem = Extract<LogItem, { kind: "tool" }>;
-type Block = { kind: "text"; text: string } | { kind: "tools"; items: ToolItem[] };
+type EventItem = Extract<LogItem, { kind: "event" }>;
+type Block = { kind: "text"; text: string } | { kind: "tools"; items: ToolItem[] } | EventItem;
 function toBlocks(log: LogItem[]): Block[] {
   const blocks: Block[] = [];
   for (const it of log) {
     if (it.kind === "text") { blocks.push({ kind: "text", text: it.text }); continue; }
+    if (it.kind === "event") { blocks.push(it); continue; }
     const last = blocks[blocks.length - 1];
     if (last && last.kind === "tools") last.items.push(it);
     else blocks.push({ kind: "tools", items: [it] });
@@ -54,11 +56,21 @@ function toolDot(s: string) {
 }
 function ToolRow({ it }: { it: ToolItem }) {
   return (
-    <div className="flex items-center gap-3 py-[5px]">
-      <span className={`size-[6px] shrink-0 rounded-full ${toolDot(it.status)}`} />
-      <span className="w-14 shrink-0 text-[12.5px] font-medium text-charcoal">{TOOL_LABEL[it.name] ?? it.name}</span>
-      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-bark-grey">{it.target}</span>
-      <span className="shrink-0 font-mono text-[11px] text-pebble">{it.status === "running" ? "…" : it.display ?? it.status}</span>
+    <div className="py-[5px]">
+      <div className="flex items-center gap-3">
+        <span className={`size-[6px] shrink-0 rounded-full ${toolDot(it.status)}`} />
+        <span className="w-14 shrink-0 text-[12.5px] font-medium text-charcoal">{TOOL_LABEL[it.name] ?? it.name}</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-bark-grey">{it.target}</span>
+        <span className="shrink-0 font-mono text-[11px] text-pebble">{it.status === "running" ? "…" : it.display ?? it.status}</span>
+      </div>
+      {(it.input !== undefined || it.output) && (
+        <details className="ml-9 mt-1 text-[11px] text-pebble">
+          <summary className="cursor-pointer select-none">Payload</summary>
+          <pre className="scroll-thin mt-1 max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-md bg-warm-bone p-2 font-mono text-[10.5px] text-bark-grey">
+            {it.input !== undefined ? JSON.stringify(it.input, null, 2) : ""}{it.output ? `\n${it.output}` : ""}
+          </pre>
+        </details>
+      )}
     </div>
   );
 }
@@ -81,12 +93,24 @@ function ToolGroup({ items }: { items: ToolItem[] }) {
     </div>
   );
 }
+function EventCard({ event }: { event: EventItem }) {
+  const dot = event.tone === "success" ? "bg-lichen-green" : event.tone === "error" ? "bg-alarm-red" : "bg-sapphire-link";
+  return (
+    <div className="flex items-center gap-2.5 rounded-lg border border-line bg-paper-white px-3 py-2 text-[12px]">
+      <span className={`size-[6px] shrink-0 rounded-full ${dot}`} /><span className="font-medium text-charcoal">{event.label}</span>
+      {event.detail && <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-pebble">{event.detail}</span>}
+    </div>
+  );
+}
 function Transcript({ log, waiting }: { log: LogItem[]; waiting: string }) {
   const blocks = toBlocks(log);
   if (log.length === 0) return <p className="text-[13.5px] text-pebble">{waiting}</p>;
   return (
     <div className="space-y-3.5">
-      {blocks.map((b, i) => (b.kind === "text" ? <Markdown key={i}>{b.text}</Markdown> : <ToolGroup key={i} items={b.items} />))}
+      {blocks.map((block, index) => block.kind === "text"
+        ? <Markdown key={index}>{block.text}</Markdown>
+        : block.kind === "tools" ? <ToolGroup key={index} items={block.items} />
+        : <EventCard key={index} event={block} />)}
     </div>
   );
 }
