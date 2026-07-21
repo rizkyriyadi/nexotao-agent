@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ArrowUp, Sparkles, Loader2, Paperclip, X, FileText } from "lucide-react";
+import { ArrowUp, Sparkles, Loader2, Paperclip, X, FileText, Square } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { Textarea } from "../ui/textarea";
@@ -49,7 +49,7 @@ async function fileToB64(f: File): Promise<string> {
 }
 
 export function Chat() {
-  const { items, streaming, send } = useWorkspace();
+  const { items, streaming, send, cancel } = useWorkspace();
   const [input, setInput] = useState("");
   const [files, setFiles] = useState<Attach[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -191,9 +191,11 @@ export function Chat() {
               placeholder="Describe a task…  (⌘ attach files)"
               className="max-h-40 min-h-9 flex-1 resize-none border-0 bg-transparent px-2.5 py-2 text-[15px] shadow-none focus-visible:ring-0"
             />
-            <Button size="icon" className="rounded-xl" disabled={streaming || (!input.trim() && !files.length)} onClick={submit}>
-              <ArrowUp className="size-4" />
-            </Button>
+            {streaming ? (
+              <Button size="icon" variant="outline" className="rounded-xl" onClick={cancel} title="Cancel run"><Square className="size-3.5" /></Button>
+            ) : (
+              <Button size="icon" className="rounded-xl" disabled={!input.trim() && !files.length} onClick={submit}><ArrowUp className="size-4" /></Button>
+            )}
           </div>
           <p className="mt-2 px-1 font-mono text-[11px] text-pebble">⏎ send · ⇧⏎ newline · 📎 attach text/code/PDF · web search + fetch enabled</p>
         </div>

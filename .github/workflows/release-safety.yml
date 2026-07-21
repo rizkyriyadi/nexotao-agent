@@ -1,0 +1,25 @@
+name: Release safety
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --omit=dev --audit-level=high
+      - name: Pack, install, launch, health, and shutdown
+        run: |
+          PACKAGE=$(npm pack --silent --ignore-scripts)
+          node scripts/release-smoke.mjs "$PWD/$PACKAGE"

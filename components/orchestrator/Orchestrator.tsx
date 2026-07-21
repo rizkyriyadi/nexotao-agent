@@ -117,7 +117,7 @@ function Row({ node, pp, lead, selected, onSelect, depNames }: { node: IssueNode
 }
 
 export function Orchestrator() {
-  const { started, running, goalText, nodes, selected, log, recent, setSelected, start, openRun, newRun } = useOrch();
+  const { started, running, goalText, nodes, selected, log, recent, approval, approve, setSelected, start, openRun, newRun } = useOrch();
   const [input, setInput] = useState("");
 
   if (!started) {
@@ -216,6 +216,13 @@ export function Orchestrator() {
           )}
           <div className="scroll-thin flex-1 overflow-y-auto">
             <div className="mx-auto max-w-[760px] px-8 py-7">
+              {approval && (
+                <div className="mb-4 rounded-xl border border-electric-indigo bg-electric-indigo/[0.04] p-4">
+                  <p className="text-[13px] font-medium text-charcoal">Approve {TOOL_LABEL[approval.name] ?? approval.name}?</p>
+                  <code className="mt-2 block break-words text-[12px] text-bark-grey">{approval.input?.command ?? approval.input?.path ?? approval.name}</code>
+                  <div className="mt-3 flex justify-end gap-2"><Button variant="ghost" size="sm" onClick={() => approve("deny")}>Deny</Button><Button size="sm" onClick={() => approve("allow")}>Allow</Button></div>
+                </div>
+              )}
               <Transcript log={log} waiting={sel?.status === "blocked" ? "Waiting on its dependencies…" : sel?.status === "todo" ? "Queued — will start when ready…" : "Waiting for this agent to start…"} />
             </div>
           </div>

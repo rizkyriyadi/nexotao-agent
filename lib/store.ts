@@ -4,6 +4,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import { DIR, ensureDir, getConfig } from "./config";
+import { redactValue } from "./redact";
 
 export type AgentSpec = { name: string; scope: string };
 export type Project = { id: string; name: string; path: string; mode: "single" | "multi"; agents: AgentSpec[]; createdAt: number };
@@ -17,7 +18,7 @@ export type RunRecord = {
   projectId: string;
   kind: "chat" | "orchestrator";
   title: string;
-  status: "running" | "done" | "error";
+  status: "running" | "done" | "error" | "cancelled";
   createdAt: number;
   updatedAt: number;
   events: any[]; // full event log — lets a finished run be replayed for viewing
@@ -32,7 +33,11 @@ export async function read<T>(file: string, key: string): Promise<T[]> {
 }
 export async function write<T>(file: string, key: string, rows: T[]) {
   ensureDir();
-  await fs.writeFile(path.join(DIR, file), JSON.stringify({ [key]: rows }, null, 2), "utf8");
+  const target = path.join(DIR, file);
+  const cfg = await getConfig();
+  const safeRows = redactValue(rows, [cfg.apiKey, cfg.searchApiKey]);
+  await fs.writeFile(target, JSON.stringify({ [key]: safeRows }, null, 2), { encoding: "utf8", mode: 0o600 });
+  await fs.chmod(target, 0o600);
 }
 
 // Serialize read-modify-write per file so parallel sub-agents don't clobber each

@@ -23,7 +23,7 @@ export async function GET(req: Request) {
       const rec = await getRunRecord(runId);
       if (rec) {
         const body = rec.events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("") +
-          `data: ${JSON.stringify({ type: rec.status === "error" ? "error" : "done", error: "" })}\n\n`;
+          `data: ${JSON.stringify({ type: rec.status === "error" ? "error" : rec.status === "cancelled" ? "cancelled" : "done", error: "" })}\n\n`;
         return sse(body);
       }
     }
@@ -39,7 +39,7 @@ export async function GET(req: Request) {
       const send = (e: RunEvent) => {
         if (closed) return;
         try { controller.enqueue(encoder.encode(`data: ${JSON.stringify(e)}\n\n`)); } catch { /* closed */ }
-        if (e.type === "done" || e.type === "error") {
+        if (e.type === "done" || e.type === "error" || e.type === "cancelled") {
           closed = true;
           unsub();
           try { controller.close(); } catch { /* already closed */ }

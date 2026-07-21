@@ -18,6 +18,7 @@ type Ctx = {
   diff: { file: string; content: string } | null;
   send: (text: string, meta?: { display?: string; files?: string[] }) => void;
   approve: (decision: "allow" | "deny") => void;
+  cancel: () => void;
 };
 
 const WorkspaceCtx = createContext<Ctx | null>(null);
@@ -109,7 +110,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
             const e = JSON.parse(line.slice(5).trim());
             if (e.type === "idle") return;
             if (e.type === "error") { toast.error(String(e.error)); return; }
-            if (e.type === "done") {
+            if (e.type === "done" || e.type === "cancelled") {
               if (taskRef.current) {
                 fetch("/api/tasks", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: taskRef.current, col: "review" }) }).catch(() => {});
                 taskRef.current = null;
@@ -227,5 +228,10 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     await fetch("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: a.runId, id: a.id, decision }) }).catch(() => {});
   }, [approval]);
 
-  return <WorkspaceCtx.Provider value={{ items, streaming, approval, terminal, diff, send, approve }}>{children}</WorkspaceCtx.Provider>;
+  const cancel = useCallback(async () => {
+    if (!runId.current) return;
+    await fetch("/api/run/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: runId.current }) }).catch(() => {});
+  }, []);
+
+  return <WorkspaceCtx.Provider value={{ items, streaming, approval, terminal, diff, send, approve, cancel }}>{children}</WorkspaceCtx.Provider>;
 }

@@ -19,7 +19,9 @@ export async function GET() {
 
 /** Submit a goal — creates the root issue for the lead and starts the run. */
 export async function POST(req: Request) {
-  const { goal } = (await req.json()) as { goal: string };
+  const body = await req.json().catch(() => null) as { goal?: unknown } | null;
+  if (!body || typeof body.goal !== "string" || !body.goal.trim() || body.goal.length > 20_000) return NextResponse.json({ error: "goal must be a non-empty string" }, { status: 400 });
+  const goal = body.goal.trim();
   const cfg = await getConfig();
   if (!cfg.apiKey) return NextResponse.json({ error: "No Nexotao API key. Finish onboarding first." }, { status: 400 });
   const project = await getActiveProject();

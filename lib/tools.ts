@@ -1,14 +1,12 @@
 import { promises as fs } from "fs";
 import { existsSync } from "fs";
 import path from "path";
-import { exec } from "child_process";
-import { promisify } from "util";
+import { spawn } from "child_process";
 import { resolveWithin, rel } from "./paths";
 import { webFetch, webSearch } from "./websearch";
 import { getConfig } from "./config";
 import { extractFileText } from "./extract";
 
-const pexec = promisify(exec);
 const SKIP = new Set(["node_modules", ".git", ".next", "dist", "build", ".cache"]);
 const MUTATING = new Set(["write_file", "edit_file", "bash"]);
 
@@ -94,8 +92,9 @@ export const TOOL_DEFS = [
 
 export type ToolOut = { ok: boolean; output: string; display?: string; kind?: "bash" | "write"; file?: string; content?: string };
 
-export async function executeTool(name: string, input: any, root: string): Promise<ToolOut> {
+export async function executeTool(name: string, input: any, root: string, signal?: AbortSignal): Promise<ToolOut> {
   try {
+    signal?.throwIfAborted();
     switch (name) {
       case "list_dir": {
         const abs = resolveWithin(root, input.path ?? ".");
@@ -153,14 +152,8 @@ export async function executeTool(name: string, input: any, root: string): Promi
       }
       case "bash": {
         const command = String(input.command ?? "");
-        try {
-          const { stdout, stderr } = await pexec(command, { cwd: root, timeout: 60_000, maxBuffer: 2_000_000 });
-          const out = (stdout + (stderr ? `\n${stderr}` : "")).trim();
-          return { ok: true, output: out || "(no output)", display: "exit 0", kind: "bash" };
-        } catch (e: any) {
-          const out = ((e.stdout ?? "") + "\n" + (e.stderr ?? e.message ?? "")).trim();
-          return { ok: false, output: out || String(e), display: `exit ${e.code ?? 1}`, kind: "bash" };
-        }
+        const result = await runCommand(command, root, signal);
+        return { ok: result.code === 0, output: result.output || "(no output)", display: "exit " + result.code, kind: "bash" };
       }
       case "grep": {
         const base = resolveWithin(root, input.path ?? ".");
@@ -188,6 +181,32 @@ export async function executeTool(name: string, input: any, root: string): Promi
   } catch (e: any) {
     return { ok: false, output: String(e?.message ?? e) };
   }
+}
+
+function runCommand(command: string, root: string, signal?: AbortSignal): Promise<{ code: number; output: string }> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const child = spawn(command, { cwd: root, shell: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    let settled = false;
+    const append = (chunk: Buffer) => { if (output.length < 2_000_000) output += chunk.toString("utf8").slice(0, 2_000_000 - output.length); };
+    child.stdout?.on("data", append);
+    child.stderr?.on("data", append);
+    const stop = () => {
+      if (!child.pid) return;
+      try { process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch {} }
+    };
+    const timer = setTimeout(stop, 60_000);
+    const abort = () => stop();
+    signal?.addEventListener("abort", abort, { once: true });
+    child.once("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(error); } });
+    child.once("close", (code, killedBy) => {
+      if (settled) return;
+      settled = true; clearTimeout(timer); signal?.removeEventListener("abort", abort);
+      if (signal?.aborted) reject(signal.reason ?? new Error("Run cancelled"));
+      else resolve({ code: code ?? (killedBy ? 124 : 1), output: output.trim() });
+    });
+  });
 }
 
 async function walk(dir: string, root: string, onFile: (file: string, text: string) => void, depth = 0) {

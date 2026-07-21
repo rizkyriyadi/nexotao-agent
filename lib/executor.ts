@@ -120,7 +120,8 @@ async function startIssue(projectId: string, issueId: string) {
     } catch (e: any) {
       run.push({ type: "error", error: String(e?.message ?? e) });
       result = { text: `Failed: ${String(e?.message ?? e)}`, delegated: false };
-      await onIssueFinished(projectId, issue, agent, mode, result, false);
+      if (run.cancelled) await I.updateIssue(issueId, { status: "cancelled", summary: "Cancelled by user" });
+      else await onIssueFinished(projectId, issue, agent, mode, result, false);
       return;
     }
     await onIssueFinished(projectId, issue, agent, mode, result, true);

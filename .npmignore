@@ -1,8 +1,11 @@
-# exclude heavy/dev-only build artifacts from the published tarball (the .next
-# production server output is still shipped via the "files" whitelist)
 .next/cache/
 .next/dev/
-
+.next/diagnostics/
+.next/build/
+.next/types/
+.next/turbopack
+.next/trace*
+.next/**/*.map
 # never publish secrets or local data
 .npmrc
 .env

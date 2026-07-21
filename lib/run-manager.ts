@@ -1,4 +1,5 @@
 import { saveRunRecord } from "./store";
+import { redactValue } from "./redact";
 
 export type RunEvent =
   | { type: "run"; runId: string }
@@ -10,6 +11,7 @@ export type RunEvent =
   | { type: "thread_created"; id: string; scope: string; dependsOn?: string[] }
   | { type: "thread_status"; id: string; status: "running" | "done" | "error" }
   | { type: "done" }
+  | { type: "cancelled"; reason: string }
   | { type: "error"; error: string };
 
 /** A durable, backend-owned run. Keeps a full event log so a client that
@@ -25,7 +27,9 @@ export class Run {
   events: RunEvent[] = [];
   finished = false;
   errored = false;
+  cancelled = false;
   finishedAt = 0;
+  private controller = new AbortController();
   private subs = new Set<(e: RunEvent) => void>();
   private approvals = new Map<string, (d: "allow" | "deny") => void>();
   private lastSave = 0;
@@ -47,7 +51,7 @@ export class Run {
       projectId: this.meta.projectId,
       kind: this.meta.kind,
       title: this.meta.title,
-      status: this.finished ? (this.errored ? "error" : "done") : "running",
+      status: this.finished ? (this.cancelled ? "cancelled" : this.errored ? "error" : "done") : "running",
       createdAt: this.createdAt,
       updatedAt: now,
       events: coalesceText(this.events),
@@ -56,13 +60,15 @@ export class Run {
 
   push(e: RunEvent) {
     if (this.finished) return;
+    e = redactValue(e);
     this.events.push(e);
     for (const s of this.subs) {
       try { s(e); } catch { /* ignore a dead subscriber */ }
     }
-    if (e.type === "done" || e.type === "error") {
+    if (e.type === "done" || e.type === "error" || e.type === "cancelled") {
       this.finished = true;
       this.errored = e.type === "error";
+      this.cancelled = e.type === "cancelled";
       this.finishedAt = Date.now();
       this.persist(true);
     } else {
@@ -76,6 +82,17 @@ export class Run {
     if (this.finished) return () => {};
     this.subs.add(fn);
     return () => this.subs.delete(fn);
+  }
+
+  get signal() { return this.controller.signal; }
+
+  cancel(reason = "Cancelled by user") {
+    if (this.finished) return false;
+    this.controller.abort(new Error(reason));
+    for (const resolve of this.approvals.values()) resolve("deny");
+    this.approvals.clear();
+    this.push({ type: "cancelled", reason });
+    return true;
   }
 
   awaitApproval(id: string): Promise<"allow" | "deny"> {

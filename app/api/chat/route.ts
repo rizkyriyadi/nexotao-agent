@@ -16,7 +16,15 @@ type Msg = { role: "user" | "assistant"; content: string };
  * The run keeps executing regardless of whether the client stays connected —
  * the browser (re)connects to GET /api/run/stream to replay + tail live. */
 export async function POST(req: Request) {
-  const { messages, multi, sessionId } = (await req.json()) as { messages: Msg[]; multi?: boolean; sessionId?: string };
+  const body = await req.json().catch(() => null) as { messages?: unknown; multi?: unknown; sessionId?: unknown } | null;
+  if (!body || !Array.isArray(body.messages) || body.messages.length === 0 || body.messages.length > 100 || !body.messages.every((m: any) => m && (m.role === "user" || m.role === "assistant") && typeof m.content === "string" && m.content.length <= 100_000)) {
+    return new Response(JSON.stringify({ error: "messages must be a non-empty valid message array" }), { status: 400, headers: { "Content-Type": "application/json" } });
+  }
+  if (body.multi !== undefined && typeof body.multi !== "boolean") return new Response(JSON.stringify({ error: "multi must be boolean" }), { status: 400 });
+  if (body.sessionId !== undefined && (typeof body.sessionId !== "string" || body.sessionId.length > 100)) return new Response(JSON.stringify({ error: "invalid sessionId" }), { status: 400 });
+  const messages = body.messages as Msg[];
+  const multi = body.multi as boolean | undefined;
+  const sessionId = body.sessionId as string | undefined;
   const cfg = await getConfig();
   if (!cfg.apiKey) {
     return new Response(JSON.stringify({ error: "No Nexotao API key. Finish onboarding first." }), {
@@ -44,7 +52,7 @@ export async function POST(req: Request) {
   if (useMulti) {
     runAgentMulti({ run, messages, model: cfg.model || DEFAULT_MODEL, apiKey: cfg.apiKey, root, agents: project?.agents, projectId: project?.id });
   } else {
-    runAgent({ run, messages, model: cfg.model || DEFAULT_MODEL, apiKey: cfg.apiKey, root, approvalOn: true, sessionId });
+    runAgent({ run, messages, model: cfg.model || DEFAULT_MODEL, apiKey: cfg.apiKey, root, approvalPolicy: "ask", sessionId });
   }
 
   return new Response(JSON.stringify({ runId }), {

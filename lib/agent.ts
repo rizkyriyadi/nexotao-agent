@@ -1,5 +1,7 @@
 import { nexotao } from "./nexotao";
-import { TOOL_DEFS, executeTool, isMutating } from "./tools";
+import { TOOL_DEFS, executeTool } from "./tools";
+import { authorizeTool, type ExecutionPolicy } from "./execution-policy";
+import { safeError } from "./redact";
 import { saveSessionMessages, addTask, updateTask, addAgentRun } from "./store";
 import type { Run } from "./run-manager";
 
@@ -43,7 +45,7 @@ async function toolLoop(opts: {
   convo: Msg[];
   root: string;
   thread: string;
-  approvalOn: boolean;
+  approvalPolicy: ExecutionPolicy;
   toolDefs?: any[];
   extraTools?: any[];
   onSpawn?: (input: any) => Promise<{ output: string }>;
@@ -51,7 +53,7 @@ async function toolLoop(opts: {
   onProgress?: (text: string) => void;
   maxIters?: number;
 }): Promise<string> {
-  const { run, client, model, system, convo, root, thread, approvalOn, toolDefs = TOOL_DEFS as any, extraTools = [], onSpawn, handlers = {}, onProgress, maxIters = 24 } = opts;
+  const { run, client, model, system, convo, root, thread, approvalPolicy, toolDefs = TOOL_DEFS as any, extraTools = [], onSpawn, handlers = {}, onProgress, maxIters = 24 } = opts;
   let full = "";
 
   for (let iter = 0; iter < maxIters; iter++) {
@@ -61,7 +63,7 @@ async function toolLoop(opts: {
       system,
       tools: [...toolDefs, ...extraTools],
       messages: convo as any,
-    });
+    }, { signal: run.signal });
     stream.on("text", (t: string) => { full += t; run.push({ type: "text", text: t, thread }); onProgress?.(full); });
     const final = await stream.finalMessage();
     onProgress?.(full);
@@ -82,15 +84,11 @@ async function toolLoop(opts: {
         const r = await handlers[tu.name](tu.input);
         out = { ok: true, output: r.output };
       } else {
-        let decision: "allow" | "deny" = "allow";
-        if (approvalOn && isMutating(tu.name)) {
-          run.push({ type: "approval", id: tu.id, name: tu.name, input: tu.input, thread });
-          decision = await run.awaitApproval(tu.id);
-        }
+        const allowed = await authorizeTool(run, approvalPolicy, { id: tu.id, name: tu.name, input: tu.input, thread });
         out =
-          decision === "deny"
+          !allowed
             ? { ok: false, output: "The user denied this action." }
-            : await executeTool(tu.name, tu.input, root);
+            : await executeTool(tu.name, tu.input, root, run.signal);
       }
 
       run.push({
@@ -114,7 +112,7 @@ async function toolLoop(opts: {
 
 /** Single agent. Persists to the session store on the SERVER, so a client
  * refresh/disconnect never loses the prompt or the reply. */
-export async function runAgent(opts: { run: Run; messages: Msg[]; model: string; apiKey: string; root: string; approvalOn: boolean; sessionId?: string }) {
+export async function runAgent(opts: { run: Run; messages: Msg[]; model: string; apiKey: string; root: string; approvalPolicy: ExecutionPolicy; sessionId?: string }) {
   const client = nexotao(opts.apiKey);
   const { sessionId, messages } = opts;
 
@@ -140,13 +138,13 @@ export async function runAgent(opts: { run: Run; messages: Msg[]; model: string;
       convo: [...messages],
       root: opts.root,
       thread: "agent",
-      approvalOn: opts.approvalOn,
+      approvalPolicy: opts.approvalPolicy,
       onProgress: (full) => persist(full),
     });
     persist(text || "(no response)", true);
     opts.run.push({ type: "done" });
   } catch (e: any) {
-    opts.run.push({ type: "error", error: String(e?.message ?? e) });
+    opts.run.push({ type: "error", error: safeError(e) });
   }
 }
 
@@ -199,14 +197,14 @@ Before spawning: briefly state your plan — the sub-agents you'll create and wh
               convo: [{ role: "user", content: `Your task: ${a.task}` }],
               root,
               thread: a.name,
-              approvalOn: false, // autonomous in multi-agent mode
+              approvalPolicy: "ask"
             });
             done[a.name] = summary || "done";
             run.push({ type: "thread_status", id: a.name, status: "done" });
             finishTask(taskId, true, summary || "Done");
             if (projectId) addAgentRun(projectId, { agent: a.name, task: a.task, summary: (summary || "Worked on the task").slice(0, 400), ok: true }).catch(() => {});
           } catch (e: any) {
-            const err = `failed: ${String(e?.message ?? e)}`;
+            const err = `failed: ${safeError(e)}`;
             done[a.name] = err;
             run.push({ type: "thread_status", id: a.name, status: "error" });
             finishTask(taskId, false, err);
@@ -232,15 +230,15 @@ Before spawning: briefly state your plan — the sub-agents you'll create and wh
       convo: [...opts.messages],
       root,
       thread: "lead",
-      approvalOn: false,
+      approvalPolicy: "ask",
       extraTools: [SPAWN_TOOL],
       onSpawn,
     });
     finishTask(leadTask, true, text || "Done");
     run.push({ type: "done" });
   } catch (e: any) {
-    finishTask(leadTask, false, String(e?.message ?? e));
-    run.push({ type: "error", error: String(e?.message ?? e) });
+    finishTask(leadTask, false, safeError(e));
+    run.push({ type: "error", error: safeError(e) });
   }
 }
 
@@ -323,7 +321,7 @@ export async function runIssueAgent(opts: {
 
   const text = await toolLoop({
     run: opts.run, client, model: opts.model, system, convo, root: opts.root, thread,
-    approvalOn: false, toolDefs, extraTools, handlers,
+    approvalPolicy: "ask", toolDefs, extraTools, handlers,
   });
   return { text: text || "(done)", delegated };
 }

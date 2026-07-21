@@ -21,6 +21,8 @@ export type IssueNode = {
   summary: string;
 };
 
+type Approval = { runId: string; id: string; name: string; input: any } | null;
+
 type Ctx = {
   started: boolean;
   running: boolean;
@@ -30,6 +32,8 @@ type Ctx = {
   selected: string | null;
   log: LogItem[];
   recent: { id: string; title: string; status: string; updatedAt: number }[];
+  approval: Approval;
+  approve: (decision: "allow" | "deny") => void;
   setSelected: (id: string) => void;
   start: (goal: string) => void;
   openRun: (rootId: string) => void;
@@ -60,6 +64,7 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
   const [selected, setSelected] = useState<string | null>(null);
   const [log, setLog] = useState<LogItem[]>([]);
   const [recent, setRecent] = useState<{ id: string; title: string; status: string; updatedAt: number }[]>([]);
+  const [approval, setApproval] = useState<Approval>(null);
 
   const rootId = useRef<string | null>(null);
   const poller = useRef<any>(null);
@@ -132,6 +137,7 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
           const e = JSON.parse(line.slice(5).trim());
           if (e.type === "idle" || e.type === "done" || e.type === "error") { streamingRunId.current = null; return; }
           if (e.type === "text") append(e.text);
+          else if (e.type === "approval") setApproval({ runId, id: e.id, name: e.name, input: e.input });
           else if (e.type === "tool_use") setLog((prev) => [...prev, { kind: "tool", id: e.id, name: e.name, target: tgt(e.name, e.input), status: "running" }]);
           else if (e.type === "tool_result") setLog((prev) => prev.map((it) => (it.kind === "tool" && it.id === e.id ? { ...it, status: e.ok ? "done" : "error", display: e.display } : it)));
         }
@@ -218,8 +224,15 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
     return () => { if (poller.current) clearInterval(poller.current); streamAbort.current?.abort(); };
   }, [refreshRecent, enterRun]);
 
+  const approve = useCallback(async (decision: "allow" | "deny") => {
+    const pending = approval;
+    setApproval(null);
+    if (!pending) return;
+    await fetch("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: pending.runId, id: pending.id, decision }) }).catch(() => {});
+  }, [approval]);
+
   return (
-    <OrchCtx.Provider value={{ started, running, goalText, nodes, agents, selected, log, recent, setSelected: select, start, openRun, newRun }}>
+    <OrchCtx.Provider value={{ started, running, goalText, nodes, agents, selected, log, recent, approval, approve, setSelected: select, start, openRun, newRun }}>
       {children}
     </OrchCtx.Provider>
   );
