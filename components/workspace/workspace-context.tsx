@@ -4,7 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState, ty
 import { toast } from "sonner";
 
 export type Item =
-  | { kind: "user"; text: string }
+  | { kind: "user"; text: string; display?: string; files?: string[] }
   | { kind: "assistant"; text: string; streaming?: boolean }
   | { kind: "tool"; id: string; name: string; input: any; status: "running" | "done" | "error"; display?: string; output?: string };
 
@@ -16,7 +16,7 @@ type Ctx = {
   approval: Approval;
   terminal: string[];
   diff: { file: string; content: string } | null;
-  send: (text: string) => void;
+  send: (text: string, meta?: { display?: string; files?: string[] }) => void;
   approve: (decision: "allow" | "deny") => void;
 };
 
@@ -30,6 +30,8 @@ export const useWorkspace = () => {
 export function target(name: string, input: any) {
   if (name === "bash") return input?.command ?? "";
   if (name === "grep") return input?.pattern ?? "";
+  if (name === "web_search") return input?.query ?? "";
+  if (name === "web_fetch") return input?.url ?? "";
   return input?.path ?? "";
 }
 
@@ -130,7 +132,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   );
 
   const send = useCallback(
-    async (raw: string) => {
+    async (raw: string, meta?: { display?: string; files?: string[] }) => {
       const text = raw.trim();
       if (!text || streaming) return;
 
@@ -138,13 +140,16 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         .filter((i) => i.kind === "user" || (i.kind === "assistant" && i.text))
         .map((i) => ({ role: i.kind as "user" | "assistant", content: (i as any).text }));
 
-      setItems((prev) => [...prev, { kind: "user", text }]);
+      // `text` (with any attached file bodies) is what the model + history see;
+      // `display` is what the user sees in their bubble.
+      setItems((prev) => [...prev, { kind: "user", text, display: meta?.display, files: meta?.files }]);
       setStreaming(true);
+      const titleFor = meta?.display?.trim() || text;
 
       // ensure a session exists so the durable run can be reconnected by ?session=
       if (!sessionRef.current) {
         try {
-          const r = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: text }) });
+          const r = await fetch("/api/sessions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: titleFor }) });
           const d = await r.json();
           if (d.session?.id) {
             sessionRef.current = d.session.id;

@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ArrowUp, Sparkles, Loader2 } from "lucide-react";
+import { ArrowUp, Sparkles, Loader2, Paperclip, X, FileText } from "lucide-react";
 import { useState } from "react";
+import { toast } from "sonner";
 import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
@@ -17,6 +18,7 @@ const SUGGESTIONS = [
 const TOOL_LABEL: Record<string, string> = {
   list_dir: "List", read_file: "Read", write_file: "Write",
   edit_file: "Edit", bash: "Run", grep: "Grep",
+  web_search: "Search", web_fetch: "Fetch",
 };
 
 function ToolRow({ it }: { it: Extract<Item, { kind: "tool" }> }) {
@@ -32,18 +34,44 @@ function ToolRow({ it }: { it: Extract<Item, { kind: "tool" }> }) {
   );
 }
 
+type Attach = { name: string; content: string };
+const TEXT_EXT = /\.(txt|md|markdown|json|jsonl|ya?ml|toml|ini|env|csv|tsv|html?|xml|svg|css|scss|less|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|kt|c|h|cpp|hpp|cs|php|swift|sh|bash|zsh|sql|graphql|prisma|vue|astro|dockerfile|makefile|gitignore|log|text)$/i;
+
 export function Chat() {
   const { items, streaming, send } = useWorkspace();
   const [input, setInput] = useState("");
+  const [files, setFiles] = useState<Attach[]>([]);
+  const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [items]);
 
+  async function onPick(list: FileList | null) {
+    if (!list) return;
+    const picked: Attach[] = [];
+    for (const f of Array.from(list)) {
+      const textual = f.type.startsWith("text/") || f.type === "application/json" || TEXT_EXT.test(f.name);
+      if (!textual) {
+        toast.error(`${f.name}: only text/code files supported (Nexotao has no image/PDF vision yet).`);
+        continue;
+      }
+      if (f.size > 400_000) { toast.error(`${f.name} is too large (max 400KB).`); continue; }
+      picked.push({ name: f.name, content: await f.text() });
+    }
+    if (picked.length) setFiles((prev) => [...prev, ...picked]);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
   const submit = () => {
-    send(input);
+    const typed = input.trim();
+    if ((!typed && !files.length) || streaming) return;
+    const attachBlocks = files.map((f) => `--- Attached file: ${f.name} ---\n\`\`\`\n${f.content}\n\`\`\``).join("\n\n");
+    const full = [typed, attachBlocks].filter(Boolean).join("\n\n");
+    send(full, { display: typed || "(sent files)", files: files.map((f) => f.name) });
     setInput("");
+    setFiles([]);
   };
 
   return (
@@ -70,7 +98,18 @@ export function Chat() {
               it.kind === "user" ? (
                 <div key={i}>
                   <p className="label mb-2.5">You</p>
-                  <div className="rounded-2xl border border-line bg-paper-white px-4 py-3 text-[15px] leading-[1.6] text-charcoal">{it.text}</div>
+                  <div className="rounded-2xl border border-line bg-paper-white px-4 py-3 text-[15px] leading-[1.6] text-charcoal">
+                    {(it.display ?? it.text).trim() || "(sent files)"}
+                    {it.files && it.files.length > 0 && (
+                      <div className="mt-2.5 flex flex-wrap gap-1.5">
+                        {it.files.map((n, k) => (
+                          <span key={k} className="flex items-center gap-1.5 rounded-lg border border-line bg-warm-bone px-2 py-1 font-mono text-[11.5px] text-bark-grey">
+                            <FileText className="size-3.5 text-pebble" /> {n}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : it.kind === "assistant" ? (
                 it.text ? (
@@ -98,7 +137,21 @@ export function Chat() {
 
       <div className="px-8 pb-6">
         <div className="mx-auto w-full max-w-[720px]">
+          {files.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {files.map((f, i) => (
+                <span key={i} className="flex items-center gap-1.5 rounded-lg border border-line-strong bg-paper-white px-2 py-1 font-mono text-[11.5px] text-bark-grey">
+                  <FileText className="size-3.5 text-pebble" /> {f.name}
+                  <button onClick={() => setFiles((prev) => prev.filter((_, k) => k !== i))} className="text-pebble hover:text-charcoal"><X className="size-3" /></button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="flex items-end gap-2 rounded-2xl border border-line-strong bg-paper-white p-2 transition-colors focus-within:border-bark-grey">
+            <input ref={fileRef} type="file" multiple hidden onChange={(e) => onPick(e.target.files)} />
+            <Button size="icon" variant="ghost" className="rounded-xl text-pebble hover:text-charcoal" onClick={() => fileRef.current?.click()} title="Attach text/code files">
+              <Paperclip className="size-4" />
+            </Button>
             <Textarea
               rows={1}
               value={input}
@@ -109,14 +162,14 @@ export function Chat() {
                   submit();
                 }
               }}
-              placeholder="Describe a task…"
+              placeholder="Describe a task…  (⌘ attach files)"
               className="max-h-40 min-h-9 flex-1 resize-none border-0 bg-transparent px-2.5 py-2 text-[15px] shadow-none focus-visible:ring-0"
             />
-            <Button size="icon" className="rounded-xl" disabled={streaming || !input.trim()} onClick={submit}>
+            <Button size="icon" className="rounded-xl" disabled={streaming || (!input.trim() && !files.length)} onClick={submit}>
               <ArrowUp className="size-4" />
             </Button>
           </div>
-          <p className="mt-2 px-1 font-mono text-[11px] text-pebble">⏎ send · ⇧⏎ newline · live via Nexotao</p>
+          <p className="mt-2 px-1 font-mono text-[11px] text-pebble">⏎ send · ⇧⏎ newline · 📎 attach text/code · web search + fetch enabled</p>
         </div>
       </div>
     </div>

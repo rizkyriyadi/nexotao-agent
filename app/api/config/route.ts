@@ -15,6 +15,7 @@ export async function POST(req: Request) {
   if (body.apiKey !== undefined) patch.apiKey = body.apiKey;
   if (body.model !== undefined) patch.model = body.model;
   if (body.onboarded !== undefined) patch.onboarded = body.onboarded;
+  if (body.searchApiKey !== undefined) patch.searchApiKey = body.searchApiKey;
 
   if (body.project) {
     const p = await addProject(body.project);

@@ -41,6 +41,8 @@ export const useOrch = () => {
 function tgt(name: string, input: any) {
   if (name === "bash") return input?.command ?? "";
   if (name === "grep") return input?.pattern ?? "";
+  if (name === "web_search") return input?.query ?? "";
+  if (name === "web_fetch") return input?.url ?? "";
   if (name === "spawn_agents") return (input?.agents ?? []).map((a: any) => a.name).join(", ");
   return input?.path ?? "";
 }

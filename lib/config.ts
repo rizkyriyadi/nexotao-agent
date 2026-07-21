@@ -9,6 +9,7 @@ export type Config = {
   model?: string;
   onboarded?: boolean;
   activeProjectId?: string | null;
+  searchApiKey?: string; // optional Tavily key for reliable web search
 };
 
 export const DIR = path.join(os.homedir(), ".nexotao");
@@ -40,5 +41,6 @@ export function publicView(c: Config) {
     keyHint: c.apiKey ? `sk-nexo-••••${c.apiKey.slice(-4)}` : null,
     model: c.model ?? null,
     activeProjectId: c.activeProjectId ?? null,
+    hasSearchKey: !!c.searchApiKey,
   };
 }

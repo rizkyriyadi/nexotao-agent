@@ -4,6 +4,8 @@ import path from "path";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { resolveWithin, rel } from "./paths";
+import { webFetch, webSearch } from "./websearch";
+import { getConfig } from "./config";
 
 const pexec = promisify(exec);
 const SKIP = new Set(["node_modules", ".git", ".next", "dist", "build", ".cache"]);
@@ -67,6 +69,24 @@ export const TOOL_DEFS = [
       type: "object",
       properties: { pattern: { type: "string" }, path: { type: "string", description: "optional subdir" } },
       required: ["pattern"],
+    },
+  },
+  {
+    name: "web_search",
+    description: "Search the web for up-to-date information. Returns a list of results (title, URL, snippet). Follow up with web_fetch to read a promising result.",
+    input_schema: {
+      type: "object",
+      properties: { query: { type: "string", description: "Search query" } },
+      required: ["query"],
+    },
+  },
+  {
+    name: "web_fetch",
+    description: "Fetch a web page (or raw URL) and return its readable text content. Use for docs, articles, GitHub files, API references, etc.",
+    input_schema: {
+      type: "object",
+      properties: { url: { type: "string", description: "Full URL to fetch" } },
+      required: ["url"],
     },
   },
 ] as const;
@@ -144,6 +164,15 @@ export async function executeTool(name: string, input: any, root: string): Promi
           });
         });
         return { ok: true, output: hits.join("\n") || "no matches", display: `${hits.length} matches` };
+      }
+      case "web_search": {
+        const cfg = await getConfig();
+        const r = await webSearch(String(input.query ?? ""), cfg.searchApiKey);
+        return { ok: r.ok, output: r.text, display: r.ok ? `${r.count} results` : "no results" };
+      }
+      case "web_fetch": {
+        const r = await webFetch(String(input.url ?? ""));
+        return { ok: r.ok, output: r.text, display: r.ok ? "fetched" : "failed" };
       }
       default:
         return { ok: false, output: `Unknown tool: ${name}` };

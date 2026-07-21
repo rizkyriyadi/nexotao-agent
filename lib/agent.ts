@@ -31,7 +31,7 @@ const SPAWN_TOOL = {
 } as const;
 
 function baseSystem(root: string) {
-  return `You are a coding agent running locally on the user's machine, working inside the project at ${root}. You have tools: list_dir, read_file, write_file, edit_file, bash, grep. Actually make changes — read before you edit. Keep messages short. End with a one or two sentence summary.`;
+  return `You are a coding agent running locally on the user's machine, working inside the project at ${root}. You have tools: list_dir, read_file, write_file, edit_file, bash, grep, web_search, web_fetch. Use web_search for up-to-date info and web_fetch to read a URL (docs, articles, GitHub). Actually make changes — read before you edit. Keep messages short. End with a one or two sentence summary.`;
 }
 
 /** Core tool loop for one agent. Returns the final turn's text (its summary). */

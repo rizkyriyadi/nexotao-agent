@@ -10,7 +10,7 @@ import { Button } from "../ui/button";
 
 const TOOL_LABEL: Record<string, string> = {
   list_dir: "List", read_file: "Read", write_file: "Write", edit_file: "Edit",
-  bash: "Run", grep: "Grep", spawn_agents: "Spawn",
+  bash: "Run", grep: "Grep", spawn_agents: "Spawn", web_search: "Search", web_fetch: "Fetch",
 };
 
 const SUGGESTIONS = [

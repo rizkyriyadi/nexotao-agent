@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Switch } from "@/components/ui/switch";
 import { IconKeyStub } from "@/components/settings-icons";
+import { SearchKeyRow } from "@/components/settings/SearchKeyRow";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -53,6 +54,15 @@ export default function Settings() {
               <span className="inline-flex items-center gap-2 font-mono text-[13px] text-charcoal">
                 <IconKeyStub className="size-4 text-pebble" /> sk-ant-•••• 4f2a
               </span>
+            </Row>
+          </Section>
+
+          <Section title="Web">
+            <Row label="Web search & fetch" hint="Agents can search the web and read URLs. Works out of the box (DuckDuckGo).">
+              <span className="font-mono text-[12px] text-lichen-green">enabled</span>
+            </Row>
+            <Row label="Tavily API key" hint="Optional — a free tavily.com key makes web search reliable. Stored locally.">
+              <SearchKeyRow />
             </Row>
           </Section>
 
