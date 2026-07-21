@@ -1,0 +1,138 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* ── Brand tokens (used directly across the app) ─────────── */
+@theme {
+  --color-warm-bone: #fbfbfa;
+  --color-paper-white: #ffffff;
+  --color-line: #eceae7;
+  --color-line-strong: #e2e0dc;
+  --color-charcoal: #26221f;
+  --color-bark-grey: #6f6862;
+  --color-pebble: #a8a29b;
+  --color-electric-indigo: #5b57f5;
+  --color-deep-violet: #4a41e6;
+  --color-lichen-green: #4f9a15;
+  --color-alarm-red: #d5493b;
+  --color-sapphire-link: #2f6fd0;
+  --color-code-surface: #f6f5f3;
+  --color-canvas: #e7e8ee;        /* cool grey app backdrop */
+  --color-mist-lavender: #edecfb;  /* soft indigo card fill */
+  --color-mist-lavender-2: #e3e1fb;
+
+  --shadow-float: 0 1px 2px rgba(20, 18, 30, 0.04), 0 12px 32px -12px rgba(20, 18, 30, 0.12);
+
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, monospace;
+  --font-cooper: var(--font-cooper), ui-serif, Georgia, serif;
+}
+
+/* ── shadcn/ui semantic tokens, mapped to the brand palette ── */
+:root {
+  --radius: 0.625rem;
+  --background: #fbfbfa;
+  --foreground: #26221f;
+  --card: #ffffff;
+  --card-foreground: #26221f;
+  --popover: #ffffff;
+  --popover-foreground: #26221f;
+  --primary: #26221f;
+  --primary-foreground: #fbfbfa;
+  --secondary: #f2f1ee;
+  --secondary-foreground: #26221f;
+  --muted: #f6f5f3;
+  --muted-foreground: #6f6862;
+  --accent: #f2f1ee;
+  --accent-foreground: #26221f;
+  --destructive: #d5493b;
+  --border: #eceae7;
+  --input: #e2e0dc;
+  --ring: #5b57f5;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-warm-bone);
+  color: var(--color-charcoal);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  letter-spacing: -0.006em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--color-electric-indigo) 16%, transparent);
+}
+
+.label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-pebble);
+}
+
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
+}
+.scroll-thin::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: var(--color-line-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+@keyframes nx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+.nx-pulse { animation: nx-pulse 1.5s ease-in-out infinite; }
+
+@keyframes nx-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+.nx-caret::after {
+  content: "";
+  display: inline-block;
+  width: 7px; height: 14px; margin-left: 1px; vertical-align: -2px;
+  background: var(--color-pebble);
+  animation: nx-blink 1s step-end infinite;
+}
+
+.diff-add { background: color-mix(in srgb, var(--color-lichen-green) 8%, transparent); }
+.diff-del { background: color-mix(in srgb, var(--color-alarm-red) 6%, transparent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .nx-pulse, .nx-caret::after { animation: none; }
+}

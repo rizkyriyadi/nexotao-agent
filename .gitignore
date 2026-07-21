@@ -1,0 +1,23 @@
+# dependencies
+node_modules/
+
+# next.js build output
+.next/
+out/
+
+# local env / secrets
+.env
+.env.*
+.npmrc
+
+# local nexotao data (also lives in ~/.nexotao)
+.nexotao/
+
+# typescript build info
+*.tsbuildinfo
+next-env.d.ts
+
+# misc
+.DS_Store
+*.log
+npm-debug.log*
