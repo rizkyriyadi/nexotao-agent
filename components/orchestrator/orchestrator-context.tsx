@@ -54,10 +54,8 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
   const [threads, setThreads] = useState<Thread[]>([]);
   const [selected, setSelected] = useState("lead");
   const [runs, setRuns] = useState<RunSummary[]>([]);
-  const threadsRef = useRef<Thread[]>([]);
   const connected = useRef(false);
   const startedByMe = useRef(false);
-  useEffect(() => { threadsRef.current = threads; }, [threads]);
 
   const refreshRuns = useCallback(() => {
     fetch("/api/runs?kind=orchestrator").then((r) => r.json()).then((d) => setRuns(d.runs ?? [])).catch(() => {});
@@ -127,17 +125,11 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
         connected.current = false;
         setThreads((prev) => prev.map((x) => (x.status === "running" ? { ...x, status: "done" } : x)));
         setRunning(false);
-        refreshRuns();
-        if (startedByMe.current) {
-          startedByMe.current = false;
-          for (const th of threadsRef.current.filter((x) => x.id !== "lead")) {
-            const lastText = [...th.log].reverse().find((l) => l.kind === "text") as { kind: "text"; text: string } | undefined;
-            fetch("/api/agent-runs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ agent: th.name, task, summary: (lastText?.text || "Worked on the task").slice(0, 400), ok: th.status !== "error" }) }).catch(() => {});
-          }
-        }
+        startedByMe.current = false;
+        refreshRuns(); // agent history + task board are recorded server-side now
       }
     },
-    [refreshRuns, task],
+    [refreshRuns],
   );
 
   const start = useCallback(

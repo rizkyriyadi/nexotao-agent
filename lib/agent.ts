@@ -1,6 +1,6 @@
 import { nexotao } from "./nexotao";
 import { TOOL_DEFS, executeTool, isMutating } from "./tools";
-import { saveSessionMessages } from "./store";
+import { saveSessionMessages, addTask, updateTask, addAgentRun } from "./store";
 import type { Run } from "./run-manager";
 
 type Msg = { role: "user" | "assistant"; content: any };
@@ -144,10 +144,21 @@ export async function runAgent(opts: { run: Run; messages: Msg[]; model: string;
   }
 }
 
-/** Multi-agent: a Lead that can spawn task-scoped sub-agents which run in parallel. */
-export async function runAgentMulti(opts: { run: Run; messages: Msg[]; model: string; apiKey: string; root: string; agents?: Agent[] }) {
-  const { run, model, root } = opts;
+/** Multi-agent: a Lead that can spawn task-scoped sub-agents which run in parallel.
+ * Every sub-agent's work is logged to the Task board (in_progress → done) and to
+ * agent history, so the board shows live: what's running and how many are done. */
+export async function runAgentMulti(opts: { run: Run; messages: Msg[]; model: string; apiKey: string; root: string; agents?: Agent[]; projectId?: string }) {
+  const { run, model, root, projectId } = opts;
   const client = nexotao(opts.apiKey);
+  const runId = run.id;
+  const prompt = [...opts.messages].reverse().find((m) => m.role === "user")?.content ?? "Run";
+
+  // task helpers (no-ops when there's no active project)
+  const newTask = (title: string, agent: string) =>
+    projectId ? addTask(projectId, title, { col: "in_progress", runId, agent }).then((t) => t.id).catch(() => null) : Promise.resolve(null);
+  const finishTask = (idP: Promise<string | null> | string | null, ok: boolean, summary: string) => {
+    Promise.resolve(idP).then((id) => { if (id) updateTask(id, { col: ok ? "done" : "review", summary: summary.slice(0, 400) }).catch(() => {}); });
+  };
 
   const team = opts.agents?.length
     ? ` Suggested specialist roles for this project: ${opts.agents.map((a) => `${a.name} (${a.scope})`).join(", ")}.`
@@ -167,6 +178,7 @@ export async function runAgentMulti(opts: { run: Run; messages: Msg[]; model: st
       await Promise.all(
         wave.map(async (a) => {
           run.push({ type: "thread_status", id: a.name, status: "running" });
+          const taskId = newTask(a.task, a.name); // → board: In progress
           try {
             const sys = `${baseSystem(root)} You are the "${a.name}" sub-agent. Stay within your scope: ${a.task}. Work only on files relevant to this scope.`;
             const summary = await toolLoop({
@@ -181,9 +193,14 @@ export async function runAgentMulti(opts: { run: Run; messages: Msg[]; model: st
             });
             done[a.name] = summary || "done";
             run.push({ type: "thread_status", id: a.name, status: "done" });
+            finishTask(taskId, true, summary || "Done");
+            if (projectId) addAgentRun(projectId, { agent: a.name, task: a.task, summary: (summary || "Worked on the task").slice(0, 400), ok: true }).catch(() => {});
           } catch (e: any) {
-            done[a.name] = `failed: ${String(e?.message ?? e)}`;
+            const err = `failed: ${String(e?.message ?? e)}`;
+            done[a.name] = err;
             run.push({ type: "thread_status", id: a.name, status: "error" });
+            finishTask(taskId, false, err);
+            if (projectId) addAgentRun(projectId, { agent: a.name, task: a.task, summary: err.slice(0, 400), ok: false }).catch(() => {});
           }
         }),
       );
@@ -194,9 +211,10 @@ export async function runAgentMulti(opts: { run: Run; messages: Msg[]; model: st
     return { output: `Sub-agents finished:\n${report}` };
   }
 
+  const leadTask = newTask(prompt, "Lead"); // the run's own board card
   try {
     run.push({ type: "status", status: "running" });
-    await toolLoop({
+    const text = await toolLoop({
       run,
       client,
       model,
@@ -208,8 +226,10 @@ export async function runAgentMulti(opts: { run: Run; messages: Msg[]; model: st
       extraTools: [SPAWN_TOOL],
       onSpawn,
     });
+    finishTask(leadTask, true, text || "Done");
     run.push({ type: "done" });
   } catch (e: any) {
+    finishTask(leadTask, false, String(e?.message ?? e));
     run.push({ type: "error", error: String(e?.message ?? e) });
   }
 }

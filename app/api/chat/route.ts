@@ -42,7 +42,7 @@ export async function POST(req: Request) {
   // fire-and-forget: this promise floats past the response and runs to
   // completion on the event loop even after the browser disconnects.
   if (useMulti) {
-    runAgentMulti({ run, messages, model: cfg.model || DEFAULT_MODEL, apiKey: cfg.apiKey, root, agents: project?.agents });
+    runAgentMulti({ run, messages, model: cfg.model || DEFAULT_MODEL, apiKey: cfg.apiKey, root, agents: project?.agents, projectId: project?.id });
   } else {
     runAgent({ run, messages, model: cfg.model || DEFAULT_MODEL, apiKey: cfg.apiKey, root, approvalOn: true, sessionId });
   }

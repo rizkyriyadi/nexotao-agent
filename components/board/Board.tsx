@@ -1,14 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Play, Loader2 } from "lucide-react";
+import { Plus, Play, Loader2, Network, ArrowUpRight } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "../ui/dialog";
 
 type Col = "backlog" | "todo" | "in_progress" | "review" | "done";
-type Task = { id: string; ref: string; title: string; col: Col };
+type Task = { id: string; ref: string; title: string; col: Col; runId?: string; agent?: string; summary?: string };
 
 const COLUMNS: { id: Col; label: string }[] = [
   { id: "backlog", label: "Backlog" },
@@ -28,9 +28,17 @@ export function Board() {
   const load = () =>
     fetch("/api/tasks").then((r) => r.json()).then((d) => setTasks(d.tasks ?? [])).finally(() => setLoading(false));
 
+  // poll so orchestrator runs show up live (in_progress → done) on the board
+  const loadRef = useRef(load);
+  loadRef.current = load;
   useEffect(() => {
-    load();
+    loadRef.current();
+    const t = setInterval(() => loadRef.current(), 2500);
+    return () => clearInterval(t);
   }, []);
+
+  const running = tasks.filter((t) => t.col === "in_progress").length;
+  const doneCount = tasks.filter((t) => t.col === "done").length;
 
   async function create() {
     if (!title.trim()) return;
@@ -45,12 +53,22 @@ export function Board() {
     router.push(`/chat?task=${encodeURIComponent(t.title)}&taskId=${t.id}`);
   }
 
+  // a task created by an orchestrator run opens that run; a plain task runs an agent
+  function openTask(t: Task) {
+    if (t.runId) router.push(`/orchestrator?run=${t.runId}`);
+    else run(t);
+  }
+
   return (
     <div className="relative flex h-full min-w-0 flex-1 flex-col">
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-line px-6">
         <div className="flex items-baseline gap-3">
           <h1 className="text-[15px] font-medium text-charcoal">Board</h1>
-          <span className="font-mono text-[12px] text-pebble">{tasks.length} tasks</span>
+          <span className="flex items-baseline gap-2.5 font-mono text-[12px] text-pebble">
+            <span>{tasks.length} tasks</span>
+            {running > 0 && <span className="flex items-center gap-1 text-electric-indigo"><span className="size-[6px] rounded-full bg-electric-indigo nx-pulse" />{running} running</span>}
+            <span className="text-lichen-green">{doneCount} done</span>
+          </span>
         </div>
         <Button size="sm" onClick={() => setOpen(true)}><Plus className="size-4" /> New task</Button>
       </header>
@@ -71,14 +89,31 @@ export function Board() {
                 </div>
                 <div className="scroll-thin flex flex-1 flex-col gap-2.5 overflow-y-auto pb-2">
                   {items.map((t) => (
-                    <div key={t.id} className="group rounded-xl border border-line bg-paper-white p-3.5">
+                    <div
+                      key={t.id}
+                      onClick={() => t.runId && openTask(t)}
+                      className={`group rounded-xl border border-line bg-paper-white p-3.5 ${t.runId ? "cursor-pointer hover:border-line-strong" : ""}`}
+                    >
                       <div className="mb-2 flex items-center gap-2">
                         <span className="font-mono text-[11px] text-pebble">{t.ref}</span>
+                        {t.agent && (
+                          <span className="flex items-center gap-1 rounded-md bg-mist-lavender px-1.5 py-0.5 text-[10.5px] font-medium text-electric-indigo">
+                            {t.agent === "Lead" ? <Network className="size-3" /> : null}{t.agent}
+                          </span>
+                        )}
+                        {t.col === "in_progress" && <span className="ml-auto size-[6px] rounded-full bg-electric-indigo nx-pulse" />}
                       </div>
                       <p className="text-[13.5px] leading-snug text-charcoal">{t.title}</p>
-                      <button onClick={() => run(t)} className="mt-2.5 flex items-center gap-1.5 text-[12px] text-electric-indigo opacity-0 transition-opacity group-hover:opacity-100">
-                        <Play className="size-3.5" /> Run with agent
-                      </button>
+                      {t.summary && t.col !== "in_progress" && <p className="mt-1.5 line-clamp-2 text-[12px] leading-relaxed text-bark-grey">{t.summary}</p>}
+                      {t.runId ? (
+                        <span className="mt-2.5 flex items-center gap-1.5 text-[12px] text-electric-indigo opacity-0 transition-opacity group-hover:opacity-100">
+                          <ArrowUpRight className="size-3.5" /> Open run
+                        </span>
+                      ) : (
+                        <button onClick={(e) => { e.stopPropagation(); run(t); }} className="mt-2.5 flex items-center gap-1.5 text-[12px] text-electric-indigo opacity-0 transition-opacity group-hover:opacity-100">
+                          <Play className="size-3.5" /> Run with agent
+                        </button>
+                      )}
                     </div>
                   ))}
                   {items.length === 0 && <p className="px-1 font-mono text-[11px] text-pebble">—</p>}
