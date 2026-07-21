@@ -36,6 +36,17 @@ function ToolRow({ it }: { it: Extract<Item, { kind: "tool" }> }) {
 
 type Attach = { name: string; content: string };
 const TEXT_EXT = /\.(txt|md|markdown|json|jsonl|ya?ml|toml|ini|env|csv|tsv|html?|xml|svg|css|scss|less|js|jsx|ts|tsx|mjs|cjs|py|rb|go|rs|java|kt|c|h|cpp|hpp|cs|php|swift|sh|bash|zsh|sql|graphql|prisma|vue|astro|dockerfile|makefile|gitignore|log|text)$/i;
+const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|avif)$/i;
+
+async function fileToB64(f: File): Promise<string> {
+  const dataUrl = await new Promise<string>((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result));
+    r.onerror = () => rej(r.error);
+    r.readAsDataURL(f);
+  });
+  return dataUrl.split(",")[1] ?? "";
+}
 
 export function Chat() {
   const { items, streaming, send } = useWorkspace();
@@ -52,9 +63,24 @@ export function Chat() {
     if (!list) return;
     const picked: Attach[] = [];
     for (const f of Array.from(list)) {
-      const textual = f.type.startsWith("text/") || f.type === "application/json" || TEXT_EXT.test(f.name);
-      if (!textual) {
-        toast.error(`${f.name}: only text/code files supported (Nexotao has no image/PDF vision yet).`);
+      const isPdf = f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+      const isText = f.type.startsWith("text/") || f.type === "application/json" || TEXT_EXT.test(f.name);
+      if (IMG_EXT.test(f.name) || f.type.startsWith("image/")) {
+        toast.error(`${f.name}: images need vision, which Nexotao doesn't support yet.`);
+        continue;
+      }
+      if (isPdf) {
+        if (f.size > 15_000_000) { toast.error(`${f.name} is too large (max 15MB).`); continue; }
+        try {
+          const dataB64 = await fileToB64(f);
+          const r = await fetch("/api/extract", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: f.name, dataB64 }) }).then((x) => x.json());
+          if (!r.ok) { toast.error(r.text || `${f.name}: could not extract text.`); continue; }
+          picked.push({ name: f.name, content: r.text });
+        } catch { toast.error(`${f.name}: extraction failed.`); }
+        continue;
+      }
+      if (!isText) {
+        toast.error(`${f.name}: unsupported file type (text, code, and PDF only).`);
         continue;
       }
       if (f.size > 400_000) { toast.error(`${f.name} is too large (max 400KB).`); continue; }
@@ -169,7 +195,7 @@ export function Chat() {
               <ArrowUp className="size-4" />
             </Button>
           </div>
-          <p className="mt-2 px-1 font-mono text-[11px] text-pebble">⏎ send · ⇧⏎ newline · 📎 attach text/code · web search + fetch enabled</p>
+          <p className="mt-2 px-1 font-mono text-[11px] text-pebble">⏎ send · ⇧⏎ newline · 📎 attach text/code/PDF · web search + fetch enabled</p>
         </div>
       </div>
     </div>

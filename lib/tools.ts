@@ -6,6 +6,7 @@ import { promisify } from "util";
 import { resolveWithin, rel } from "./paths";
 import { webFetch, webSearch } from "./websearch";
 import { getConfig } from "./config";
+import { extractFileText } from "./extract";
 
 const pexec = promisify(exec);
 const SKIP = new Set(["node_modules", ".git", ".next", "dist", "build", ".cache"]);
@@ -107,6 +108,13 @@ export async function executeTool(name: string, input: any, root: string): Promi
       }
       case "read_file": {
         const abs = resolveWithin(root, input.path);
+        // PDFs (and other docs) are extracted to text so the agent can read them
+        if (abs.toLowerCase().endsWith(".pdf")) {
+          const bytes = new Uint8Array(await fs.readFile(abs));
+          const r = await extractFileText(input.path, bytes);
+          const capped = r.text.length > 100_000 ? r.text.slice(0, 100_000) + "\n… (truncated)" : r.text;
+          return { ok: r.ok, output: capped, display: r.ok ? "pdf text" : "failed" };
+        }
         const buf = await fs.readFile(abs, "utf8");
         const capped = buf.length > 100_000 ? buf.slice(0, 100_000) + "\n… (truncated)" : buf;
         return { ok: true, output: capped, display: `${buf.split("\n").length} lines` };
