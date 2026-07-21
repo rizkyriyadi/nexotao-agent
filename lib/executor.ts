@@ -7,12 +7,14 @@ import { getConfig } from "./config";
 import { getProject, addAgentRun } from "./store";
 import { expandHome } from "./paths";
 import { DEFAULT_MODEL } from "./nexotao";
-import { createRun } from "./run-manager";
+import { createRun, type RunEvent } from "./run-manager";
 import { runIssueAgent } from "./agent";
 import * as I from "./issues";
 import { getDatabase } from "./db/database";
 import { ControlPlaneRepositories, type ClaimedHeartbeat, type WakeupReason } from "./db/repositories";
+import { RunEventDomainError } from "./run-events";
 import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runtime";
+import { GitWorkspaceManager } from "./git-workspace";
 
 let runtimePromise: Promise<DurableHeartbeatRuntime> | undefined;
 async function heartbeatRuntime() {
@@ -29,6 +31,21 @@ async function ctx(projectId: string) {
   const root = expandHome(project?.path || process.cwd());
   await fs.mkdir(root, { recursive: true }).catch(() => {});
   return { apiKey: cfg.apiKey || "", model: cfg.model || DEFAULT_MODEL, root };
+}
+
+async function verificationCommands(root: string, configured: unknown) {
+  if (Array.isArray(configured)) {
+    const commands = configured.filter((value): value is string => typeof value === "string" && Boolean(value.trim()));
+    if (commands.length) return commands;
+  }
+  try {
+    const manifest = JSON.parse(await fs.readFile(`${root}/package.json`, "utf8")) as { scripts?: Record<string, string> };
+    const commands: string[] = [];
+    if (manifest.scripts?.typecheck) commands.push("npm run typecheck");
+    if (manifest.scripts?.test) commands.push("npm test");
+    if (commands.length) return commands;
+  } catch {}
+  throw new Error("No verification commands are configured for lead integration");
 }
 
 /** Create the root issue for a goal and start the run. */
@@ -83,6 +100,22 @@ export async function retryHeartbeat(runId: string) {
   return (await heartbeatRuntime()).retry(runId, Date.now());
 }
 
+
+function durableEvent(event: RunEvent): [string, unknown] | null {
+  switch (event.type) {
+    case "text": return ["reasoning_summary", { text: event.text, thread: event.thread }];
+    case "tool_use": return ["tool_call", { id: event.id, name: event.name, input: event.input, thread: event.thread }];
+    case "approval": return ["approval_wait", { id: event.id, name: event.name, input: event.input, thread: event.thread }];
+    case "tool_result": return ["tool_result", {
+      id: event.id, name: event.name, ok: event.ok, display: event.display, kind: event.kind,
+      file: event.file, content: event.content, output: event.output, thread: event.thread,
+    }];
+    case "usage": return ["usage", { inputTokens: event.inputTokens, outputTokens: event.outputTokens, thread: event.thread }];
+    case "thread_created": return ["status", { status: "thread_created", ...event }];
+    case "thread_status": return ["status", { ...event }];
+    default: return null;
+  }
+}
 async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     const issueId = job.wakeup.issueId;
     if (!issueId) throw new Error("Heartbeat has no issue to execute");
@@ -96,7 +129,19 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     if (!agent) { await I.releaseIssue(issueId, job.wakeup.agentId, runId, "assignee_missing"); return; }
 
     const { apiKey, model, root } = await ctx(projectId);
+    const database = await getDatabase();
+    const repositories = new ControlPlaneRepositories(database);
+    const workspaceManager = new GitWorkspaceManager(repositories);
     const run = createRun(runId, undefined, { kind: "orchestrator", title: issue.title, projectId });
+    let eventWrites = Promise.resolve();
+    const stopMirroring = run.subscribe((event) => {
+      const durable = durableEvent(event);
+      if (!durable) return;
+      eventWrites = eventWrites.then(() => heartbeat.emit(durable[0], durable[1])).catch((error) => {
+        if (error instanceof RunEventDomainError && error.code === "terminal") return;
+        throw error;
+      });
+    });
     const cancel = () => run.cancel(heartbeat.signal.reason instanceof Error ? heartbeat.signal.reason.message : "Cancelled by runtime");
     heartbeat.signal.addEventListener("abort", cancel, { once: true });
     run.push({ type: "run", runId });
@@ -106,12 +151,25 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     const mode = isLead ? (issue.stage === "integrate" ? "lead-integrate" : "lead-plan") : "worker";
     if (heartbeat.signal.aborted) cancel();
 
+    let executionRoot = root;
+    let beforeMutation: ((tool: { name: string; input: unknown }) => Promise<void>) | undefined;
+    if (mode !== "lead-plan") {
+      const assignment = await workspaceManager.provision({ projectId, issueId, identifier: issue.ref, runId, repositoryPath: root });
+      executionRoot = assignment.workspacePath;
+      beforeMutation = workspaceManager.mutationGuard(issueId, runId);
+    }
+
     // context the lead needs
     const workers = (await I.listAgents(projectId)).filter((a) => a.role === "worker").map((a) => ({ name: a.name, scope: a.scope }));
     let childrenReport = "";
     if (mode === "lead-integrate") {
       const kids = await I.childrenOf(issue.id);
-      childrenReport = kids.map((k) => `- ${k.title} (${k.assigneeAgentId ? "" : ""}): ${k.summary || "done"}`).join("\n");
+      const childRows = kids.map((kid) => repositories.issues.get(kid.id)).filter((kid): kid is NonNullable<typeof kid> => Boolean(kid));
+      const diffs = await workspaceManager.cherryPickChildren(issueId, runId, childRows.map((kid) => ({
+        identifier: kid.identifier, workspaceCommit: kid.workspaceCommit, workspaceBaseCommit: kid.workspaceBaseCommit,
+        verificationStatus: kid.verificationStatus,
+      })));
+      childrenReport = kids.map((kid, index) => `- ${kid.title}: ${kid.summary || "done"}\n${diffs[index] ?? ""}`).join("\n");
     }
 
     const onDelegate = async (tasks: any[]) => {
@@ -141,10 +199,21 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     let result: { text: string; delegated: boolean } = { text: "", delegated: false };
     try {
       result = await runIssueAgent({
-        run, apiKey, model, root, mode,
+        run, apiKey, model, root: executionRoot, mode,
         agentName: agent.name, agentScope: agent.scope,
-        goal: issue.title, detail: issue.detail, workers, childrenReport, onDelegate,
+        goal: issue.title, detail: issue.detail, workers, childrenReport, onDelegate, beforeMutation,
       });
+      if (mode === "worker") {
+        const finalized = await workspaceManager.finalizeCommit(issueId, runId, issue.ref);
+        result.text = `${result.text}\n\nCommit: ${finalized.commit}`;
+      } else if (mode === "lead-integrate") {
+        const rawAgent = repositories.agents.get(agent.id);
+        const commands = await verificationCommands(executionRoot, rawAgent?.runtimeConfig?.verificationCommands);
+        const verified = await workspaceManager.verifyAndPromote(issueId, runId, issue.ref, commands);
+        result.text = `${result.text}\n\nVerified commit: ${verified.commit}\n${verified.logs.join("\n\n")}`;
+      }
+      await eventWrites;
+      await heartbeat.emit("output", { text: result.text, thread: mode === "worker" ? agent.name : "lead" });
       run.push({ type: "done" });
     } catch (e: any) {
       run.push({ type: "error", error: String(e?.message ?? e) });
@@ -153,6 +222,8 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
       else await onIssueFinished(projectId, issue, agent, mode, result, false);
       throw e;
     } finally {
+      await eventWrites;
+      stopMirroring();
       heartbeat.signal.removeEventListener("abort", cancel);
     }
     await onIssueFinished(projectId, issue, agent, mode, result, true);

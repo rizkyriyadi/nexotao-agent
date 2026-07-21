@@ -1,15 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./database";
 import {
-  activityLog, agents, approvals, costEvents, documentRevisions, documents, heartbeatRuns,
+  activityLog, agents, approvals, costEvents, documentRevisions, documents, gitWorkspaces, heartbeatRuns,
   issueComments, issueDependencies, issueDocuments, issues, runEvents, wakeupRequests,
 } from "./schema";
 import { IssueDomainError, IssueLifecycleService } from "../issue-lifecycle";
+import {
+  isTerminalRunEvent, publishRunEvent, RunEventDomainError, sanitizeRunEventPayload,
+  type DurableRunEvent,
+} from "../run-events";
 
 export type NewAgent = typeof agents.$inferInsert;
 export type AgentRow = typeof agents.$inferSelect;
 export type NewIssue = typeof issues.$inferInsert;
+export type GitWorkspaceRow = typeof gitWorkspaces.$inferSelect;
 export type IssueRow = typeof issues.$inferSelect;
 export type WakeupReason = "assignment" | "invoke" | "mention" | "approval" | "dependency" | "retry";
 export type HeartbeatStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
@@ -113,6 +118,70 @@ export class ControlPlaneRepositories {
       return { wakeup, heartbeat };
     });
   }
+  getWorkspace(runId: string) {
+    return this.database.read((db) => db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get() ?? null);
+  }
+  listWorkspaces(projectId?: string) {
+    return this.database.read((db) => db.select().from(gitWorkspaces).where(projectId ? eq(gitWorkspaces.projectId, projectId) : undefined).orderBy(asc(gitWorkspaces.createdAt)).all());
+  }
+  assignWorkspace(input: {
+    id: string; projectId: string; issueId: string; runId: string; repositoryPath: string; workspacePath: string;
+    branch: string; targetBranch: string; baseCommit: string;
+  }) {
+    return this.database.write((db) => {
+      const issue = db.select().from(issues).where(eq(issues.id, input.issueId)).get();
+      const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, input.runId)).get();
+      if (!issue || issue.projectId !== input.projectId || issue.checkoutRunId !== input.runId || issue.status !== "in_progress") {
+        throw new IssueDomainError("conflict", "Run does not own the issue workspace assignment");
+      }
+      if (!heartbeat || heartbeat.issueId !== input.issueId || !["running", "waiting"].includes(heartbeat.status)) {
+        throw new IssueDomainError("conflict", "Heartbeat is not active for the issue workspace assignment");
+      }
+      const existing = db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, input.runId)).get();
+      if (existing) {
+        if (existing.workspacePath !== input.workspacePath || existing.branch !== input.branch) {
+          throw new IssueDomainError("conflict", "Run already has a different workspace assignment");
+        }
+        return existing;
+      }
+      const now = Date.now();
+      const row: typeof gitWorkspaces.$inferInsert = {
+        ...input, commitSha: null, state: "active", lastValidatedAt: now, recoveryNote: null, createdAt: now, updatedAt: now,
+      };
+      db.insert(gitWorkspaces).values(row).run();
+      db.update(issues).set({
+        workspacePath: input.workspacePath, workspaceBranch: input.branch, workspaceBaseCommit: input.baseCommit,
+        workspaceCommit: null, verificationStatus: "active", updatedAt: now,
+      }).where(eq(issues.id, input.issueId)).run();
+      db.update(heartbeatRuns).set({ workspacePath: input.workspacePath, workspaceBranch: input.branch, updatedAt: now })
+        .where(eq(heartbeatRuns.id, input.runId)).run();
+      return db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, input.runId)).get()!;
+    });
+  }
+  touchWorkspace(runId: string) {
+    return this.database.write((db) => {
+      const now = Date.now();
+      db.update(gitWorkspaces).set({ lastValidatedAt: now, updatedAt: now }).where(eq(gitWorkspaces.runId, runId)).run();
+      return db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get() ?? null;
+    });
+  }
+  recordWorkspaceCommit(runId: string, commitSha: string, state: "committed" | "verified" | "rejected") {
+    return this.database.write((db) => {
+      const workspace = db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get();
+      if (!workspace) throw new IssueDomainError("not_found", "Workspace assignment not found");
+      const now = Date.now();
+      db.update(gitWorkspaces).set({ commitSha, state, updatedAt: now }).where(eq(gitWorkspaces.runId, runId)).run();
+      db.update(issues).set({ workspaceCommit: commitSha, verificationStatus: state, updatedAt: now }).where(eq(issues.id, workspace.issueId)).run();
+      return db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get()!;
+    });
+  }
+  markWorkspaceState(runId: string, state: "active" | "committed" | "verified" | "rejected" | "orphaned" | "recovered" | "cleaned", recoveryNote?: string | null) {
+    return this.database.write((db) => {
+      const now = Date.now();
+      db.update(gitWorkspaces).set({ state, recoveryNote: recoveryNote ?? null, updatedAt: now }).where(eq(gitWorkspaces.runId, runId)).run();
+      return db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get() ?? null;
+    });
+  }
   claimNextHeartbeat(now = Date.now()): Promise<ClaimedHeartbeat | null> {
     return this.database.write((db) => {
       const candidates = db.select().from(wakeupRequests).where(eq(wakeupRequests.status, "queued"))
@@ -137,22 +206,15 @@ export class ControlPlaneRepositories {
       return null;
     });
   }
-  transitionHeartbeat(runId: string, status: Exclude<HeartbeatStatus, "queued">, patch: {
+  transitionHeartbeat(runId: string, status: "running" | "waiting", patch: {
     sessionBefore?: string | null; sessionAfter?: string | null; usage?: Record<string, unknown>; error?: string | null;
   } = {}) {
     return this.database.write((db) => {
       const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get();
       if (!heartbeat) return null;
       const now = Date.now();
-      const terminal = ["succeeded", "failed", "cancelled"].includes(status);
-      db.update(heartbeatRuns).set({ ...patch, status, updatedAt: now, finishedAt: terminal ? now : null }).where(eq(heartbeatRuns.id, runId)).run();
-      if (heartbeat.wakeupId) db.update(wakeupRequests).set({ status: terminal ? status : "running", finishedAt: terminal ? now : null, lastError: patch.error ?? null }).where(eq(wakeupRequests.id, heartbeat.wakeupId)).run();
-      const agent = db.select().from(agents).where(eq(agents.id, heartbeat.agentId)).get();
-      if (agent && !["paused", "terminated"].includes(agent.status)) {
-        const next = status === "failed" ? "error" : ["running", "waiting"].includes(status) ? "running" : "idle";
-        db.update(agents).set({ status: next, errorReason: status === "failed" ? patch.error ?? "Heartbeat failed" : null, lastHeartbeatAt: now, updatedAt: now }).where(eq(agents.id, heartbeat.agentId)).run();
-        if (status === "failed") db.insert(activityLog).values({ id: randomUUID(), actorType: "agent", actorId: heartbeat.agentId, action: "agent.error", entityType: "agent", entityId: heartbeat.agentId, summary: { runId, error: patch.error ?? null }, runId, createdAt: now }).run();
-      }
+      db.update(heartbeatRuns).set({ ...patch, status, updatedAt: now, finishedAt: null }).where(eq(heartbeatRuns.id, runId)).run();
+      if (heartbeat.wakeupId) db.update(wakeupRequests).set({ status: "running", finishedAt: null, lastError: patch.error ?? null }).where(eq(wakeupRequests.id, heartbeat.wakeupId)).run();
       return db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get() ?? null;
     });
   }
@@ -179,13 +241,43 @@ export class ControlPlaneRepositories {
       return orphaned.length;
     });
   }
-  appendHeartbeatEvent(runId: string, type: string, redactedPayload: unknown) {
-    return this.database.write((db) => {
+  async appendHeartbeatEvent(runId: string, type: string, payload: unknown) {
+    const redactedPayload = sanitizeRunEventPayload(payload);
+    const row = await this.database.write((db) => {
       const last = db.select().from(runEvents).where(eq(runEvents.runId, runId)).orderBy(desc(runEvents.seq)).get();
+      if (last && isTerminalRunEvent(last.type)) throw new RunEventDomainError("terminal", `Run ${runId} already has a terminal event`);
       const row = { runId, seq: (last?.seq ?? 0) + 1, type, redactedPayload, createdAt: Date.now() };
       db.insert(runEvents).values(row).run();
       return row;
     });
+    publishRunEvent(row);
+    return row;
+  }
+  async completeHeartbeat(runId: string, status: "succeeded" | "failed" | "cancelled", payload: unknown, patch: {
+    sessionBefore?: string | null; sessionAfter?: string | null; usage?: Record<string, unknown>; error?: string | null;
+  } = {}) {
+    const type = status === "succeeded" ? "success" : status === "failed" ? "failure" : "cancelled";
+    const redactedPayload = sanitizeRunEventPayload(payload);
+    const result = await this.database.write((db) => {
+      const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get();
+      if (!heartbeat) throw new RunEventDomainError("not_found", `Run ${runId} does not exist`);
+      const last = db.select().from(runEvents).where(eq(runEvents.runId, runId)).orderBy(desc(runEvents.seq)).get();
+      if (last && isTerminalRunEvent(last.type)) throw new RunEventDomainError("terminal", `Run ${runId} already has a terminal event`);
+      const now = Date.now();
+      const event = { runId, seq: (last?.seq ?? 0) + 1, type, redactedPayload, createdAt: now };
+      db.insert(runEvents).values(event).run();
+      db.update(heartbeatRuns).set({ ...patch, status, updatedAt: now, finishedAt: now }).where(eq(heartbeatRuns.id, runId)).run();
+      if (heartbeat.wakeupId) db.update(wakeupRequests).set({ status, finishedAt: now, lastError: patch.error ?? null }).where(eq(wakeupRequests.id, heartbeat.wakeupId)).run();
+      const agent = db.select().from(agents).where(eq(agents.id, heartbeat.agentId)).get();
+      if (agent && !["paused", "terminated"].includes(agent.status)) {
+        const next = status === "failed" ? "error" : "idle";
+        db.update(agents).set({ status: next, errorReason: status === "failed" ? patch.error ?? "Heartbeat failed" : null, lastHeartbeatAt: now, updatedAt: now }).where(eq(agents.id, heartbeat.agentId)).run();
+        if (status === "failed") db.insert(activityLog).values({ id: randomUUID(), actorType: "agent", actorId: heartbeat.agentId, action: "agent.error", entityType: "agent", entityId: heartbeat.agentId, summary: { runId, error: patch.error ?? null }, runId, createdAt: now }).run();
+      }
+      return { event, heartbeat: db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get()! };
+    });
+    publishRunEvent(result.event);
+    return result;
   }
   enqueueWakeup(input: Omit<typeof wakeupRequests.$inferInsert, "id" | "createdAt">) {
     const row = { id: randomUUID(), createdAt: Date.now(), ...input };
@@ -198,10 +290,20 @@ export class ControlPlaneRepositories {
     return this.database.read((db) => db.select().from(wakeupRequests).where(status ? eq(wakeupRequests.status, status) : undefined).orderBy(asc(wakeupRequests.availableAt)).all());
   }
   appendRunEvent(input: typeof runEvents.$inferInsert) {
-    return this.database.write((db) => db.insert(runEvents).values(input).run());
+    return this.appendHeartbeatEvent(input.runId, input.type, input.redactedPayload);
   }
-  listRunEvents(runId: string) {
-    return this.database.read((db) => db.select().from(runEvents).where(eq(runEvents.runId, runId)).orderBy(asc(runEvents.seq)).all());
+  listRunEvents(runId: string, afterSeq = 0, limit = 500): DurableRunEvent[] {
+    return this.database.read((db) => db.select().from(runEvents).where(and(eq(runEvents.runId, runId), gt(runEvents.seq, afterSeq))).orderBy(asc(runEvents.seq)).limit(limit).all());
+  }
+  listIssueRunEvents(issueId: string, limit = 500): DurableRunEvent[] {
+    const runs = this.database.read((db) => db.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(eq(heartbeatRuns.issueId, issueId)).all());
+    return runs.flatMap((run) => this.listRunEvents(run.id, 0, limit)).sort((a, b) => a.createdAt - b.createdAt || a.seq - b.seq).slice(-limit);
+  }
+  listProjectRunEvents(projectId: string, limit = 500): DurableRunEvent[] {
+    const projectAgents = this.agents.list(projectId).map((agent) => agent.id);
+    if (!projectAgents.length) return [];
+    const runs = this.database.read((db) => db.select({ id: heartbeatRuns.id }).from(heartbeatRuns).where(inArray(heartbeatRuns.agentId, projectAgents)).all());
+    return runs.flatMap((run) => this.listRunEvents(run.id, 0, limit)).sort((a, b) => a.createdAt - b.createdAt || a.seq - b.seq).slice(-limit);
   }
   putDocument(input: { issueId: string; key: string; body: string; createdByType: string; createdById?: string | null }) {
     return this.database.write((db) => {

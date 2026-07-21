@@ -1,5 +1,5 @@
 import type { ClaimedHeartbeat, ControlPlaneRepositories, WakeupReason } from "./db/repositories";
-import { redactValue } from "./redact";
+import { RunEventDomainError } from "./run-events";
 
 export type HeartbeatTrigger = {
   agentId: string;
@@ -100,9 +100,13 @@ export class DurableHeartbeatRuntime {
     active?.controller.abort(new Error(reason));
     const heartbeat = this.repositories.getHeartbeat(runId);
     if (!heartbeat || ["succeeded", "failed", "cancelled"].includes(heartbeat.status)) return false;
-    await this.repositories.appendHeartbeatEvent(runId, "cancelled", { reason });
-    await this.repositories.transitionHeartbeat(runId, "cancelled", { error: reason });
-    return true;
+    try {
+      await this.repositories.completeHeartbeat(runId, "cancelled", { reason }, { error: reason });
+      return true;
+    } catch (error) {
+      if (error instanceof RunEventDomainError && error.code === "terminal") return false;
+      throw error;
+    }
   }
 
   async retry(runId: string, availableAt: number, error?: string) {
@@ -113,10 +117,25 @@ export class DurableHeartbeatRuntime {
 
   private async execute(job: ClaimedHeartbeat, controller: AbortController) {
     const runId = job.heartbeat.id;
+    const complete = async (
+      status: "succeeded" | "failed" | "cancelled",
+      payload: unknown,
+      patch: { sessionAfter?: string | null; usage?: Record<string, unknown>; error?: string | null } = {},
+    ) => {
+      try {
+        await this.repositories.completeHeartbeat(runId, status, payload, patch);
+      } catch (error) {
+        // Cancellation and queue recovery can race with handler settlement. The
+        // repository remains strict; the runner treats an existing terminal
+        // event as proof that another finalizer already won.
+        if (error instanceof RunEventDomainError && error.code === "terminal") return;
+        throw error;
+      }
+    };
     const context: HeartbeatContext = {
       runId,
       signal: controller.signal,
-      emit: async (type, payload) => { await this.repositories.appendHeartbeatEvent(runId, type, redactValue(payload)); },
+      emit: async (type, payload) => { await this.repositories.appendHeartbeatEvent(runId, type, payload); },
       waiting: async (reason) => {
         await this.repositories.appendHeartbeatEvent(runId, "waiting", { reason });
         await this.repositories.transitionHeartbeat(runId, "waiting");
@@ -136,18 +155,17 @@ export class DurableHeartbeatRuntime {
         controller.signal.removeEventListener("abort", onAbort);
       }
       if (controller.signal.aborted || this.repositories.getHeartbeat(runId)?.status === "cancelled") return;
-      await this.repositories.transitionHeartbeat(runId, "succeeded", {
+      await complete("succeeded", { status: "succeeded", usage: outcome?.usage ?? {} }, {
         sessionAfter: outcome?.sessionAfter, usage: outcome?.usage,
       });
-      await context.emit("status", { status: "succeeded" });
     } catch (error) {
+      if (error instanceof RunEventDomainError && error.code === "terminal") return;
       const message = error instanceof Error ? error.message : String(error);
       if (controller.signal.aborted) {
-        await this.repositories.transitionHeartbeat(runId, "cancelled", { error: message });
-        await context.emit("status", { status: "cancelled", reason: message });
+        if (this.repositories.getHeartbeat(runId)?.status === "cancelled") return;
+        await complete("cancelled", { status: "cancelled", reason: message }, { error: message });
       } else {
-        await this.repositories.transitionHeartbeat(runId, "failed", { error: message });
-        await context.emit("status", { status: "failed", error: message });
+        await complete("failed", { status: "failed", error: message }, { error: message });
       }
     }
   }

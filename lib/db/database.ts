@@ -100,6 +100,36 @@ CREATE TABLE IF NOT EXISTS agent_config_revisions (
 );
 CREATE INDEX IF NOT EXISTS agent_config_revisions_agent_created_idx ON agent_config_revisions(agent_id, created_at);
 `,
+}, {
+  version: 5,
+  name: "isolated-git-workspaces",
+  sql: `
+ALTER TABLE issues ADD COLUMN workspace_path TEXT;
+ALTER TABLE issues ADD COLUMN workspace_branch TEXT;
+ALTER TABLE issues ADD COLUMN workspace_base_commit TEXT;
+ALTER TABLE issues ADD COLUMN workspace_commit TEXT;
+ALTER TABLE issues ADD COLUMN verification_status TEXT;
+ALTER TABLE heartbeat_runs ADD COLUMN workspace_path TEXT;
+ALTER TABLE heartbeat_runs ADD COLUMN workspace_branch TEXT;
+CREATE TABLE IF NOT EXISTS git_workspaces (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL UNIQUE REFERENCES heartbeat_runs(id) ON DELETE CASCADE,
+  repository_path TEXT NOT NULL,
+  workspace_path TEXT NOT NULL UNIQUE,
+  branch TEXT NOT NULL,
+  target_branch TEXT NOT NULL,
+  base_commit TEXT NOT NULL,
+  commit_sha TEXT,
+  state TEXT NOT NULL,
+  last_validated_at INTEGER,
+  recovery_note TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS git_workspaces_state_idx ON git_workspaces(state);
+`,
 }];
 
 export class AppDatabase {

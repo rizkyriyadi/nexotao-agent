@@ -92,9 +92,16 @@ export const TOOL_DEFS = [
 
 export type ToolOut = { ok: boolean; output: string; display?: string; kind?: "bash" | "write"; file?: string; content?: string };
 
-export async function executeTool(name: string, input: any, root: string, signal?: AbortSignal): Promise<ToolOut> {
+export async function executeTool(
+  name: string,
+  input: any,
+  root: string,
+  signal?: AbortSignal,
+  beforeMutation?: (tool: { name: string; input: unknown }) => Promise<void>,
+): Promise<ToolOut> {
   try {
     signal?.throwIfAborted();
+    if (isMutating(name)) await beforeMutation?.({ name, input });
     switch (name) {
       case "list_dir": {
         const abs = resolveWithin(root, input.path ?? ".");

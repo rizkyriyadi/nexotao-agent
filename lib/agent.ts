@@ -51,9 +51,10 @@ async function toolLoop(opts: {
   onSpawn?: (input: any) => Promise<{ output: string }>;
   handlers?: Record<string, (input: any) => Promise<{ output: string }>>;
   onProgress?: (text: string) => void;
+  beforeMutation?: (tool: { name: string; input: unknown }) => Promise<void>;
   maxIters?: number;
 }): Promise<string> {
-  const { run, client, model, system, convo, root, thread, approvalPolicy, toolDefs = TOOL_DEFS as any, extraTools = [], onSpawn, handlers = {}, onProgress, maxIters = 24 } = opts;
+  const { run, client, model, system, convo, root, thread, approvalPolicy, toolDefs = TOOL_DEFS as any, extraTools = [], onSpawn, handlers = {}, onProgress, beforeMutation, maxIters = 24 } = opts;
   let full = "";
 
   for (let iter = 0; iter < maxIters; iter++) {
@@ -67,6 +68,7 @@ async function toolLoop(opts: {
     stream.on("text", (t: string) => { full += t; run.push({ type: "text", text: t, thread }); onProgress?.(full); });
     const final = await stream.finalMessage();
     onProgress?.(full);
+    run.push({ type: "usage", inputTokens: final.usage.input_tokens, outputTokens: final.usage.output_tokens, thread });
 
     convo.push({ role: "assistant", content: final.content });
     const toolUses = (final.content as any[]).filter((b) => b.type === "tool_use");
@@ -88,7 +90,7 @@ async function toolLoop(opts: {
         out =
           !allowed
             ? { ok: false, output: "The user denied this action." }
-            : await executeTool(tu.name, tu.input, root, run.signal);
+            : await executeTool(tu.name, tu.input, root, run.signal, beforeMutation);
       }
 
       run.push({
@@ -290,6 +292,7 @@ export async function runIssueAgent(opts: {
   workers?: { name: string; scope: string }[];
   childrenReport?: string;
   onDelegate?: (tasks: any[]) => Promise<{ output: string }>;
+  beforeMutation?: (tool: { name: string; input: unknown }) => Promise<void>;
 }): Promise<{ text: string; delegated: boolean }> {
   const client = nexotao(opts.apiKey);
   const thread = opts.mode === "worker" ? opts.agentName : "lead";
@@ -321,6 +324,7 @@ export async function runIssueAgent(opts: {
 
   const text = await toolLoop({
     run: opts.run, client, model: opts.model, system, convo, root: opts.root, thread,
+    beforeMutation: opts.beforeMutation,
     approvalPolicy: "ask", toolDefs, extraTools, handlers,
   });
   return { text: text || "(done)", delegated };
