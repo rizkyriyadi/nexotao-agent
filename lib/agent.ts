@@ -163,7 +163,11 @@ export async function runAgentMulti(opts: { run: Run; messages: Msg[]; model: st
   const team = opts.agents?.length
     ? ` Suggested specialist roles for this project: ${opts.agents.map((a) => `${a.name} (${a.scope})`).join(", ")}.`
     : "";
-  const leadSystem = `You are the LEAD agent, coordinating work on the project at ${root}. For a big, multi-part task, call spawn_agents to split it into independent sub-agents that run in parallel (use dependsOn where one must wait for another). For a small task, just use the file tools yourself. After sub-agents finish, integrate and verify, then summarize.${team}`;
+  const leadSystem = `You are the LEAD agent, coordinating work on the project at ${root}.
+
+DELEGATE BY DEFAULT. If the task touches more than one area (e.g. backend + frontend + tests, or several files/features), you MUST call spawn_agents to split it into focused specialist sub-agents that run in parallel. Decide the team from the work itself and name each agent after its scope (e.g. Backend, Frontend, Tests, Auth). Use dependsOn where one must wait for another (e.g. Tests depends on Backend and Frontend). Prefer 2-5 sub-agents. Only skip delegation for a genuinely single, small change.
+
+Before spawning: briefly state your plan — the sub-agents you'll create and why. After they finish: integrate their work, verify it (e.g. type-check), and give a short final summary. Keep your own messages concise; the detail lives in each sub-agent.${team}`;
 
   async function onSpawn(input: any): Promise<{ output: string }> {
     const list: { name: string; task: string; dependsOn?: string[] }[] = input.agents ?? [];

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Crown, Users, ArrowUp, History, Plus, Loader2 } from "lucide-react";
+import { Crown, Users, ArrowUp, History, Plus, Loader2, ChevronRight, GitBranch } from "lucide-react";
 import { useOrch, type Thread, type LogItem } from "./orchestrator-context";
 import { agentPP, LEAD_PP } from "@/lib/avatars";
 import { Markdown } from "../ui/markdown";
@@ -52,21 +52,67 @@ function Row({ t, selected, onSelect, lead, pp }: { t: Thread; selected: boolean
   );
 }
 
-function LogView({ log }: { log: LogItem[] }) {
+type ToolItem = Extract<LogItem, { kind: "tool" }>;
+type Block = { kind: "text"; text: string } | { kind: "tools"; items: ToolItem[] };
+
+// Group consecutive tool calls so long runs read as "Ran 5 steps" accordions
+// instead of a wall — narrative text stays as readable markdown between them.
+function toBlocks(log: LogItem[]): Block[] {
+  const blocks: Block[] = [];
+  for (const it of log) {
+    if (it.kind === "text") { blocks.push({ kind: "text", text: it.text }); continue; }
+    const last = blocks[blocks.length - 1];
+    if (last && last.kind === "tools") last.items.push(it);
+    else blocks.push({ kind: "tools", items: [it] });
+  }
+  return blocks;
+}
+
+function toolDot(s: string) {
+  return s === "running" ? "bg-electric-indigo nx-pulse" : s === "error" ? "bg-alarm-red" : "bg-pebble";
+}
+
+function ToolRow({ it }: { it: ToolItem }) {
   return (
-    <div className="space-y-2.5">
-      {log.length === 0 && <p className="text-[13px] text-pebble">Waiting…</p>}
-      {log.map((it, i) =>
-        it.kind === "text" ? (
-          <Markdown key={i} className="!text-[13.5px]">{it.text}</Markdown>
-        ) : (
-          <div key={i} className="-mx-2 flex items-center gap-3 rounded-md px-2 py-[5px]">
-            <span className={`size-[6px] shrink-0 rounded-full ${it.status === "running" ? "bg-electric-indigo nx-pulse" : it.status === "error" ? "bg-alarm-red" : "bg-pebble"}`} />
-            <span className="w-11 shrink-0 text-[12.5px] font-medium text-charcoal">{TOOL_LABEL[it.name] ?? it.name}</span>
-            <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-bark-grey">{it.target}</span>
-            <span className="shrink-0 font-mono text-[11px] text-pebble">{it.status === "running" ? "…" : it.display ?? it.status}</span>
-          </div>
-        ),
+    <div className="flex items-center gap-3 py-[5px]">
+      <span className={`size-[6px] shrink-0 rounded-full ${toolDot(it.status)}`} />
+      <span className="w-12 shrink-0 text-[12.5px] font-medium text-charcoal">{TOOL_LABEL[it.name] ?? it.name}</span>
+      <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-bark-grey">{it.target}</span>
+      <span className="shrink-0 font-mono text-[11px] text-pebble">{it.status === "running" ? "…" : it.display ?? it.status}</span>
+    </div>
+  );
+}
+
+function ToolGroup({ items }: { items: ToolItem[] }) {
+  const running = items.some((i) => i.status === "running");
+  const [open, setOpen] = useState(items.length <= 2 || running);
+  if (items.length === 1) return <div className="rounded-lg border border-line bg-paper-white px-3"><ToolRow it={items[0]} /></div>;
+
+  // summary like "Read 3 · Run 2 · Search 1"
+  const counts: Record<string, number> = {};
+  for (const i of items) { const k = TOOL_LABEL[i.name] ?? i.name; counts[k] = (counts[k] ?? 0) + 1; }
+  const summary = Object.entries(counts).map(([k, n]) => `${k} ${n}`).join(" · ");
+
+  return (
+    <div className="rounded-lg border border-line bg-paper-white">
+      <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2.5 px-3 py-2 text-left">
+        <span className={`size-[6px] shrink-0 rounded-full ${running ? "bg-electric-indigo nx-pulse" : "bg-pebble"}`} />
+        <span className="text-[12.5px] font-medium text-charcoal">{items.length} steps</span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-pebble">{summary}</span>
+        <ChevronRight className={`size-3.5 shrink-0 text-pebble transition-transform ${open ? "rotate-90" : ""}`} />
+      </button>
+      {open && <div className="border-t border-line px-3 py-1">{items.map((it) => <ToolRow key={it.id} it={it} />)}</div>}
+    </div>
+  );
+}
+
+function Transcript({ log }: { log: LogItem[] }) {
+  const blocks = toBlocks(log);
+  if (log.length === 0) return <p className="text-[13.5px] text-pebble">Waiting for this agent to start…</p>;
+  return (
+    <div className="space-y-3.5">
+      {blocks.map((b, i) =>
+        b.kind === "text" ? <Markdown key={i}>{b.text}</Markdown> : <ToolGroup key={i} items={b.items} />,
       )}
     </div>
   );
@@ -140,51 +186,57 @@ export function Orchestrator() {
   const selPP = sel.id === "lead" ? LEAD_PP : agentPP(subs.findIndex((t) => t.id === sel.id) + 1);
 
   return (
-    <div className="flex h-full min-w-0 flex-1">
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line px-6">
-          <h1 className="truncate text-[15px] font-medium text-charcoal">{task}</h1>
-          <div className="flex shrink-0 items-center gap-3">
-            <span className="flex items-center gap-1.5 font-mono text-[12px] text-bark-grey">
-              {running && <Loader2 className="size-3.5 animate-spin text-electric-indigo" />}
-              <span className={`size-[6px] rounded-full ${running ? "bg-electric-indigo nx-pulse" : "bg-lichen-green"}`} />
-              {running ? `${subs.length ? subs.length + " agents" : "planning"}` : "done"}
-            </span>
-            <Button variant="outline" size="sm" className="gap-1.5 rounded-lg" onClick={newRun}>
-              <Plus className="size-3.5" /> New run
-            </Button>
+    <div className="flex h-full min-w-0 flex-1 flex-col">
+      <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line px-6">
+        <h1 className="truncate text-[15px] font-medium text-charcoal">{task}</h1>
+        <div className="flex shrink-0 items-center gap-3">
+          <span className="flex items-center gap-1.5 font-mono text-[12px] text-bark-grey">
+            {running && <Loader2 className="size-3.5 animate-spin text-electric-indigo" />}
+            <span className={`size-[6px] rounded-full ${running ? "bg-electric-indigo nx-pulse" : "bg-lichen-green"}`} />
+            {running ? `${subs.length ? subs.length + " agents" : "planning"}` : "done"}
+          </span>
+          <Button variant="outline" size="sm" className="gap-1.5 rounded-lg" onClick={newRun}>
+            <Plus className="size-3.5" /> New run
+          </Button>
+        </div>
+      </header>
+
+      <div className="flex min-h-0 flex-1">
+        {/* left rail — the delegation tree (who's doing what) */}
+        <aside className="scroll-thin flex w-[336px] shrink-0 flex-col overflow-y-auto border-r border-line bg-warm-bone px-3 py-4">
+          <p className="label mb-2.5 flex items-center gap-1.5 px-1">
+            <GitBranch className="size-3.5" /> {subs.length ? `Delegated · ${subs.length} specialist${subs.length > 1 ? "s" : ""}` : "Workstream"}
+          </p>
+          <div className="space-y-2">
+            {lead && <Row t={lead} lead pp={LEAD_PP} selected={selected === "lead"} onSelect={() => setSelected("lead")} />}
+            {subs.length > 0 && (
+              <div className="ml-3 space-y-2 border-l border-line pl-3">
+                {subs.map((t, i) => (
+                  <Row key={t.id} t={t} pp={agentPP(i + 1)} selected={selected === t.id} onSelect={() => setSelected(t.id)} />
+                ))}
+              </div>
+            )}
           </div>
-        </header>
-        <div className="scroll-thin flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[720px] px-8 py-7">
-            <p className="label mb-3">Workstreams</p>
-            <div className="space-y-2">
-              {lead && <Row t={lead} lead pp={LEAD_PP} selected={selected === "lead"} onSelect={() => setSelected("lead")} />}
-              {subs.length > 0 && (
-                <div className="ml-4 space-y-2 border-l border-line pl-4">
-                  {subs.map((t, i) => (
-                    <Row key={t.id} t={t} pp={agentPP(i + 1)} selected={selected === t.id} onSelect={() => setSelected(t.id)} />
-                  ))}
-                </div>
-              )}
+        </aside>
+
+        {/* main — the selected agent's transcript, wide & readable */}
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line px-6">
+            <img src={selPP} alt={sel.name} className="size-6 rounded-lg object-cover" />
+            <span className="text-[13.5px] font-medium text-charcoal">{sel.name}</span>
+            {sel.id === "lead" && <span className="label !text-[9px]">Lead</span>}
+            <span className="flex items-center gap-1.5 text-[12px] text-bark-grey">
+              <span className={`size-[6px] rounded-full ${dotClass(sel.status)}`} /> {sel.status}
+            </span>
+            <span className="ml-auto truncate font-mono text-[11px] text-pebble">{sel.scope}</span>
+          </div>
+          <div className="scroll-thin flex-1 overflow-y-auto">
+            <div className="mx-auto max-w-[760px] px-8 py-7">
+              <Transcript log={sel.log} />
             </div>
           </div>
         </div>
       </div>
-
-      <aside className="flex h-full w-[420px] shrink-0 flex-col border-l border-line bg-warm-bone">
-        <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-line px-5">
-          <img src={selPP} alt={sel.name} className="size-6 rounded-lg object-cover" />
-          <span className="font-mono text-[13px] font-medium text-charcoal">{sel.name}</span>
-          <span className="flex items-center gap-1.5 text-[12px] text-bark-grey">
-            <span className={`size-[6px] rounded-full ${dotClass(sel.status)}`} /> {sel.status}
-          </span>
-          <span className="ml-auto truncate font-mono text-[11px] text-pebble">{sel.scope}</span>
-        </div>
-        <div className="scroll-thin flex-1 overflow-y-auto px-5 py-5">
-          <LogView log={sel.log} />
-        </div>
-      </aside>
     </div>
   );
 }
