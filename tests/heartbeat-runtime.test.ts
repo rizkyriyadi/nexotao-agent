@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
+import { AgentLifecycleService } from "../lib/agent-lifecycle";
 import { openDatabase } from "../lib/db/database";
 import { ControlPlaneRepositories } from "../lib/db/repositories";
 import { projects } from "../lib/db/schema";
@@ -78,6 +79,7 @@ test("heartbeat runtime persists waiting, success, failure, and cancellation", a
     await runtime.runUntilIdle();
     assert.equal(f.repositories.getHeartbeat(two.heartbeat.id)?.status, "failed");
     await runtime.shutdown();
+    await new AgentLifecycleService(f.database).action("a", "clear_error");
 
     const cancelledRuntime = new DurableHeartbeatRuntime(f.repositories, async (_job, context) => {
       await new Promise<void>((_resolve, reject) => {

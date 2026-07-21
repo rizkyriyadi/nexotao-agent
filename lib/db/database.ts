@@ -81,6 +81,25 @@ ALTER TABLE wakeup_requests ADD COLUMN claimed_at INTEGER;
 ALTER TABLE wakeup_requests ADD COLUMN finished_at INTEGER;
 ALTER TABLE wakeup_requests ADD COLUMN last_error TEXT;
 `,
+}, {
+  version: 4,
+  name: "agent-lifecycle-management",
+  sql: `
+ALTER TABLE agents ADD COLUMN instructions TEXT NOT NULL DEFAULT '';
+ALTER TABLE agents ADD COLUMN project_access TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE agents ADD COLUMN concurrency INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE IF NOT EXISTS agent_config_revisions (
+  id TEXT PRIMARY KEY,
+  agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+  revision INTEGER NOT NULL,
+  snapshot TEXT NOT NULL,
+  actor_type TEXT NOT NULL,
+  actor_id TEXT,
+  created_at INTEGER NOT NULL,
+  UNIQUE(agent_id, revision)
+);
+CREATE INDEX IF NOT EXISTS agent_config_revisions_agent_created_idx ON agent_config_revisions(agent_id, created_at);
+`,
 }];
 
 export class AppDatabase {

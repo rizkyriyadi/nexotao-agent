@@ -79,6 +79,10 @@ export async function cancelHeartbeat(runId: string, reason?: string) {
   return (await heartbeatRuntime()).cancel(runId, reason);
 }
 
+export async function retryHeartbeat(runId: string) {
+  return (await heartbeatRuntime()).retry(runId, Date.now());
+}
+
 async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     const issueId = job.wakeup.issueId;
     if (!issueId) throw new Error("Heartbeat has no issue to execute");

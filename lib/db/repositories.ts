@@ -108,6 +108,8 @@ export class ControlPlaneRepositories {
       };
       db.insert(wakeupRequests).values(wakeup).run();
       db.insert(heartbeatRuns).values(heartbeat).run();
+      const agent = db.select().from(agents).where(eq(agents.id, input.agentId)).get();
+      if (agent && !["paused", "error", "terminated"].includes(agent.status)) db.update(agents).set({ status: "queued", updatedAt: now }).where(eq(agents.id, input.agentId)).run();
       return { wakeup, heartbeat };
     });
   }
@@ -117,9 +119,8 @@ export class ControlPlaneRepositories {
         .orderBy(asc(wakeupRequests.availableAt), asc(wakeupRequests.createdAt)).all().filter((row) => row.availableAt <= now);
       for (const candidate of candidates) {
         const agent = db.select().from(agents).where(eq(agents.id, candidate.agentId)).get();
-        if (!agent || agent.status === "paused") continue;
-        const configured = Number((agent.runtimeConfig as Record<string, unknown> | null)?.concurrency ?? 1);
-        const concurrency = Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 1;
+        if (!agent || ["paused", "error", "terminated"].includes(agent.status)) continue;
+        const concurrency = Math.max(1, agent.concurrency);
         const active = db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.agentId, candidate.agentId), inArray(heartbeatRuns.status, ["running", "waiting"]))).all().length;
         if (active >= concurrency) continue;
         const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupId, candidate.id)).get();
@@ -127,6 +128,7 @@ export class ControlPlaneRepositories {
         const runId = heartbeat.id;
         db.update(wakeupRequests).set({ status: "running", runId, claimedAt: now, attempt: candidate.attempt + 1, lastError: null }).where(eq(wakeupRequests.id, candidate.id)).run();
         db.update(heartbeatRuns).set({ status: "running", startedAt: now, updatedAt: now, finishedAt: null, error: null }).where(eq(heartbeatRuns.id, heartbeat.id)).run();
+        db.update(agents).set({ status: "running", errorReason: null, updatedAt: now, lastHeartbeatAt: now }).where(eq(agents.id, candidate.agentId)).run();
         return {
           wakeup: db.select().from(wakeupRequests).where(eq(wakeupRequests.id, candidate.id)).get()!,
           heartbeat: db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, heartbeat.id)).get()!,
@@ -145,6 +147,12 @@ export class ControlPlaneRepositories {
       const terminal = ["succeeded", "failed", "cancelled"].includes(status);
       db.update(heartbeatRuns).set({ ...patch, status, updatedAt: now, finishedAt: terminal ? now : null }).where(eq(heartbeatRuns.id, runId)).run();
       if (heartbeat.wakeupId) db.update(wakeupRequests).set({ status: terminal ? status : "running", finishedAt: terminal ? now : null, lastError: patch.error ?? null }).where(eq(wakeupRequests.id, heartbeat.wakeupId)).run();
+      const agent = db.select().from(agents).where(eq(agents.id, heartbeat.agentId)).get();
+      if (agent && !["paused", "terminated"].includes(agent.status)) {
+        const next = status === "failed" ? "error" : ["running", "waiting"].includes(status) ? "running" : "idle";
+        db.update(agents).set({ status: next, errorReason: status === "failed" ? patch.error ?? "Heartbeat failed" : null, lastHeartbeatAt: now, updatedAt: now }).where(eq(agents.id, heartbeat.agentId)).run();
+        if (status === "failed") db.insert(activityLog).values({ id: randomUUID(), actorType: "agent", actorId: heartbeat.agentId, action: "agent.error", entityType: "agent", entityId: heartbeat.agentId, summary: { runId, error: patch.error ?? null }, runId, createdAt: now }).run();
+      }
       return db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get() ?? null;
     });
   }
@@ -155,6 +163,7 @@ export class ControlPlaneRepositories {
       const now = Date.now();
       db.update(heartbeatRuns).set({ status: "queued", error: error ?? null, updatedAt: now, finishedAt: null }).where(eq(heartbeatRuns.id, runId)).run();
       db.update(wakeupRequests).set({ status: "queued", availableAt, runId: null, claimedAt: null, finishedAt: null, lastError: error ?? null }).where(eq(wakeupRequests.id, heartbeat.wakeupId)).run();
+      db.update(agents).set({ status: "queued", errorReason: null, updatedAt: now }).where(eq(agents.id, heartbeat.agentId)).run();
       return true;
     });
   }
@@ -165,6 +174,7 @@ export class ControlPlaneRepositories {
       for (const wakeup of orphaned) {
         db.update(wakeupRequests).set({ status: "queued", runId: null, claimedAt: null, finishedAt: null, lastError: "Recovered after runtime restart" }).where(eq(wakeupRequests.id, wakeup.id)).run();
         db.update(heartbeatRuns).set({ status: "queued", error: "Recovered after runtime restart", updatedAt: now, finishedAt: null }).where(eq(heartbeatRuns.wakeupId, wakeup.id)).run();
+        db.update(agents).set({ status: "queued", updatedAt: now }).where(eq(agents.id, wakeup.agentId)).run();
       }
       return orphaned.length;
     });

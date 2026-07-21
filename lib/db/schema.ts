@@ -32,9 +32,17 @@ export const agents = sqliteTable("agents", {
   adapterConfig: text("adapter_config", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
   runtimeConfig: text("runtime_config", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
   permissions: text("permissions", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),
+  instructions: text("instructions").notNull().default(""),
+  projectAccess: text("project_access", { mode: "json" }).$type<string[]>().notNull().default([]),
+  concurrency: integer("concurrency").notNull().default(1),
   budgetLimit: real("budget_limit"), spentAmount: real("spent_amount").notNull().default(0), pauseReason: text("pause_reason"), errorReason: text("error_reason"),
   lastHeartbeatAt: integer("last_heartbeat_at"), ...timestamps,
 }, (t) => [uniqueIndex("agents_project_name_uq").on(t.projectId, t.name), index("agents_project_status_idx").on(t.projectId, t.status)]);
+export const agentConfigRevisions = sqliteTable("agent_config_revisions", {
+  id: text("id").primaryKey(), agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }),
+  revision: integer("revision").notNull(), snapshot: text("snapshot", { mode: "json" }).$type<Record<string, unknown>>().notNull(),
+  actorType: text("actor_type").notNull(), actorId: text("actor_id"), createdAt: integer("created_at").notNull(),
+}, (t) => [uniqueIndex("agent_config_revisions_agent_revision_uq").on(t.agentId, t.revision), index("agent_config_revisions_agent_created_idx").on(t.agentId, t.createdAt)]);
 export const issues = sqliteTable("issues", {
   id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   identifier: text("identifier").notNull(), parentId: text("parent_id"), title: text("title").notNull(), description: text("description").notNull().default(""),
@@ -87,4 +95,4 @@ export const costEvents = sqliteTable("cost_events", {
 export const activityLog = sqliteTable("activity_log", {
   id: text("id").primaryKey(), actorType: text("actor_type").notNull(), actorId: text("actor_id"), action: text("action").notNull(), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(), summary: text("summary", { mode: "json" }).$type<unknown>().notNull(), runId: text("run_id"), createdAt: integer("created_at").notNull(),
 }, (t) => [index("activity_entity_created_idx").on(t.entityType, t.entityId, t.createdAt), index("activity_created_idx").on(t.createdAt)]);
-export const schema = { projects, sessions, tasks, agentRuns, runRecords, agents, issues, issueDependencies, issueMutationRequests, heartbeatRuns, wakeupRequests, runEvents, issueComments, documents, issueDocuments, documentRevisions, approvals, costEvents, activityLog };
+export const schema = { projects, sessions, tasks, agentRuns, runRecords, agents, agentConfigRevisions, issues, issueDependencies, issueMutationRequests, heartbeatRuns, wakeupRequests, runEvents, issueComments, documents, issueDocuments, documentRevisions, approvals, costEvents, activityLog };
