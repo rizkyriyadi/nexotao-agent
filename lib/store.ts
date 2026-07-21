@@ -23,14 +23,14 @@ export type RunRecord = {
   events: any[]; // full event log — lets a finished run be replayed for viewing
 };
 
-async function read<T>(file: string, key: string): Promise<T[]> {
+export async function read<T>(file: string, key: string): Promise<T[]> {
   try {
     return (JSON.parse(await fs.readFile(path.join(DIR, file), "utf8"))[key] ?? []) as T[];
   } catch {
     return [];
   }
 }
-async function write<T>(file: string, key: string, rows: T[]) {
+export async function write<T>(file: string, key: string, rows: T[]) {
   ensureDir();
   await fs.writeFile(path.join(DIR, file), JSON.stringify({ [key]: rows }, null, 2), "utf8");
 }
@@ -38,7 +38,7 @@ async function write<T>(file: string, key: string, rows: T[]) {
 // Serialize read-modify-write per file so parallel sub-agents don't clobber each
 // other's updates (the JSON store is a shared file — concurrent writes lose data).
 const locks = new Map<string, Promise<unknown>>();
-function withLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
+export function withLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
   const prev = locks.get(file) ?? Promise.resolve();
   const run = prev.then(fn, fn);
   locks.set(file, run.catch(() => {}));

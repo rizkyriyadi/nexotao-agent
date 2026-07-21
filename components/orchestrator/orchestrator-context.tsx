@@ -7,27 +7,32 @@ export type LogItem =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; name: string; target: string; status: "running" | "done" | "error"; display?: string };
 
-export type Thread = {
+export type IssueNode = {
   id: string;
-  name: string;
-  scope: string;
-  status: "running" | "done" | "error";
-  dependsOn?: string[];
-  log: LogItem[];
+  ref: string;
+  title: string;
+  agentName: string;
+  role: "lead" | "worker";
+  status: string;
+  stage: string;
+  blockedBy: string[];
+  runId: string | null;
+  parentId: string | null;
+  summary: string;
 };
-
-export type RunSummary = { id: string; kind: string; title: string; status: string; createdAt: number; updatedAt: number };
 
 type Ctx = {
   started: boolean;
   running: boolean;
-  task: string;
-  threads: Thread[];
-  selected: string;
-  runs: RunSummary[];
+  goalText: string;
+  nodes: IssueNode[];
+  agents: { id: string; name: string; role: string }[];
+  selected: string | null;
+  log: LogItem[];
+  recent: { id: string; title: string; status: string; updatedAt: number }[];
   setSelected: (id: string) => void;
-  start: (task: string) => void;
-  openRun: (id: string) => void;
+  start: (goal: string) => void;
+  openRun: (rootId: string) => void;
   newRun: () => void;
 };
 
@@ -43,164 +48,179 @@ function tgt(name: string, input: any) {
   if (name === "grep") return input?.pattern ?? "";
   if (name === "web_search") return input?.query ?? "";
   if (name === "web_fetch") return input?.url ?? "";
-  if (name === "spawn_agents") return (input?.agents ?? []).map((a: any) => a.name).join(", ");
+  if (name === "delegate") return (input?.tasks ?? []).map((t: any) => t.assignee).join(", ");
   return input?.path ?? "";
 }
 
-const LEAD = (): Thread => ({ id: "lead", name: "Lead", scope: "Plan & integrate", status: "running", log: [] });
-
 export function OrchestratorProvider({ children }: { children: ReactNode }) {
   const [started, setStarted] = useState(false);
-  const [running, setRunning] = useState(false);
-  const [task, setTask] = useState("");
-  const [threads, setThreads] = useState<Thread[]>([]);
-  const [selected, setSelected] = useState("lead");
-  const [runs, setRuns] = useState<RunSummary[]>([]);
-  const connected = useRef(false);
-  const startedByMe = useRef(false);
+  const [goalText, setGoalText] = useState("");
+  const [nodes, setNodes] = useState<IssueNode[]>([]);
+  const [agents, setAgents] = useState<{ id: string; name: string; role: string }[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [log, setLog] = useState<LogItem[]>([]);
+  const [recent, setRecent] = useState<{ id: string; title: string; status: string; updatedAt: number }[]>([]);
 
-  const refreshRuns = useCallback(() => {
-    fetch("/api/runs?kind=orchestrator").then((r) => r.json()).then((d) => setRuns(d.runs ?? [])).catch(() => {});
+  const rootId = useRef<string | null>(null);
+  const poller = useRef<any>(null);
+  const streamAbort = useRef<AbortController | null>(null);
+  const streamingRunId = useRef<string | null>(null);
+  const booted = useRef(false);
+
+  const running = nodes.some((n) => n.status === "in_progress" || n.status === "todo" || n.status === "blocked");
+
+  // build the tree for the current goal from all issues
+  const applyIssues = useCallback((issues: any[], ags: any[]) => {
+    const rid = rootId.current;
+    if (!rid) return;
+    const byId = new Map(issues.map((i) => [i.id, i]));
+    const nameOf = (aid: string | null) => ags.find((a) => a.id === aid)?.name ?? "?";
+    const roleOf = (aid: string | null) => (ags.find((a) => a.id === aid)?.role ?? "worker") as "lead" | "worker";
+    // root + its descendants
+    const inTree = (i: any): boolean => {
+      let cur: any = i;
+      for (let g = 0; g < 8 && cur; g++) { if (cur.id === rid) return true; cur = cur.parentId ? byId.get(cur.parentId) : null; }
+      return false;
+    };
+    const ns: IssueNode[] = issues.filter(inTree).map((i) => ({
+      id: i.id, ref: i.ref, title: i.title, agentName: nameOf(i.assigneeAgentId), role: roleOf(i.assigneeAgentId),
+      status: i.status, stage: i.stage, blockedBy: i.blockedBy ?? [], runId: i.runId ?? null, parentId: i.parentId, summary: i.summary ?? "",
+    }));
+    setNodes(ns);
+    setAgents(ags.map((a) => ({ id: a.id, name: a.name, role: a.role })));
   }, []);
 
-  const upd = (id: string, fn: (t: Thread) => Thread) => setThreads((prev) => prev.map((t) => (t.id === id ? fn(t) : t)));
+  const poll = useCallback(async () => {
+    try {
+      const d = await fetch("/api/issues").then((r) => r.json());
+      applyIssues(d.issues ?? [], d.agents ?? []);
+    } catch { /* keep last */ }
+  }, [applyIssues]);
 
-  const appendText = (id: string, delta: string) =>
-    upd(id, (t) => {
-      const last = t.log[t.log.length - 1];
-      if (last && last.kind === "text") {
-        const log = [...t.log];
-        log[log.length - 1] = { kind: "text", text: last.text + delta };
-        return { ...t, log };
-      }
-      return { ...t, log: [...t.log, { kind: "text", text: delta }] };
-    });
+  const startPolling = useCallback(() => {
+    if (poller.current) clearInterval(poller.current);
+    poll();
+    poller.current = setInterval(poll, 2000);
+  }, [poll]);
 
-  // consume a reconnectable stream (replay + live tail) and rebuild the tree
-  const consume = useCallback(
-    async (query: string) => {
-      if (connected.current) return;
-      connected.current = true;
-      setRunning(true);
-      try {
-        const res = await fetch(`/api/run/stream?${query}`);
-        if (!res.body) return;
-        const reader = res.body.getReader();
-        const dec = new TextDecoder();
-        let buf = "";
-        let ended = false;
-        while (!ended) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, { stream: true });
-          const parts = buf.split("\n\n");
-          buf = parts.pop() || "";
-          for (const p of parts) {
-            const line = p.trim();
-            if (!line.startsWith("data:")) continue;
-            const e = JSON.parse(line.slice(5).trim());
-            if (e.type === "idle" || e.type === "done") { ended = true; break; }
-            if (e.type === "error") { if (e.error) toast.error(String(e.error)); ended = true; break; }
-            const th = e.thread ?? "lead";
-            switch (e.type) {
-              case "thread_created":
-                setThreads((prev) => (prev.some((x) => x.id === e.id) ? prev : [...prev, { id: e.id, name: e.id, scope: e.scope, status: "running", dependsOn: e.dependsOn, log: [] }]));
-                break;
-              case "thread_status":
-                upd(e.id, (t) => ({ ...t, status: e.status }));
-                break;
-              case "text":
-                appendText(th, e.text);
-                break;
-              case "tool_use":
-                upd(th, (t) => ({ ...t, log: [...t.log, { kind: "tool", id: e.id, name: e.name, target: tgt(e.name, e.input), status: "running" }] }));
-                break;
-              case "tool_result":
-                upd(th, (t) => ({ ...t, log: t.log.map((it) => (it.kind === "tool" && it.id === e.id ? { ...it, status: e.ok ? "done" : "error", display: e.display } : it)) }));
-                break;
-            }
-          }
+  // stream the selected issue's run transcript (replay + live tail)
+  const streamRun = useCallback(async (runId: string) => {
+    if (streamingRunId.current === runId) return;
+    streamAbort.current?.abort();
+    const ac = new AbortController();
+    streamAbort.current = ac;
+    streamingRunId.current = runId;
+    setLog([]);
+    try {
+      const res = await fetch(`/api/run/stream?runId=${runId}`, { signal: ac.signal });
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = "";
+      const append = (t: string) => setLog((prev) => {
+        const last = prev[prev.length - 1];
+        if (last && last.kind === "text") { const c = [...prev]; c[c.length - 1] = { kind: "text", text: last.text + t }; return c; }
+        return [...prev, { kind: "text", text: t }];
+      });
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const parts = buf.split("\n\n"); buf = parts.pop() || "";
+        for (const p of parts) {
+          const line = p.trim(); if (!line.startsWith("data:")) continue;
+          const e = JSON.parse(line.slice(5).trim());
+          if (e.type === "idle" || e.type === "done" || e.type === "error") { streamingRunId.current = null; return; }
+          if (e.type === "text") append(e.text);
+          else if (e.type === "tool_use") setLog((prev) => [...prev, { kind: "tool", id: e.id, name: e.name, target: tgt(e.name, e.input), status: "running" }]);
+          else if (e.type === "tool_result") setLog((prev) => prev.map((it) => (it.kind === "tool" && it.id === e.id ? { ...it, status: e.ok ? "done" : "error", display: e.display } : it)));
         }
-      } catch (err: any) {
-        toast.error(String(err?.message ?? err));
-      } finally {
-        connected.current = false;
-        setThreads((prev) => prev.map((x) => (x.status === "running" ? { ...x, status: "done" } : x)));
-        setRunning(false);
-        startedByMe.current = false;
-        refreshRuns(); // agent history + task board are recorded server-side now
       }
-    },
-    [refreshRuns],
-  );
+    } catch { /* aborted or ended */ }
+    finally { if (streamingRunId.current === runId) streamingRunId.current = null; }
+  }, []);
 
-  const start = useCallback(
-    async (raw: string) => {
-      const t = raw.trim();
-      if (!t || running) return;
-      setTask(t);
-      setStarted(true);
-      setSelected("lead");
-      setThreads([LEAD()]);
-      startedByMe.current = true;
-      try {
-        const post = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: [{ role: "user", content: t }], multi: true }) });
-        if (!post.ok) {
-          const err = await post.json().catch(() => ({ error: "Request failed" }));
-          throw new Error(err.error || "Request failed");
-        }
-        const { runId } = await post.json();
-        window.history.replaceState({}, "", `/orchestrator?run=${runId}`);
-        await consume(`runId=${runId}`);
-      } catch (err: any) {
-        const m = String(err?.message ?? err);
-        toast.error(m.includes("onboarding") ? "Finish onboarding to connect Nexotao." : m);
-        setRunning(false);
-      }
-    },
-    [running, consume],
-  );
+  const select = useCallback((id: string) => {
+    setSelected(id);
+    const node = nodes.find((n) => n.id === id);
+    if (node?.runId) streamRun(node.runId);
+    else { streamAbort.current?.abort(); streamingRunId.current = null; setLog([]); }
+  }, [nodes, streamRun]);
 
-  // open an existing run (running → live tail; finished → replay from disk)
-  const openRun = useCallback(
-    (id: string) => {
-      if (connected.current) return;
-      window.history.replaceState({}, "", `/orchestrator?run=${id}`);
-      const summary = runs.find((r) => r.id === id);
-      setTask(summary?.title ?? "Run");
-      setStarted(true);
-      setSelected("lead");
-      setThreads([LEAD()]);
-      consume(`runId=${id}`);
-    },
-    [runs, consume],
-  );
+  // re-stream when the selected node gains a runId (it just started)
+  useEffect(() => {
+    if (!selected) return;
+    const node = nodes.find((n) => n.id === selected);
+    if (node?.runId && streamingRunId.current !== node.runId) streamRun(node.runId);
+  }, [nodes, selected, streamRun]);
+
+  const refreshRecent = useCallback(() => {
+    fetch("/api/issues").then((r) => r.json()).then((d) => {
+      const roots = (d.issues ?? []).filter((i: any) => !i.parentId).sort((a: any, b: any) => b.updatedAt - a.updatedAt);
+      setRecent(roots.map((r: any) => ({ id: r.id, title: r.title, status: r.status, updatedAt: r.updatedAt })));
+    }).catch(() => {});
+  }, []);
+
+  const enterRun = useCallback((rid: string, goal: string) => {
+    rootId.current = rid;
+    setGoalText(goal);
+    setStarted(true);
+    setSelected(rid);
+    setNodes([]);
+    setLog([]);
+    streamingRunId.current = null;
+    window.history.replaceState({}, "", `/orchestrator?goal=${rid}`);
+    startPolling();
+  }, [startPolling]);
+
+  const start = useCallback(async (raw: string) => {
+    const goal = raw.trim();
+    if (!goal || running) return;
+    try {
+      const r = await fetch("/api/issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal }) });
+      if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || "Request failed"); }
+      const { root } = await r.json();
+      enterRun(root.id, goal);
+    } catch (err: any) {
+      toast.error(String(err?.message ?? err).includes("onboarding") ? "Finish onboarding to connect Nexotao." : String(err?.message ?? err));
+    }
+  }, [running, enterRun]);
+
+  const openRun = useCallback((rid: string) => {
+    const g = recent.find((x) => x.id === rid);
+    enterRun(rid, g?.title ?? "Run");
+    poll();
+  }, [recent, enterRun, poll]);
 
   const newRun = useCallback(() => {
-    window.history.replaceState({}, "", "/orchestrator");
+    if (poller.current) clearInterval(poller.current);
+    streamAbort.current?.abort();
+    rootId.current = null;
     setStarted(false);
-    setRunning(false);
-    setThreads([]);
-    setTask("");
-    refreshRuns();
-  }, [refreshRuns]);
+    setNodes([]);
+    setLog([]);
+    setGoalText("");
+    window.history.replaceState({}, "", "/orchestrator");
+    refreshRecent();
+  }, [refreshRecent]);
 
-  // boot: load run list, and reconnect to ?run= if present
-  const booted = useRef(false);
+  // select the root once the tree first loads
+  useEffect(() => {
+    if (started && !selected && nodes.length) setSelected(rootId.current);
+  }, [started, selected, nodes]);
+
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
-    refreshRuns();
-    const id = new URLSearchParams(window.location.search).get("run");
-    if (id) {
-      setStarted(true);
-      setSelected("lead");
-      setThreads([LEAD()]);
-      consume(`runId=${id}`);
-    }
-  }, [consume, refreshRuns]);
+    refreshRecent();
+    const gid = new URLSearchParams(window.location.search).get("goal");
+    if (gid) enterRun(gid, "Run");
+    return () => { if (poller.current) clearInterval(poller.current); streamAbort.current?.abort(); };
+  }, [refreshRecent, enterRun]);
 
   return (
-    <OrchCtx.Provider value={{ started, running, task, threads, selected, runs, setSelected, start, openRun, newRun }}>{children}</OrchCtx.Provider>
+    <OrchCtx.Provider value={{ started, running, goalText, nodes, agents, selected, log, recent, setSelected: select, start, openRun, newRun }}>
+      {children}
+    </OrchCtx.Provider>
   );
 }

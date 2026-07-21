@@ -2,15 +2,15 @@
 
 import { useState } from "react";
 import { Crown, Users, ArrowUp, History, Plus, Loader2, ChevronRight, GitBranch } from "lucide-react";
-import { useOrch, type Thread, type LogItem } from "./orchestrator-context";
-import { agentPP, LEAD_PP } from "@/lib/avatars";
-import { Markdown } from "../ui/markdown";
+import { useOrch, type IssueNode, type LogItem } from "./orchestrator-context";
 import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
+import { agentPP, LEAD_PP } from "@/lib/avatars";
+import { Markdown } from "../ui/markdown";
 
 const TOOL_LABEL: Record<string, string> = {
   list_dir: "List", read_file: "Read", write_file: "Write", edit_file: "Edit",
-  bash: "Run", grep: "Grep", spawn_agents: "Spawn", web_search: "Search", web_fetch: "Fetch",
+  bash: "Run", grep: "Grep", delegate: "Delegate", web_search: "Search", web_fetch: "Fetch",
 };
 
 const SUGGESTIONS = [
@@ -19,44 +19,26 @@ const SUGGESTIONS = [
   "Add dark mode across the app",
 ];
 
-function dotClass(status: Thread["status"]) {
-  return status === "running" ? "bg-electric-indigo nx-pulse" : status === "error" ? "bg-alarm-red" : status === "done" ? "bg-lichen-green" : "bg-pebble";
+const STATUS_LABEL: Record<string, string> = {
+  in_progress: "running", in_review: "in review", todo: "queued", blocked: "waiting", done: "done", error: "error", cancelled: "cancelled", backlog: "backlog",
+};
+function statusDot(s: string) {
+  if (s === "in_progress") return "bg-electric-indigo nx-pulse";
+  if (s === "done") return "bg-lichen-green";
+  if (s === "in_review") return "bg-sapphire-link";
+  if (s === "error" || s === "cancelled") return "bg-alarm-red";
+  return "bg-pebble"; // todo / blocked / backlog
 }
 
-function Row({ t, selected, onSelect, lead, pp }: { t: Thread; selected: boolean; onSelect: () => void; lead?: boolean; pp: string }) {
-  const tools = t.log.filter((l) => l.kind === "tool").length;
-  return (
-    <button
-      onClick={onSelect}
-      className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors ${
-        selected ? "border-electric-indigo bg-electric-indigo/[0.04]" : "border-line hover:border-line-strong"
-      }`}
-    >
-      <span className="relative block size-8 shrink-0">
-        <img src={pp} alt={t.name} className="size-8 rounded-xl object-cover" />
-        {lead && <Crown className="absolute -left-1 -top-1 size-3.5 rounded-full bg-warm-bone p-[1px] text-electric-indigo" />}
-        <span className={`absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-warm-bone ${dotClass(t.status)}`} />
-      </span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2">
-          <span className="text-[14px] font-medium text-charcoal">{t.name}</span>
-          {lead && <span className="label !text-[9px]">Lead</span>}
-        </span>
-        <span className="block truncate text-[12.5px] text-bark-grey">{t.scope}</span>
-        {t.dependsOn?.length ? <span className="mt-0.5 block font-mono text-[11px] text-pebble">waits on {t.dependsOn.join(", ")}</span> : null}
-      </span>
-      <span className="shrink-0 font-mono text-[11px] text-pebble">
-        {t.status === "running" ? "running" : t.status}{tools ? ` · ${tools}` : ""}
-      </span>
-    </button>
-  );
+function ago(ts: number) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 60) return "just now"; if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`; return `${Math.floor(s / 86400)}d ago`;
 }
 
+/* ── transcript (grouped tool accordions + markdown) ───────────── */
 type ToolItem = Extract<LogItem, { kind: "tool" }>;
 type Block = { kind: "text"; text: string } | { kind: "tools"; items: ToolItem[] };
-
-// Group consecutive tool calls so long runs read as "Ran 5 steps" accordions
-// instead of a wall — narrative text stays as readable markdown between them.
 function toBlocks(log: LogItem[]): Block[] {
   const blocks: Block[] = [];
   for (const it of log) {
@@ -67,32 +49,26 @@ function toBlocks(log: LogItem[]): Block[] {
   }
   return blocks;
 }
-
 function toolDot(s: string) {
   return s === "running" ? "bg-electric-indigo nx-pulse" : s === "error" ? "bg-alarm-red" : "bg-pebble";
 }
-
 function ToolRow({ it }: { it: ToolItem }) {
   return (
     <div className="flex items-center gap-3 py-[5px]">
       <span className={`size-[6px] shrink-0 rounded-full ${toolDot(it.status)}`} />
-      <span className="w-12 shrink-0 text-[12.5px] font-medium text-charcoal">{TOOL_LABEL[it.name] ?? it.name}</span>
+      <span className="w-14 shrink-0 text-[12.5px] font-medium text-charcoal">{TOOL_LABEL[it.name] ?? it.name}</span>
       <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-bark-grey">{it.target}</span>
       <span className="shrink-0 font-mono text-[11px] text-pebble">{it.status === "running" ? "…" : it.display ?? it.status}</span>
     </div>
   );
 }
-
 function ToolGroup({ items }: { items: ToolItem[] }) {
   const running = items.some((i) => i.status === "running");
   const [open, setOpen] = useState(items.length <= 2 || running);
   if (items.length === 1) return <div className="rounded-lg border border-line bg-paper-white px-3"><ToolRow it={items[0]} /></div>;
-
-  // summary like "Read 3 · Run 2 · Search 1"
   const counts: Record<string, number> = {};
   for (const i of items) { const k = TOOL_LABEL[i.name] ?? i.name; counts[k] = (counts[k] ?? 0) + 1; }
   const summary = Object.entries(counts).map(([k, n]) => `${k} ${n}`).join(" · ");
-
   return (
     <div className="rounded-lg border border-line bg-paper-white">
       <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2.5 px-3 py-2 text-left">
@@ -105,42 +81,52 @@ function ToolGroup({ items }: { items: ToolItem[] }) {
     </div>
   );
 }
-
-function Transcript({ log }: { log: LogItem[] }) {
+function Transcript({ log, waiting }: { log: LogItem[]; waiting: string }) {
   const blocks = toBlocks(log);
-  if (log.length === 0) return <p className="text-[13.5px] text-pebble">Waiting for this agent to start…</p>;
+  if (log.length === 0) return <p className="text-[13.5px] text-pebble">{waiting}</p>;
   return (
     <div className="space-y-3.5">
-      {blocks.map((b, i) =>
-        b.kind === "text" ? <Markdown key={i}>{b.text}</Markdown> : <ToolGroup key={i} items={b.items} />,
-      )}
+      {blocks.map((b, i) => (b.kind === "text" ? <Markdown key={i}>{b.text}</Markdown> : <ToolGroup key={i} items={b.items} />))}
     </div>
   );
 }
 
-function ago(ts: number) {
-  const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60) return "just now"; if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  if (s < 86400) return `${Math.floor(s / 3600)}h ago`; return `${Math.floor(s / 86400)}d ago`;
-}
-
-function statusDot(s: string) {
-  return s === "running" ? "bg-electric-indigo nx-pulse" : s === "error" ? "bg-alarm-red" : "bg-lichen-green";
+/* ── tree row ──────────────────────────────────────────────────── */
+function Row({ node, pp, lead, selected, onSelect, depNames }: { node: IssueNode; pp: string; lead?: boolean; selected: boolean; onSelect: () => void; depNames: string[] }) {
+  return (
+    <button
+      onClick={onSelect}
+      className={`flex w-full items-start gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors ${selected ? "border-electric-indigo bg-electric-indigo/[0.04]" : "border-line hover:border-line-strong"}`}
+    >
+      <span className="relative mt-0.5 block size-8 shrink-0">
+        <img src={pp} alt={node.agentName} className="size-8 rounded-xl object-cover" />
+        {lead && <Crown className="absolute -left-1 -top-1 size-3.5 rounded-full bg-warm-bone p-[1px] text-electric-indigo" />}
+        <span className={`absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-warm-bone ${statusDot(node.status)}`} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="text-[13.5px] font-medium text-charcoal">{node.agentName}</span>
+          {lead && <span className="label !text-[9px]">Lead</span>}
+          <span className="ml-auto shrink-0 font-mono text-[10.5px] text-pebble">{STATUS_LABEL[node.status] ?? node.status}</span>
+        </span>
+        <span className="mt-0.5 block truncate text-[12.5px] text-bark-grey">{node.title}</span>
+        {depNames.length > 0 && <span className="mt-0.5 block font-mono text-[10.5px] text-pebble">waits on {depNames.join(", ")}</span>}
+      </span>
+    </button>
+  );
 }
 
 export function Orchestrator() {
-  const { started, running, task, threads, selected, runs, setSelected, start, openRun, newRun } = useOrch();
+  const { started, running, goalText, nodes, selected, log, recent, setSelected, start, openRun, newRun } = useOrch();
   const [input, setInput] = useState("");
 
   if (!started) {
     return (
       <div className="scroll-thin flex h-full min-w-0 flex-1 flex-col items-center overflow-y-auto px-8 py-10">
         <div className="w-full max-w-[560px] text-center">
-          <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-mist-lavender text-electric-indigo">
-            <Users className="size-5" />
-          </span>
-          <h2 className="mt-4 text-[20px] font-semibold tracking-[-0.01em] text-charcoal">Give the lead a big task</h2>
-          <p className="mt-1.5 text-[14px] text-bark-grey">The lead splits it into sub-agents that run in parallel in this project.</p>
+          <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-mist-lavender text-electric-indigo"><Users className="size-5" /></span>
+          <h2 className="mt-4 text-[20px] font-semibold tracking-[-0.01em] text-charcoal">Give the lead a goal</h2>
+          <p className="mt-1.5 text-[14px] text-bark-grey">The lead breaks it into tasks, delegates to specialists, and integrates the result.</p>
           <div className="mt-5 flex items-end gap-2 rounded-2xl border border-line-strong bg-paper-white p-2 text-left">
             <Textarea
               rows={1}
@@ -159,18 +145,15 @@ export function Orchestrator() {
           </div>
         </div>
 
-        {/* recent runs — every run is kept and can be reopened to watch its progress */}
-        {runs.length > 0 && (
+        {recent.length > 0 && (
           <div className="mt-10 w-full max-w-[560px] text-left">
             <p className="label mb-3 flex items-center gap-1.5"><History className="size-3.5" /> Recent runs</p>
             <div className="space-y-2">
-              {runs.map((r) => (
+              {recent.map((r) => (
                 <button key={r.id} onClick={() => openRun(r.id)} className="flex w-full items-center gap-3 rounded-xl border border-line bg-paper-white px-3.5 py-3 text-left transition-colors hover:border-line-strong">
                   <span className={`size-[7px] shrink-0 rounded-full ${statusDot(r.status)}`} />
                   <span className="min-w-0 flex-1 truncate text-[13.5px] text-charcoal">{r.title}</span>
-                  <span className="shrink-0 font-mono text-[11px] text-pebble">
-                    {r.status === "running" ? "running" : ago(r.updatedAt)}
-                  </span>
+                  <span className="shrink-0 font-mono text-[11px] text-pebble">{r.status === "in_progress" ? "running" : ago(r.updatedAt)}</span>
                 </button>
               ))}
             </div>
@@ -180,59 +163,60 @@ export function Orchestrator() {
     );
   }
 
-  const lead = threads.find((t) => t.id === "lead");
-  const subs = threads.filter((t) => t.id !== "lead");
-  const sel = threads.find((t) => t.id === selected) ?? lead!;
-  const selPP = sel.id === "lead" ? LEAD_PP : agentPP(subs.findIndex((t) => t.id === sel.id) + 1);
+  const root = nodes.find((n) => n.parentId === null);
+  const children = nodes.filter((n) => n.parentId && n.parentId === root?.id);
+  const sel = nodes.find((n) => n.id === selected) ?? root;
+  const ppFor = (n: IssueNode) => (n.role === "lead" ? LEAD_PP : agentPP(children.findIndex((c) => c.id === n.id) + 1));
+  const depNamesFor = (n: IssueNode) => n.blockedBy.map((bid) => nodes.find((x) => x.id === bid)?.agentName).filter(Boolean) as string[];
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col">
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line px-6">
-        <h1 className="truncate text-[15px] font-medium text-charcoal">{task}</h1>
+        <h1 className="truncate text-[15px] font-medium text-charcoal">{goalText}</h1>
         <div className="flex shrink-0 items-center gap-3">
           <span className="flex items-center gap-1.5 font-mono text-[12px] text-bark-grey">
             {running && <Loader2 className="size-3.5 animate-spin text-electric-indigo" />}
             <span className={`size-[6px] rounded-full ${running ? "bg-electric-indigo nx-pulse" : "bg-lichen-green"}`} />
-            {running ? `${subs.length ? subs.length + " agents" : "planning"}` : "done"}
+            {running ? `${children.length ? children.length + " tasks" : "planning"}` : "done"}
           </span>
-          <Button variant="outline" size="sm" className="gap-1.5 rounded-lg" onClick={newRun}>
-            <Plus className="size-3.5" /> New run
-          </Button>
+          <Button variant="outline" size="sm" className="gap-1.5 rounded-lg" onClick={newRun}><Plus className="size-3.5" /> New run</Button>
         </div>
       </header>
 
       <div className="flex min-h-0 flex-1">
-        {/* left rail — the delegation tree (who's doing what) */}
+        {/* delegation tree */}
         <aside className="scroll-thin flex w-[336px] shrink-0 flex-col overflow-y-auto border-r border-line bg-warm-bone px-3 py-4">
           <p className="label mb-2.5 flex items-center gap-1.5 px-1">
-            <GitBranch className="size-3.5" /> {subs.length ? `Delegated · ${subs.length} specialist${subs.length > 1 ? "s" : ""}` : "Workstream"}
+            <GitBranch className="size-3.5" /> {children.length ? `Delegated · ${children.length} task${children.length > 1 ? "s" : ""}` : "Workstream"}
           </p>
           <div className="space-y-2">
-            {lead && <Row t={lead} lead pp={LEAD_PP} selected={selected === "lead"} onSelect={() => setSelected("lead")} />}
-            {subs.length > 0 && (
+            {root && <Row node={root} pp={LEAD_PP} lead selected={selected === root.id} onSelect={() => setSelected(root.id)} depNames={[]} />}
+            {children.length > 0 && (
               <div className="ml-3 space-y-2 border-l border-line pl-3">
-                {subs.map((t, i) => (
-                  <Row key={t.id} t={t} pp={agentPP(i + 1)} selected={selected === t.id} onSelect={() => setSelected(t.id)} />
+                {children.map((n) => (
+                  <Row key={n.id} node={n} pp={ppFor(n)} selected={selected === n.id} onSelect={() => setSelected(n.id)} depNames={depNamesFor(n)} />
                 ))}
               </div>
             )}
           </div>
         </aside>
 
-        {/* main — the selected agent's transcript, wide & readable */}
+        {/* selected issue transcript */}
         <div className="flex min-w-0 flex-1 flex-col">
-          <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line px-6">
-            <img src={selPP} alt={sel.name} className="size-6 rounded-lg object-cover" />
-            <span className="text-[13.5px] font-medium text-charcoal">{sel.name}</span>
-            {sel.id === "lead" && <span className="label !text-[9px]">Lead</span>}
-            <span className="flex items-center gap-1.5 text-[12px] text-bark-grey">
-              <span className={`size-[6px] rounded-full ${dotClass(sel.status)}`} /> {sel.status}
-            </span>
-            <span className="ml-auto truncate font-mono text-[11px] text-pebble">{sel.scope}</span>
-          </div>
+          {sel && (
+            <div className="flex h-12 shrink-0 items-center gap-2.5 border-b border-line px-6">
+              <img src={ppFor(sel)} alt={sel.agentName} className="size-6 rounded-lg object-cover" />
+              <span className="text-[13.5px] font-medium text-charcoal">{sel.agentName}</span>
+              {sel.role === "lead" && <span className="label !text-[9px]">Lead</span>}
+              <span className="flex items-center gap-1.5 text-[12px] text-bark-grey">
+                <span className={`size-[6px] rounded-full ${statusDot(sel.status)}`} /> {STATUS_LABEL[sel.status] ?? sel.status}
+              </span>
+              <span className="ml-auto truncate font-mono text-[11px] text-pebble">{sel.ref} · {sel.title}</span>
+            </div>
+          )}
           <div className="scroll-thin flex-1 overflow-y-auto">
             <div className="mx-auto max-w-[760px] px-8 py-7">
-              <Transcript log={sel.log} />
+              <Transcript log={log} waiting={sel?.status === "blocked" ? "Waiting on its dependencies…" : sel?.status === "todo" ? "Queued — will start when ready…" : "Waiting for this agent to start…"} />
             </div>
           </div>
         </div>

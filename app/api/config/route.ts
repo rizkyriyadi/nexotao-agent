@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getConfig, saveConfig, publicView, type Config } from "@/lib/config";
 import { addProject, getActiveProject } from "@/lib/store";
+import { seedAgents } from "@/lib/issues";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,7 @@ export async function POST(req: Request) {
   if (body.project) {
     const p = await addProject(body.project);
     patch.activeProjectId = p.id;
+    await seedAgents(p.id, p.agents ?? []); // create the lead + specialist workers
   }
   const c = await saveConfig(patch);
   return NextResponse.json({ ...publicView(c), project: await getActiveProject() });

@@ -44,19 +44,22 @@ async function toolLoop(opts: {
   root: string;
   thread: string;
   approvalOn: boolean;
+  toolDefs?: any[];
   extraTools?: any[];
   onSpawn?: (input: any) => Promise<{ output: string }>;
+  handlers?: Record<string, (input: any) => Promise<{ output: string }>>;
   onProgress?: (text: string) => void;
+  maxIters?: number;
 }): Promise<string> {
-  const { run, client, model, system, convo, root, thread, approvalOn, extraTools = [], onSpawn, onProgress } = opts;
+  const { run, client, model, system, convo, root, thread, approvalOn, toolDefs = TOOL_DEFS as any, extraTools = [], onSpawn, handlers = {}, onProgress, maxIters = 24 } = opts;
   let full = "";
 
-  for (let iter = 0; iter < 24; iter++) {
+  for (let iter = 0; iter < maxIters; iter++) {
     const stream = client.messages.stream({
       model,
       max_tokens: 8192,
       system,
-      tools: [...(TOOL_DEFS as any), ...extraTools],
+      tools: [...toolDefs, ...extraTools],
       messages: convo as any,
     });
     stream.on("text", (t: string) => { full += t; run.push({ type: "text", text: t, thread }); onProgress?.(full); });
@@ -74,6 +77,9 @@ async function toolLoop(opts: {
       let out: { ok: boolean; output: string; [k: string]: any };
       if (tu.name === "spawn_agents" && onSpawn) {
         const r = await onSpawn(tu.input);
+        out = { ok: true, output: r.output };
+      } else if (handlers[tu.name]) {
+        const r = await handlers[tu.name](tu.input);
         out = { ok: true, output: r.output };
       } else {
         let decision: "allow" | "deny" = "allow";
@@ -236,4 +242,88 @@ Before spawning: briefly state your plan — the sub-agents you'll create and wh
     finishTask(leadTask, false, String(e?.message ?? e));
     run.push({ type: "error", error: String(e?.message ?? e) });
   }
+}
+
+/* ── Paperclip-style control-plane heartbeat ───────────────────────────────
+ * One agent executing one issue. The executor calls this; the lead's plan
+ * phase delegates via `delegate` (creating child issues), workers execute,
+ * and the lead's integrate phase verifies + summarizes. */
+
+const READ_TOOL_NAMES = ["list_dir", "read_file", "grep", "web_search", "web_fetch"];
+const READ_TOOLS = (TOOL_DEFS as unknown as any[]).filter((t) => READ_TOOL_NAMES.includes(t.name));
+
+const DELEGATE_TOOL = {
+  name: "delegate",
+  description:
+    "Split the goal into concrete sub-tasks for your specialist workers, who run in parallel. Call this exactly once with all sub-tasks.",
+  input_schema: {
+    type: "object",
+    properties: {
+      tasks: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            assignee: { type: "string", description: "Worker name to assign, e.g. Backend" },
+            title: { type: "string", description: "Short task title" },
+            detail: { type: "string", description: "Precisely what this worker should build" },
+            dependsOn: { type: "array", items: { type: "string" }, description: "Worker names this task must wait for" },
+          },
+          required: ["assignee", "title"],
+        },
+      },
+    },
+    required: ["tasks"],
+  },
+} as const;
+
+export type IssueAgentMode = "lead-plan" | "lead-integrate" | "worker";
+
+export async function runIssueAgent(opts: {
+  run: Run;
+  apiKey: string;
+  model: string;
+  root: string;
+  mode: IssueAgentMode;
+  agentName: string;
+  agentScope: string;
+  goal: string;
+  detail: string;
+  workers?: { name: string; scope: string }[];
+  childrenReport?: string;
+  onDelegate?: (tasks: any[]) => Promise<{ output: string }>;
+}): Promise<{ text: string; delegated: boolean }> {
+  const client = nexotao(opts.apiKey);
+  const thread = opts.mode === "worker" ? opts.agentName : "lead";
+  const hasDetail = opts.detail && opts.detail !== opts.goal;
+  let delegated = false;
+  const handlers: Record<string, (i: any) => Promise<{ output: string }>> = {};
+  let system: string;
+  let toolDefs: any[] = TOOL_DEFS as any;
+  let extraTools: any[] = [];
+  let convo: Msg[];
+
+  if (opts.mode === "lead-plan") {
+    const team = (opts.workers ?? []).map((w) => `- ${w.name}: ${w.scope}`).join("\n");
+    system = `You are the LEAD agent for the project at ${opts.root}. Your job is to PLAN and DELEGATE — you do NOT write code yourself. Explore the project with the read-only tools if useful, then call the delegate tool exactly ONCE to split the goal into concrete sub-tasks for your specialist workers. Assign each sub-task to the best-matching worker by name, give it a clear title + detailed instructions, and set dependsOn (worker names) when one must wait for another (e.g. Tests dependsOn Backend and Frontend). Prefer 2-5 sub-tasks. After delegating, write a short one-paragraph plan.\n\nYour workers:\n${team || "- (no specialists configured; assign everything to a single worker named after the area)"}`;
+    toolDefs = READ_TOOLS;
+    extraTools = [DELEGATE_TOOL];
+    handlers["delegate"] = async (input) => {
+      delegated = true;
+      return opts.onDelegate ? opts.onDelegate(input.tasks ?? []) : { output: "delegated" };
+    };
+    convo = [{ role: "user", content: `Goal: ${opts.goal}${hasDetail ? `\n\n${opts.detail}` : ""}\n\nPlan the work and delegate it to your workers.` }];
+  } else if (opts.mode === "lead-integrate") {
+    system = `You are the LEAD agent for the project at ${opts.root}. Your specialist workers have finished their sub-tasks. Review their results, integrate the work, and VERIFY it (you may run a type-check or tests via bash). Fix small integration gaps if needed. Then give a concise final summary of what was built.`;
+    convo = [{ role: "user", content: `Original goal: ${opts.goal}\n\nYour team's results:\n${opts.childrenReport ?? "(none)"}\n\nIntegrate, verify, and summarize.` }];
+  } else {
+    system = `${baseSystem(opts.root)} You are the "${opts.agentName}" specialist on a team. Your scope: ${opts.agentScope}. Do ONLY your assigned task, editing just the files relevant to it. End with a short summary of what you changed.`;
+    convo = [{ role: "user", content: `Your task: ${opts.goal}${hasDetail ? `\n\n${opts.detail}` : ""}` }];
+  }
+
+  const text = await toolLoop({
+    run: opts.run, client, model: opts.model, system, convo, root: opts.root, thread,
+    approvalOn: false, toolDefs, extraTools, handlers,
+  });
+  return { text: text || "(done)", delegated };
 }
