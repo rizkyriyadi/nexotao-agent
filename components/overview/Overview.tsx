@@ -3,12 +3,12 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Sparkles, Search, Zap, CalendarDays, Plus, Plug, ArrowRight, MessageSquare, Bot, Users } from "lucide-react";
+import { agentPP } from "@/lib/avatars";
 
 type Project = { id: string; name: string; path: string; mode: "single" | "multi"; agents: { name: string; scope: string }[] } | null;
 type Session = { id: string; title: string; updatedAt: number; count: number };
 type Task = { id: string; col: string };
 
-const AV = ["bg-electric-indigo/12 text-electric-indigo", "bg-lichen-green/12 text-lichen-green", "bg-sapphire-link/12 text-sapphire-link", "bg-alarm-red/12 text-alarm-red"];
 
 function ago(ts: number) {
   const s = Math.floor((Date.now() - ts) / 1000);
@@ -148,7 +148,7 @@ export function Overview() {
               <ul className="space-y-3.5">
                 {agents.map((a, i) => (
                   <li key={i} className="flex items-center gap-3">
-                    <span className={`flex size-9 items-center justify-center rounded-full text-[13px] font-semibold ${AV[i % AV.length]}`}>{a.name.slice(0, 2)}</span>
+                    <img src={agentPP(i)} alt={a.name} className="size-9 rounded-full object-cover" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13.5px] font-medium text-charcoal">{a.name}</p>
                       <p className="truncate text-[11.5px] text-pebble">{a.scope}</p>

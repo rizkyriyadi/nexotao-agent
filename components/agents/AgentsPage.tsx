@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Bot, Users, Clock, CheckCircle2, XCircle, Network, ChevronRight } from "lucide-react";
+import { agentPP } from "@/lib/avatars";
 
 type Agent = { name: string; scope: string };
 type Hist = { id: string; agent: string; task: string; summary: string; ok: boolean; ts: number };
@@ -14,13 +15,6 @@ function ago(ts: number) {
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   return `${Math.floor(s / 86400)}d ago`;
 }
-
-const AV = [
-  "bg-electric-indigo/12 text-electric-indigo",
-  "bg-lichen-green/12 text-lichen-green",
-  "bg-sapphire-link/12 text-sapphire-link",
-  "bg-alarm-red/12 text-alarm-red",
-];
 
 export function AgentsPage() {
   const [team, setTeam] = useState<Agent[]>([]);
@@ -78,7 +72,7 @@ export function AgentsPage() {
                     onClick={() => setSelected(a.name)}
                     className={`flex w-full items-center gap-3 rounded-2xl border px-3.5 py-3 text-left transition-colors ${on ? "border-electric-indigo bg-electric-indigo/[0.04]" : "border-line hover:border-line-strong"}`}
                   >
-                    <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl text-[12px] font-semibold uppercase ${AV[i % AV.length]}`}>{a.name.slice(0, 2)}</span>
+                    <img src={agentPP(i)} alt={a.name} className="size-9 shrink-0 rounded-xl object-cover" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate text-[14px] font-medium text-charcoal">{a.name}</span>
                       <span className="block truncate text-[12.5px] text-bark-grey">{a.scope}</span>
@@ -105,7 +99,7 @@ export function AgentsPage() {
         <header className="flex h-14 shrink-0 items-center gap-2.5 border-b border-line px-6">
           {selected ? (
             <>
-              <span className="flex size-7 items-center justify-center rounded-lg bg-mist-lavender text-[11px] font-semibold uppercase text-electric-indigo">{selected.slice(0, 2)}</span>
+              <img src={agentPP(agents.findIndex((a) => a.name === selected))} alt={selected} className="size-7 rounded-lg object-cover" />
               <span className="text-[14px] font-medium text-charcoal">{selected}</span>
               <span className="flex items-center gap-1.5 text-[12px] text-bark-grey"><Clock className="size-3.5" /> task history</span>
             </>

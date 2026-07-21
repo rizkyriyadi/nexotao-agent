@@ -7,6 +7,7 @@ import {
   KeyRound, FolderOpen, Sparkles, Check, ArrowRight, ArrowLeft, Folder, Lock,
   Bot, Users, Loader2, RotateCw, X, Cpu, ChevronUp,
 } from "lucide-react";
+import { agentPP } from "@/lib/avatars";
 import { Wordmark } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -360,9 +361,7 @@ export function OnboardingFlow() {
                     <div className="space-y-1.5">
                       {agents.map((a, i) => (
                         <div key={i} className="flex items-center gap-2.5 rounded-xl border border-line px-3.5 py-2.5">
-                          <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-mist-lavender text-[10px] font-semibold uppercase text-electric-indigo">
-                            {a.name.slice(0, 2)}
-                          </span>
+                          <img src={agentPP(i)} alt={a.name} className="size-7 shrink-0 rounded-lg object-cover" />
                           <span className="min-w-0 flex-1">
                             <span className="block text-[13.5px] font-medium text-charcoal">{a.name}</span>
                             <span className="block truncate text-[12px] text-bark-grey">{a.scope}</span>

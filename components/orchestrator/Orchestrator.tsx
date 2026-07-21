@@ -1,8 +1,9 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Crown, Users, ArrowUp, Bot, X, Clock, History, Plus, Loader2 } from "lucide-react";
+import { Crown, Users, ArrowUp, X, Clock, History, Plus, Loader2 } from "lucide-react";
 import { useOrch, type Thread, type LogItem } from "./orchestrator-context";
+import { agentPP, LEAD_PP } from "@/lib/avatars";
 import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
 
@@ -21,7 +22,7 @@ function dotClass(status: Thread["status"]) {
   return status === "running" ? "bg-electric-indigo nx-pulse" : status === "error" ? "bg-alarm-red" : status === "done" ? "bg-lichen-green" : "bg-pebble";
 }
 
-function Row({ t, selected, onSelect, lead }: { t: Thread; selected: boolean; onSelect: () => void; lead?: boolean }) {
+function Row({ t, selected, onSelect, lead, pp }: { t: Thread; selected: boolean; onSelect: () => void; lead?: boolean; pp: string }) {
   const tools = t.log.filter((l) => l.kind === "tool").length;
   return (
     <button
@@ -30,8 +31,9 @@ function Row({ t, selected, onSelect, lead }: { t: Thread; selected: boolean; on
         selected ? "border-electric-indigo bg-electric-indigo/[0.04]" : "border-line hover:border-line-strong"
       }`}
     >
-      <span className="relative flex size-8 shrink-0 items-center justify-center rounded-xl bg-mist-lavender">
-        {lead ? <Crown className="size-4 text-electric-indigo" /> : <span className="text-[11px] font-semibold uppercase text-electric-indigo">{t.name.slice(0, 2)}</span>}
+      <span className="relative block size-8 shrink-0">
+        <img src={pp} alt={t.name} className="size-8 rounded-xl object-cover" />
+        {lead && <Crown className="absolute -left-1 -top-1 size-3.5 rounded-full bg-warm-bone p-[1px] text-electric-indigo" />}
         <span className={`absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full border-2 border-warm-bone ${dotClass(t.status)}`} />
       </span>
       <span className="min-w-0 flex-1">
@@ -69,8 +71,6 @@ function LogView({ log }: { log: LogItem[] }) {
   );
 }
 
-const AV = ["bg-electric-indigo/12 text-electric-indigo", "bg-lichen-green/12 text-lichen-green", "bg-sapphire-link/12 text-sapphire-link", "bg-alarm-red/12 text-alarm-red"];
-
 function ago(ts: number) {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60) return "just now"; if (s < 3600) return `${Math.floor(s / 60)}m ago`;
@@ -106,7 +106,7 @@ export function Orchestrator() {
       <div className="scroll-thin h-full w-[440px] overflow-y-auto border-l border-line-strong bg-paper-white" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-line px-5 py-3.5">
           <div className="flex items-center gap-2.5">
-            <span className="flex size-8 items-center justify-center rounded-xl bg-mist-lavender text-[11px] font-semibold uppercase text-electric-indigo">{historyAgent.slice(0, 2)}</span>
+            <img src={agentPP(team.findIndex((a) => a.name === historyAgent))} alt={historyAgent} className="size-8 rounded-xl object-cover" />
             <span className="text-[14px] font-medium text-charcoal">{historyAgent}</span>
           </div>
           <button onClick={() => setHistoryAgent(null)} className="text-pebble hover:text-charcoal"><X className="size-4" /></button>
@@ -151,7 +151,7 @@ export function Orchestrator() {
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {team.map((a, i) => (
                   <button key={i} onClick={() => openHistory(a.name)} className="flex items-center gap-3 rounded-2xl border border-line bg-paper-white p-3.5 text-left transition-colors hover:border-line-strong">
-                    <span className={`flex size-9 shrink-0 items-center justify-center rounded-xl text-[12px] font-semibold uppercase ${AV[i % AV.length]}`}>{a.name.slice(0, 2)}</span>
+                    <img src={agentPP(i)} alt={a.name} className="size-9 shrink-0 rounded-xl object-cover" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-[13.5px] font-medium text-charcoal">{a.name}</p>
                       <p className="truncate text-[12px] text-bark-grey">{a.scope}</p>
@@ -163,7 +163,7 @@ export function Orchestrator() {
             </div>
           ) : mode === "single" ? (
             <div className="mb-8 flex items-center gap-3 rounded-2xl border border-line bg-paper-white p-4">
-              <span className="flex size-9 items-center justify-center rounded-xl bg-electric-indigo/12 text-electric-indigo"><Bot className="size-4" /></span>
+              <img src={LEAD_PP} alt="Agent" className="size-9 rounded-xl object-cover" />
               <div>
                 <p className="text-[13.5px] font-medium text-charcoal">Single agent</p>
                 <p className="text-[12px] text-bark-grey">This project uses one agent. Big tasks are still handled — the lead just works solo.</p>
@@ -221,6 +221,7 @@ export function Orchestrator() {
   const lead = threads.find((t) => t.id === "lead");
   const subs = threads.filter((t) => t.id !== "lead");
   const sel = threads.find((t) => t.id === selected) ?? lead!;
+  const selPP = sel.id === "lead" ? LEAD_PP : agentPP(subs.findIndex((t) => t.id === sel.id) + 1);
 
   return (
     <div className="flex h-full min-w-0 flex-1">
@@ -242,11 +243,11 @@ export function Orchestrator() {
           <div className="mx-auto max-w-[720px] px-8 py-7">
             <p className="label mb-3">Workstreams</p>
             <div className="space-y-2">
-              {lead && <Row t={lead} lead selected={selected === "lead"} onSelect={() => setSelected("lead")} />}
+              {lead && <Row t={lead} lead pp={LEAD_PP} selected={selected === "lead"} onSelect={() => setSelected("lead")} />}
               {subs.length > 0 && (
                 <div className="ml-4 space-y-2 border-l border-line pl-4">
-                  {subs.map((t) => (
-                    <Row key={t.id} t={t} selected={selected === t.id} onSelect={() => setSelected(t.id)} />
+                  {subs.map((t, i) => (
+                    <Row key={t.id} t={t} pp={agentPP(i + 1)} selected={selected === t.id} onSelect={() => setSelected(t.id)} />
                   ))}
                 </div>
               )}
@@ -257,6 +258,7 @@ export function Orchestrator() {
 
       <aside className="flex h-full w-[420px] shrink-0 flex-col border-l border-line bg-warm-bone">
         <div className="flex h-14 shrink-0 items-center gap-2.5 border-b border-line px-5">
+          <img src={selPP} alt={sel.name} className="size-6 rounded-lg object-cover" />
           <span className="font-mono text-[13px] font-medium text-charcoal">{sel.name}</span>
           <span className="flex items-center gap-1.5 text-[12px] text-bark-grey">
             <span className={`size-[6px] rounded-full ${dotClass(sel.status)}`} /> {sel.status}
