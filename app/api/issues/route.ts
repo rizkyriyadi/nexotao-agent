@@ -2,7 +2,8 @@ import { NextResponse } from "next/server";
 import { getActiveProject } from "@/lib/store";
 import { getConfig } from "@/lib/config";
 import { listIssues, listAgents, updateIssue, seedAgents, type IssueStatus } from "@/lib/issues";
-import { submitGoal, tick } from "@/lib/executor";
+import { submitGoal, tick, triggerHeartbeat } from "@/lib/executor";
+import { IssueDomainError } from "@/lib/issue-lifecycle";
 
 export const runtime = "nodejs";
 export const maxDuration = 800;
@@ -17,6 +18,12 @@ export async function GET() {
   return NextResponse.json({ issues, agents, projectId: project.id });
 }
 
+function domainErrorResponse(error: unknown) {
+  if (!(error instanceof IssueDomainError)) throw error;
+  const status = error.code === "not_found" ? 404 : error.code === "forbidden" ? 403 : 409;
+  return NextResponse.json({ error: error.message, code: error.code }, { status });
+}
+
 /** Submit a goal — creates the root issue for the lead and starts the run. */
 export async function POST(req: Request) {
   const body = await req.json().catch(() => null) as { goal?: unknown } | null;
@@ -27,15 +34,25 @@ export async function POST(req: Request) {
   const project = await getActiveProject();
   if (!project) return NextResponse.json({ error: "No active project." }, { status: 400 });
   await seedAgents(project.id, project.agents ?? []);
-  const root = await submitGoal(project.id, goal);
-  return NextResponse.json({ root });
+  try {
+    const root = await submitGoal(project.id, goal, req.headers.get("idempotency-key") ?? undefined);
+    return NextResponse.json({ root });
+  } catch (error) {
+    return domainErrorResponse(error);
+  }
 }
 
 /** Manual issue edits (e.g. moving a card on the board). */
 export async function PATCH(req: Request) {
   const { id, status } = (await req.json()) as { id: string; status?: IssueStatus };
   const project = await getActiveProject();
-  const issue = await updateIssue(id, status ? { status } : {});
-  if (project) tick(project.id);
-  return NextResponse.json({ issue });
+  try {
+    const issue = await updateIssue(id, status ? { status } : {}, { type: "user" });
+    if (issue?.assigneeAgentId && status === "todo") {
+      await triggerHeartbeat({ agentId: issue.assigneeAgentId, issueId: issue.id, reason: "invoke", eventId: `manual:${issue.updatedAt}` });
+    } else if (project) await tick(project.id);
+    return NextResponse.json({ issue });
+  } catch (error) {
+    return domainErrorResponse(error);
+  }
 }

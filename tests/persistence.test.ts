@@ -17,8 +17,8 @@ test("control-plane records survive a database restart", async () => {
     await database.write((db) => db.insert(projects).values({ id: "project-1", name: "Example", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
     let repositories = new ControlPlaneRepositories(database);
     await repositories.agents.insert({ id: "agent-1", projectId: "project-1", name: "Lead", role: "lead", scope: "Lead", createdAt: 2, updatedAt: 2 });
-    await repositories.issues.insert({ id: "issue-1", projectId: "project-1", identifier: "NX-1", title: "Persist", status: "todo", createdAt: 3, updatedAt: 3 });
-    const checkouts = await Promise.all([repositories.checkoutIssue("issue-1", "run-1"), repositories.checkoutIssue("issue-1", "run-2")]);
+    await repositories.issues.insert({ id: "issue-1", projectId: "project-1", identifier: "NX-1", title: "Persist", status: "todo", assigneeAgentId: "agent-1", createdAt: 3, updatedAt: 3 });
+    const checkouts = await Promise.all([repositories.checkoutIssue("issue-1", "agent-1", "run-1"), repositories.checkoutIssue("issue-1", "agent-1", "run-2")]);
     assert.equal(checkouts.filter(Boolean).length, 1);
     await repositories.addComment({ issueId: "issue-1", authorType: "user", body: "keep me" });
     await repositories.putDocument({ issueId: "issue-1", key: "plan", body: "revision one", createdByType: "agent" });
@@ -43,7 +43,7 @@ test("control-plane records survive a database restart", async () => {
     assert.equal(repositories.listWakeups().length, 1);
     assert.equal(repositories.listRunEvents("run-1").length, 1);
     assert.equal(repositories.listApprovals("issue-1").length, 1);
-    assert.equal(repositories.listActivity("issue", "issue-1").length, 1);
+    assert.deepEqual(repositories.listActivity("issue", "issue-1").map((row) => row.action), ["issue.checked_out", "completed"]);
     await database.close();
   } finally { await rm(dir, { recursive: true, force: true }); }
 });

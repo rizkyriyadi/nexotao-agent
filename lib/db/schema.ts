@@ -47,14 +47,23 @@ export const issues = sqliteTable("issues", {
 export const issueDependencies = sqliteTable("issue_dependencies", {
   issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), blockerIssueId: text("blocker_issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }), createdAt: integer("created_at").notNull(),
 }, (t) => [primaryKey({ columns: [t.issueId, t.blockerIssueId] }), index("issue_dependencies_blocker_idx").on(t.blockerIssueId)]);
+export const issueMutationRequests = sqliteTable("issue_mutation_requests", {
+  id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
+  operation: text("operation", { enum: ["create", "delegate"] }).notNull(), idempotencyKey: text("idempotency_key").notNull(),
+  fingerprint: text("fingerprint").notNull(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
+  createdAt: integer("created_at").notNull(),
+}, (t) => [uniqueIndex("issue_mutation_requests_key_uq").on(t.projectId, t.operation, t.idempotencyKey)]);
 export const heartbeatRuns = sqliteTable("heartbeat_runs", {
   id: text("id").primaryKey(), agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }), issueId: text("issue_id").references(() => issues.id, { onDelete: "set null" }),
+  wakeupId: text("wakeup_id"),
   source: text("source").notNull(), status: text("status").notNull(), sessionBefore: text("session_before"), sessionAfter: text("session_after"),
-  usage: text("usage", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}), error: text("error"), startedAt: integer("started_at").notNull(), finishedAt: integer("finished_at"),
-}, (t) => [index("heartbeat_runs_agent_started_idx").on(t.agentId, t.startedAt), index("heartbeat_runs_issue_idx").on(t.issueId)]);
+  usage: text("usage", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}), error: text("error"),
+  queuedAt: integer("queued_at"), startedAt: integer("started_at").notNull(), updatedAt: integer("updated_at"), finishedAt: integer("finished_at"),
+}, (t) => [uniqueIndex("heartbeat_runs_wakeup_uq").on(t.wakeupId), index("heartbeat_runs_agent_started_idx").on(t.agentId, t.startedAt), index("heartbeat_runs_issue_idx").on(t.issueId)]);
 export const wakeupRequests = sqliteTable("wakeup_requests", {
   id: text("id").primaryKey(), agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }), issueId: text("issue_id").references(() => issues.id, { onDelete: "cascade" }),
-  reason: text("reason").notNull(), idempotencyKey: text("idempotency_key").notNull(), status: text("status").notNull(), availableAt: integer("available_at").notNull(), createdAt: integer("created_at").notNull(),
+  reason: text("reason").notNull(), idempotencyKey: text("idempotency_key").notNull(), status: text("status").notNull(), availableAt: integer("available_at").notNull(),
+  runId: text("run_id"), attempt: integer("attempt").notNull().default(0), claimedAt: integer("claimed_at"), finishedAt: integer("finished_at"), lastError: text("last_error"), createdAt: integer("created_at").notNull(),
 }, (t) => [uniqueIndex("wakeup_agent_idempotency_uq").on(t.agentId, t.idempotencyKey), index("wakeup_status_available_idx").on(t.status, t.availableAt)]);
 export const runEvents = sqliteTable("run_events", {
   runId: text("run_id").notNull(), seq: integer("seq").notNull(), type: text("type").notNull(), redactedPayload: text("redacted_payload", { mode: "json" }).$type<unknown>().notNull(), createdAt: integer("created_at").notNull(),
@@ -78,4 +87,4 @@ export const costEvents = sqliteTable("cost_events", {
 export const activityLog = sqliteTable("activity_log", {
   id: text("id").primaryKey(), actorType: text("actor_type").notNull(), actorId: text("actor_id"), action: text("action").notNull(), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(), summary: text("summary", { mode: "json" }).$type<unknown>().notNull(), runId: text("run_id"), createdAt: integer("created_at").notNull(),
 }, (t) => [index("activity_entity_created_idx").on(t.entityType, t.entityId, t.createdAt), index("activity_created_idx").on(t.createdAt)]);
-export const schema = { projects, sessions, tasks, agentRuns, runRecords, agents, issues, issueDependencies, heartbeatRuns, wakeupRequests, runEvents, issueComments, documents, issueDocuments, documentRevisions, approvals, costEvents, activityLog };
+export const schema = { projects, sessions, tasks, agentRuns, runRecords, agents, issues, issueDependencies, issueMutationRequests, heartbeatRuns, wakeupRequests, runEvents, issueComments, documents, issueDocuments, documentRevisions, approvals, costEvents, activityLog };

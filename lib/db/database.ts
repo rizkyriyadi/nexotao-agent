@@ -52,6 +52,35 @@ CREATE INDEX IF NOT EXISTS activity_entity_created_idx ON activity_log(entity_ty
 CREATE INDEX IF NOT EXISTS activity_created_idx ON activity_log(created_at);
 CREATE TABLE IF NOT EXISTS legacy_json_migrations (id TEXT PRIMARY KEY, backup_path TEXT NOT NULL, source_count INTEGER NOT NULL, completed_at INTEGER NOT NULL);
 `,
+}, {
+  version: 2,
+  name: "issue-lifecycle-idempotency",
+  sql: `
+CREATE TABLE IF NOT EXISTS issue_mutation_requests (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  operation TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL,
+  fingerprint TEXT NOT NULL,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  created_at INTEGER NOT NULL,
+  UNIQUE(project_id, operation, idempotency_key)
+);
+`,
+}, {
+  version: 3,
+  name: "durable-heartbeat-runtime",
+  sql: `
+ALTER TABLE heartbeat_runs ADD COLUMN wakeup_id TEXT;
+ALTER TABLE heartbeat_runs ADD COLUMN queued_at INTEGER;
+ALTER TABLE heartbeat_runs ADD COLUMN updated_at INTEGER;
+CREATE UNIQUE INDEX IF NOT EXISTS heartbeat_runs_wakeup_uq ON heartbeat_runs(wakeup_id);
+ALTER TABLE wakeup_requests ADD COLUMN run_id TEXT;
+ALTER TABLE wakeup_requests ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE wakeup_requests ADD COLUMN claimed_at INTEGER;
+ALTER TABLE wakeup_requests ADD COLUMN finished_at INTEGER;
+ALTER TABLE wakeup_requests ADD COLUMN last_error TEXT;
+`,
 }];
 
 export class AppDatabase {

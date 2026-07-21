@@ -5,11 +5,18 @@ import {
   activityLog, agents, approvals, costEvents, documentRevisions, documents, heartbeatRuns,
   issueComments, issueDependencies, issueDocuments, issues, runEvents, wakeupRequests,
 } from "./schema";
+import { IssueDomainError, IssueLifecycleService } from "../issue-lifecycle";
 
 export type NewAgent = typeof agents.$inferInsert;
 export type AgentRow = typeof agents.$inferSelect;
 export type NewIssue = typeof issues.$inferInsert;
 export type IssueRow = typeof issues.$inferSelect;
+export type WakeupReason = "assignment" | "invoke" | "mention" | "approval" | "dependency" | "retry";
+export type HeartbeatStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
+export type ClaimedHeartbeat = {
+  wakeup: typeof wakeupRequests.$inferSelect;
+  heartbeat: typeof heartbeatRuns.$inferSelect;
+};
 
 export interface AgentRepository {
   list(projectId: string): AgentRow[];
@@ -47,20 +54,13 @@ export class ControlPlaneRepositories {
   addDependency(issueId: string, blockerIssueId: string) {
     return this.database.write((db) => db.insert(issueDependencies).values({ issueId, blockerIssueId, createdAt: Date.now() }).onConflictDoNothing().run());
   }
-  checkoutIssue(issueId: string, runId: string) {
-    return this.database.write((db) => {
-      const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
-      if (!issue || issue.checkoutRunId || ["in_progress", "done", "cancelled"].includes(issue.status)) return null;
-      const dependencies = db.select().from(issueDependencies).where(eq(issueDependencies.issueId, issueId)).all();
-      const blockers = dependencies.length
-        ? db.select().from(issues).where(inArray(issues.id, dependencies.map((row) => row.blockerIssueId))).all()
-        : [];
-      if (blockers.some((row) => row.status !== "done")) return null;
-      const now = Date.now();
-      db.update(issues).set({ status: "in_progress", checkoutRunId: runId, executionLockedAt: now, startedAt: issue.startedAt ?? now, updatedAt: now })
-        .where(eq(issues.id, issueId)).run();
-      return db.select().from(issues).where(eq(issues.id, issueId)).get() ?? null;
-    });
+  async checkoutIssue(issueId: string, agentId: string, runId: string) {
+    try {
+      return await new IssueLifecycleService(this.database).checkout(issueId, agentId, runId);
+    } catch (error) {
+      if (error instanceof IssueDomainError && ["conflict", "forbidden", "not_found"].includes(error.code)) return null;
+      throw error;
+    }
   }
   addComment(input: { issueId: string; authorType: string; authorId?: string | null; runId?: string | null; body: string }) {
     const row = { id: randomUUID(), createdAt: Date.now(), authorId: null, runId: null, ...input };
@@ -75,6 +75,107 @@ export class ControlPlaneRepositories {
   }
   listHeartbeats(agentId: string) {
     return this.database.read((db) => db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, agentId)).orderBy(desc(heartbeatRuns.startedAt)).all());
+  }
+  getHeartbeat(id: string) {
+    return this.database.read((db) => db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, id)).get() ?? null);
+  }
+  enqueueHeartbeat(input: {
+    agentId: string; issueId?: string | null; reason: WakeupReason; idempotencyKey: string; availableAt?: number;
+  }) {
+    const now = Date.now();
+    return this.database.write((db) => {
+      const existing = db.select().from(wakeupRequests).where(and(eq(wakeupRequests.agentId, input.agentId), eq(wakeupRequests.idempotencyKey, input.idempotencyKey))).get();
+      if (existing) {
+        const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupId, existing.id)).get();
+        return { wakeup: existing, heartbeat: heartbeat! };
+      }
+      if (input.issueId) {
+        const active = db.select().from(wakeupRequests).where(and(
+          eq(wakeupRequests.agentId, input.agentId), eq(wakeupRequests.issueId, input.issueId),
+          inArray(wakeupRequests.status, ["queued", "running"]),
+        )).get();
+        if (active) return { wakeup: active, heartbeat: db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupId, active.id)).get()! };
+      }
+      const wakeup = {
+        id: randomUUID(), agentId: input.agentId, issueId: input.issueId ?? null, reason: input.reason,
+        idempotencyKey: input.idempotencyKey, status: "queued", availableAt: input.availableAt ?? now,
+        runId: null, attempt: 0, claimedAt: null, finishedAt: null, lastError: null, createdAt: now,
+      };
+      const heartbeat = {
+        id: randomUUID(), agentId: input.agentId, issueId: input.issueId ?? null, wakeupId: wakeup.id,
+        source: input.reason, status: "queued", sessionBefore: null, sessionAfter: null, usage: {}, error: null,
+        queuedAt: now, startedAt: now, updatedAt: now, finishedAt: null,
+      };
+      db.insert(wakeupRequests).values(wakeup).run();
+      db.insert(heartbeatRuns).values(heartbeat).run();
+      return { wakeup, heartbeat };
+    });
+  }
+  claimNextHeartbeat(now = Date.now()): Promise<ClaimedHeartbeat | null> {
+    return this.database.write((db) => {
+      const candidates = db.select().from(wakeupRequests).where(eq(wakeupRequests.status, "queued"))
+        .orderBy(asc(wakeupRequests.availableAt), asc(wakeupRequests.createdAt)).all().filter((row) => row.availableAt <= now);
+      for (const candidate of candidates) {
+        const agent = db.select().from(agents).where(eq(agents.id, candidate.agentId)).get();
+        if (!agent || agent.status === "paused") continue;
+        const configured = Number((agent.runtimeConfig as Record<string, unknown> | null)?.concurrency ?? 1);
+        const concurrency = Number.isFinite(configured) ? Math.max(1, Math.floor(configured)) : 1;
+        const active = db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.agentId, candidate.agentId), inArray(heartbeatRuns.status, ["running", "waiting"]))).all().length;
+        if (active >= concurrency) continue;
+        const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupId, candidate.id)).get();
+        if (!heartbeat) continue;
+        const runId = heartbeat.id;
+        db.update(wakeupRequests).set({ status: "running", runId, claimedAt: now, attempt: candidate.attempt + 1, lastError: null }).where(eq(wakeupRequests.id, candidate.id)).run();
+        db.update(heartbeatRuns).set({ status: "running", startedAt: now, updatedAt: now, finishedAt: null, error: null }).where(eq(heartbeatRuns.id, heartbeat.id)).run();
+        return {
+          wakeup: db.select().from(wakeupRequests).where(eq(wakeupRequests.id, candidate.id)).get()!,
+          heartbeat: db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, heartbeat.id)).get()!,
+        };
+      }
+      return null;
+    });
+  }
+  transitionHeartbeat(runId: string, status: Exclude<HeartbeatStatus, "queued">, patch: {
+    sessionBefore?: string | null; sessionAfter?: string | null; usage?: Record<string, unknown>; error?: string | null;
+  } = {}) {
+    return this.database.write((db) => {
+      const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get();
+      if (!heartbeat) return null;
+      const now = Date.now();
+      const terminal = ["succeeded", "failed", "cancelled"].includes(status);
+      db.update(heartbeatRuns).set({ ...patch, status, updatedAt: now, finishedAt: terminal ? now : null }).where(eq(heartbeatRuns.id, runId)).run();
+      if (heartbeat.wakeupId) db.update(wakeupRequests).set({ status: terminal ? status : "running", finishedAt: terminal ? now : null, lastError: patch.error ?? null }).where(eq(wakeupRequests.id, heartbeat.wakeupId)).run();
+      return db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get() ?? null;
+    });
+  }
+  requeueHeartbeat(runId: string, availableAt: number, error?: string) {
+    return this.database.write((db) => {
+      const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get();
+      if (!heartbeat?.wakeupId) return false;
+      const now = Date.now();
+      db.update(heartbeatRuns).set({ status: "queued", error: error ?? null, updatedAt: now, finishedAt: null }).where(eq(heartbeatRuns.id, runId)).run();
+      db.update(wakeupRequests).set({ status: "queued", availableAt, runId: null, claimedAt: null, finishedAt: null, lastError: error ?? null }).where(eq(wakeupRequests.id, heartbeat.wakeupId)).run();
+      return true;
+    });
+  }
+  recoverOrphanedHeartbeats() {
+    return this.database.write((db) => {
+      const orphaned = db.select().from(wakeupRequests).where(eq(wakeupRequests.status, "running")).all();
+      const now = Date.now();
+      for (const wakeup of orphaned) {
+        db.update(wakeupRequests).set({ status: "queued", runId: null, claimedAt: null, finishedAt: null, lastError: "Recovered after runtime restart" }).where(eq(wakeupRequests.id, wakeup.id)).run();
+        db.update(heartbeatRuns).set({ status: "queued", error: "Recovered after runtime restart", updatedAt: now, finishedAt: null }).where(eq(heartbeatRuns.wakeupId, wakeup.id)).run();
+      }
+      return orphaned.length;
+    });
+  }
+  appendHeartbeatEvent(runId: string, type: string, redactedPayload: unknown) {
+    return this.database.write((db) => {
+      const last = db.select().from(runEvents).where(eq(runEvents.runId, runId)).orderBy(desc(runEvents.seq)).get();
+      const row = { runId, seq: (last?.seq ?? 0) + 1, type, redactedPayload, createdAt: Date.now() };
+      db.insert(runEvents).values(row).run();
+      return row;
+    });
   }
   enqueueWakeup(input: Omit<typeof wakeupRequests.$inferInsert, "id" | "createdAt">) {
     const row = { id: randomUUID(), createdAt: Date.now(), ...input };

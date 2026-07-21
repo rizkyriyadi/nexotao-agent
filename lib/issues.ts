@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { asc, eq, inArray } from "drizzle-orm";
 import { getDatabase } from "./db/database";
 import { agents, issueDependencies, issues } from "./db/schema";
+import { IssueDomainError, IssueLifecycleService, type IssueActor } from "./issue-lifecycle";
 import type { AgentSpec } from "./store";
 
 export type AgentRole = "lead" | "worker";
@@ -67,47 +68,63 @@ export async function childrenOf(parentId: string) {
   const database = await getDatabase();
   return hydrate(database.read((db) => db.select().from(issues).where(eq(issues.parentId, parentId)).orderBy(asc(issues.createdAt)).all()));
 }
-export async function createIssue(input: { projectId: string; title: string; detail?: string; parentId?: string | null; assigneeAgentId?: string | null; createdByAgentId?: string | null; status?: IssueStatus; stage?: IssueStage; blockedBy?: string[] }): Promise<Issue> {
+export async function createIssue(input: {
+  projectId: string; title: string; detail?: string; parentId?: string | null; assigneeAgentId?: string | null;
+  createdByAgentId?: string | null; status?: IssueStatus; stage?: IssueStage; blockedBy?: string[];
+  idempotencyKey?: string; actor?: IssueActor;
+}): Promise<Issue> {
   const database = await getDatabase();
-  return database.write((db) => {
-    const now = Date.now();
-    const count = db.select({ id: issues.id }).from(issues).where(eq(issues.projectId, input.projectId)).all().length;
-    const issue: Issue = { id: randomUUID(), projectId: input.projectId, ref: `NX-${count + 1}`, title: input.title.trim() || "Untitled", detail: input.detail ?? "", parentId: input.parentId ?? null, assigneeAgentId: input.assigneeAgentId ?? null, createdByAgentId: input.createdByAgentId ?? null, status: input.status ?? "todo", stage: input.stage ?? "execute", blockedBy: input.blockedBy ?? [], runId: null, summary: "", createdAt: now, updatedAt: now };
-    db.insert(issues).values({ id: issue.id, projectId: issue.projectId, identifier: issue.ref, parentId: issue.parentId, title: issue.title, description: issue.detail, status: issue.status, stage: issue.stage, assigneeAgentId: issue.assigneeAgentId, createdByAgentId: issue.createdByAgentId, summary: issue.summary, createdAt: now, updatedAt: now }).run();
-    for (const blockerIssueId of issue.blockedBy) db.insert(issueDependencies).values({ issueId: issue.id, blockerIssueId, createdAt: now }).run();
-    return issue;
+  const row = await new IssueLifecycleService(database).create({
+    projectId: input.projectId, title: input.title, description: input.detail, parentId: input.parentId,
+    assigneeAgentId: input.assigneeAgentId, createdByAgentId: input.createdByAgentId, status: input.status,
+    stage: input.stage, blockerIds: input.blockedBy, idempotencyKey: input.idempotencyKey, actor: input.actor,
   });
+  return (await hydrate([row]))[0];
 }
-export async function updateIssue(id: string, patch: Partial<Omit<Issue, "id" | "projectId" | "ref" | "createdAt">>): Promise<Issue | null> {
+export async function updateIssue(
+  id: string,
+  patch: Partial<Omit<Issue, "id" | "projectId" | "ref" | "createdAt">>,
+  actor: IssueActor = { type: "system" },
+): Promise<Issue | null> {
   const database = await getDatabase();
+  const lifecycle = new IssueLifecycleService(database);
+  const before = await getIssue(id);
+  if (!before) return null;
+  if (patch.runId !== undefined) throw new IssueDomainError("conflict", "Checkout locks must be changed through checkout or release");
   await database.write((db) => {
-    const current = db.select().from(issues).where(eq(issues.id, id)).get();
-    if (!current) return;
     db.update(issues).set({
       ...(patch.title !== undefined ? { title: patch.title } : {}), ...(patch.detail !== undefined ? { description: patch.detail } : {}),
-      ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}), ...(patch.assigneeAgentId !== undefined ? { assigneeAgentId: patch.assigneeAgentId } : {}),
-      ...(patch.createdByAgentId !== undefined ? { createdByAgentId: patch.createdByAgentId } : {}), ...(patch.status !== undefined ? { status: patch.status } : {}),
-      ...(patch.stage !== undefined ? { stage: patch.stage } : {}), ...(patch.runId !== undefined ? { checkoutRunId: patch.runId, executionLockedAt: patch.runId ? Date.now() : null } : {}),
+      ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
+      ...(patch.createdByAgentId !== undefined ? { createdByAgentId: patch.createdByAgentId } : {}),
+      ...(patch.stage !== undefined ? { stage: patch.stage } : {}),
       ...(patch.summary !== undefined ? { summary: patch.summary } : {}), updatedAt: Date.now(),
     }).where(eq(issues.id, id)).run();
-    if (patch.blockedBy) {
-      db.delete(issueDependencies).where(eq(issueDependencies.issueId, id)).run();
-      for (const blockerIssueId of patch.blockedBy) db.insert(issueDependencies).values({ issueId: id, blockerIssueId, createdAt: Date.now() }).run();
-    }
   });
+  if (patch.assigneeAgentId !== undefined) await lifecycle.assign(id, patch.assigneeAgentId, actor);
+  if (patch.blockedBy !== undefined) await lifecycle.setDependencies(id, patch.blockedBy, actor);
+  if (patch.status !== undefined && patch.status !== before.status) {
+    if (patch.status === "in_progress") throw new IssueDomainError("invalid_transition", "Issues enter in_progress only through checkout");
+    await lifecycle.transition(id, patch.status, actor);
+  }
   return getIssue(id);
 }
-export async function claimIssue(id: string, runId: string): Promise<Issue | null> {
+export async function claimIssue(id: string, agentId: string, runId: string): Promise<Issue | null> {
   const database = await getDatabase();
-  const claimed = await database.write((db) => {
-    const row = db.select().from(issues).where(eq(issues.id, id)).get();
-    if (!row || row.checkoutRunId || ["in_progress", "done", "cancelled"].includes(row.status)) return false;
-    const deps = db.select().from(issueDependencies).where(eq(issueDependencies.issueId, id)).all();
-    const blockers = deps.length ? db.select().from(issues).where(inArray(issues.id, deps.map((dep) => dep.blockerIssueId))).all() : [];
-    if (blockers.some((blocker) => blocker.status !== "done")) return false;
-    const now = Date.now();
-    db.update(issues).set({ status: "in_progress", checkoutRunId: runId, executionLockedAt: now, startedAt: row.startedAt ?? now, updatedAt: now }).where(eq(issues.id, id)).run();
-    return true;
-  });
-  return claimed ? getIssue(id) : null;
+  try {
+    await new IssueLifecycleService(database).checkout(id, agentId, runId);
+    return getIssue(id);
+  } catch (error) {
+    if (error instanceof IssueDomainError && ["conflict", "forbidden", "not_found"].includes(error.code)) return null;
+    throw error;
+  }
+}
+export async function releaseIssue(issueId: string, agentId: string, runId: string, reason?: string) {
+  const database = await getDatabase();
+  const row = await new IssueLifecycleService(database).release({ issueId, agentId, runId, reason });
+  return (await hydrate([row]))[0];
+}
+export async function recoverStaleIssues(staleAfterMs: number, activeRunIds: Iterable<string> = []) {
+  const database = await getDatabase();
+  const rows = await new IssueLifecycleService(database).recover({ staleAfterMs, activeRunIds });
+  return hydrate(rows);
 }

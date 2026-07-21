@@ -2,17 +2,26 @@
 // the whole delegation lifecycle: the lead plans + delegates (creating child
 // issues), the executor wakes each assignee whose dependencies are met and runs
 // it in parallel, and when all children finish it wakes the lead to integrate.
-import { randomUUID } from "crypto";
 import { promises as fs } from "fs";
 import { getConfig } from "./config";
 import { getProject, addAgentRun } from "./store";
 import { expandHome } from "./paths";
 import { DEFAULT_MODEL } from "./nexotao";
-import { createRun, getRun } from "./run-manager";
+import { createRun } from "./run-manager";
 import { runIssueAgent } from "./agent";
 import * as I from "./issues";
+import { getDatabase } from "./db/database";
+import { ControlPlaneRepositories, type ClaimedHeartbeat, type WakeupReason } from "./db/repositories";
+import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runtime";
 
-const running = new Set<string>(); // issue ids currently executing (dedupe)
+let runtimePromise: Promise<DurableHeartbeatRuntime> | undefined;
+async function heartbeatRuntime() {
+  runtimePromise ??= getDatabase().then((database) => {
+    const repositories = new ControlPlaneRepositories(database);
+    return new DurableHeartbeatRuntime(repositories, startIssue);
+  });
+  return runtimePromise;
+}
 
 async function ctx(projectId: string) {
   const cfg = await getConfig();
@@ -23,7 +32,7 @@ async function ctx(projectId: string) {
 }
 
 /** Create the root issue for a goal and start the run. */
-export async function submitGoal(projectId: string, text: string): Promise<I.Issue> {
+export async function submitGoal(projectId: string, text: string, idempotencyKey?: string): Promise<I.Issue> {
   let lead = await I.leadAgent(projectId);
   if (!lead) {
     const project = await getProject(projectId);
@@ -33,7 +42,7 @@ export async function submitGoal(projectId: string, text: string): Promise<I.Iss
   const root = await I.createIssue({
     projectId, title: text, detail: text,
     assigneeAgentId: lead?.id ?? null, createdByAgentId: null,
-    status: lead ? "todo" : "backlog", stage: "plan",
+    status: lead ? "todo" : "backlog", stage: "plan", idempotencyKey,
   });
   tick(projectId);
   return root;
@@ -43,41 +52,55 @@ export async function submitGoal(projectId: string, text: string): Promise<I.Iss
 export async function tick(projectId: string) {
   const issues = await I.listIssues(projectId);
   const byId = new Map(issues.map((i) => [i.id, i]));
+  const runtime = await heartbeatRuntime();
   for (const it of issues) {
     if (!it.assigneeAgentId) continue;
-    // recover an issue orphaned by a server restart (its live run is gone) → re-queue
-    if (it.status === "in_progress" && !running.has(it.id) && (!it.runId || !getRun(it.runId))) {
-      await I.updateIssue(it.id, { status: "todo", runId: null }).catch(() => {});
-    }
     if (it.status !== "todo" && it.status !== "blocked") continue;
-    if (running.has(it.id)) continue;
     const unmet = it.blockedBy.filter((bid) => byId.get(bid)?.status !== "done");
     if (unmet.length) {
       if (it.status !== "blocked") I.updateIssue(it.id, { status: "blocked" }).catch(() => {});
       continue;
     }
-    if (it.status === "blocked") await I.updateIssue(it.id, { status: "todo" }).catch(() => {});
-    startIssue(projectId, it.id); // fire and forget
+    const ready = it.status === "blocked" ? await I.updateIssue(it.id, { status: "todo" }) : it;
+    if (!ready) continue;
+    await runtime.enqueue({
+      agentId: ready.assigneeAgentId!, issueId: ready.id,
+      reason: it.status === "blocked" ? "dependency" : "assignment",
+      eventId: `${ready.stage}:${ready.updatedAt}`,
+    });
   }
 }
 
-async function startIssue(projectId: string, issueId: string) {
-  if (running.has(issueId)) return;
-  running.add(issueId);
-  try {
-    const runId = randomUUID();
-    const issue = await I.claimIssue(issueId, runId); // atomic in_progress + lock
+export async function triggerHeartbeat(input: { agentId: string; issueId?: string | null; reason: WakeupReason; eventId: string; availableAt?: number }) {
+  return (await heartbeatRuntime()).enqueue(input);
+}
+
+export async function cancelHeartbeat(runId: string, reason?: string) {
+  return (await heartbeatRuntime()).cancel(runId, reason);
+}
+
+async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
+    const issueId = job.wakeup.issueId;
+    if (!issueId) throw new Error("Heartbeat has no issue to execute");
+    const candidate = await I.getIssue(issueId);
+    if (!candidate?.assigneeAgentId) throw new Error(`Issue ${issueId} has no assignee`);
+    const projectId = candidate.projectId;
+    const runId = heartbeat.runId;
+    const issue = await I.claimIssue(issueId, job.wakeup.agentId, runId); // atomic in_progress + lock
     if (!issue) return;
     const agent = issue.assigneeAgentId ? await I.getAgent(issue.assigneeAgentId) : null;
-    if (!agent) { await I.updateIssue(issueId, { status: "todo" }); return; }
+    if (!agent) { await I.releaseIssue(issueId, job.wakeup.agentId, runId, "assignee_missing"); return; }
 
     const { apiKey, model, root } = await ctx(projectId);
     const run = createRun(runId, undefined, { kind: "orchestrator", title: issue.title, projectId });
+    const cancel = () => run.cancel(heartbeat.signal.reason instanceof Error ? heartbeat.signal.reason.message : "Cancelled by runtime");
+    heartbeat.signal.addEventListener("abort", cancel, { once: true });
     run.push({ type: "run", runId });
     run.push({ type: "status", status: "running" });
 
     const isLead = agent.role === "lead";
     const mode = isLead ? (issue.stage === "integrate" ? "lead-integrate" : "lead-plan") : "worker";
+    if (heartbeat.signal.aborted) cancel();
 
     // context the lead needs
     const workers = (await I.listAgents(projectId)).filter((a) => a.role === "worker").map((a) => ({ name: a.name, scope: a.scope }));
@@ -90,11 +113,13 @@ async function startIssue(projectId: string, issueId: string) {
     const onDelegate = async (tasks: any[]) => {
       const created: { assignee: string; title: string; id: string }[] = [];
       const nameToId: Record<string, string> = {};
-      for (const t of tasks) {
+      for (let i = 0; i < tasks.length; i++) {
+        const t = tasks[i];
         const worker = (await I.findAgentByName(projectId, String(t.assignee || ""))) ?? agent;
         const child = await I.createIssue({
           projectId, title: String(t.title || t.assignee || "Task"), detail: String(t.detail || t.title || ""),
           parentId: issue.id, assigneeAgentId: worker.id, createdByAgentId: agent.id, status: "todo", stage: "execute",
+          idempotencyKey: `delegate:${runId}:${i}`, actor: { type: "agent", id: agent.id, runId },
         });
         const key = String(t.assignee || t.title).toLowerCase();
         nameToId[key] = child.id;
@@ -120,14 +145,13 @@ async function startIssue(projectId: string, issueId: string) {
     } catch (e: any) {
       run.push({ type: "error", error: String(e?.message ?? e) });
       result = { text: `Failed: ${String(e?.message ?? e)}`, delegated: false };
-      if (run.cancelled) await I.updateIssue(issueId, { status: "cancelled", summary: "Cancelled by user" });
+      if (run.cancelled) await I.updateIssue(issueId, { status: "cancelled", summary: "Cancelled by user" }, { type: "agent", id: agent.id, runId });
       else await onIssueFinished(projectId, issue, agent, mode, result, false);
-      return;
+      throw e;
+    } finally {
+      heartbeat.signal.removeEventListener("abort", cancel);
     }
     await onIssueFinished(projectId, issue, agent, mode, result, true);
-  } finally {
-    running.delete(issueId);
-  }
 }
 
 async function onIssueFinished(
@@ -142,12 +166,12 @@ async function onIssueFinished(
     const kids = await I.childrenOf(issue.id);
     if (ok && result.delegated && kids.length) {
       // lead handed work to workers → wait in review, integrate later
-      await I.updateIssue(issue.id, { status: "in_review", stage: "integrate", summary: result.text });
+      await I.updateIssue(issue.id, { status: "in_review", stage: "integrate", summary: result.text }, { type: "agent", id: agent.id, runId: issue.runId });
     } else {
-      await I.updateIssue(issue.id, { status: ok ? "done" : "in_review", summary: result.text });
+      await I.updateIssue(issue.id, { status: ok ? "done" : "in_review", summary: result.text }, { type: "agent", id: agent.id, runId: issue.runId });
     }
   } else if (mode === "worker") {
-    await I.updateIssue(issue.id, { status: ok ? "done" : "in_review", summary: result.text });
+    await I.updateIssue(issue.id, { status: ok ? "done" : "in_review", summary: result.text }, { type: "agent", id: agent.id, runId: issue.runId });
     addAgentRun(projectId, { agent: agent.name, task: issue.title, summary: result.text.slice(0, 400), ok }).catch(() => {});
     // if all of the parent's children are terminal, wake the lead to integrate
     if (issue.parentId) {
@@ -160,7 +184,7 @@ async function onIssueFinished(
     }
   } else {
     // lead-integrate
-    await I.updateIssue(issue.id, { status: ok ? "done" : "in_review", summary: result.text });
+    await I.updateIssue(issue.id, { status: ok ? "done" : "in_review", summary: result.text }, { type: "agent", id: agent.id, runId: issue.runId });
   }
   tick(projectId);
 }
