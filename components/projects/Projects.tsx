@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Lock, Plus, MessageSquare, Columns3, FolderOpen, Check } from "lucide-react";
+import { Lock, Plus, Columns3, FolderOpen, Check } from "lucide-react";
 
 type Project = { id: string; name: string; path: string; sessions: number; tasks: number };
 
@@ -20,7 +20,7 @@ export function Projects() {
 
   async function open(id: string) {
     await fetch("/api/projects", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
-    router.push("/chat");
+    router.push("/board");
   }
 
   return (
@@ -59,8 +59,7 @@ export function Projects() {
                   </div>
                 </div>
                 <div className="mt-4 flex items-center gap-4 text-[13px] text-bark-grey">
-                  <span className="flex items-center gap-1.5"><MessageSquare className="size-4 text-pebble" /> {p.sessions}</span>
-                  <span className="flex items-center gap-1.5"><Columns3 className="size-4 text-pebble" /> {p.tasks}</span>
+                  <span className="flex items-center gap-1.5"><Columns3 className="size-4 text-pebble" /> {p.tasks} tasks</span>
                 </div>
                 <div className="mt-4 flex items-center gap-2 border-t border-line pt-4">
                   <span className="flex items-center gap-1 rounded-full bg-lichen-green/10 px-2.5 py-1 font-mono text-[10px] text-lichen-green"><Lock className="size-3" /> isolated</span>

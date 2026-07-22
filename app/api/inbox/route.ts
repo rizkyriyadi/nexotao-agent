@@ -39,11 +39,11 @@ export async function GET() {
         ...relevantRuns.filter((run) => run.status === "failed" || (run.updatedAt ?? run.startedAt) < now - 10 * 60_000).map((run) => ({
           id: run.id, status: run.status === "failed" ? "failed" : "stale", error: run.error,
           issueId: run.issueId, startedAt: run.startedAt,
-          href: run.issueId ? `/orchestrator?goal=${run.issueId}` : "/orchestrator",
+          href: run.issueId ? `/board/${run.issueId}` : "/board",
         })),
         ...legacyRuns.filter((run) => run.status === "error" || (run.status === "running" && run.updatedAt < now - 10 * 60_000)).map((run) => ({
           id: run.id, status: run.status === "error" ? "failed" : "stale", error: null, issueId: null, startedAt: run.createdAt,
-          href: run.kind === "chat" ? "/chat" : "/orchestrator",
+          href: "/board",
         })),
       ],
       budgets: projectAgents.filter((agent) => agent.budgetLimit !== null && agent.budgetLimit > 0 && agent.spentAmount >= agent.budgetLimit * 0.8).map((agent) => ({
