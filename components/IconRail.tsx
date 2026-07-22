@@ -48,6 +48,7 @@ export function IconRail({ active }: { active: string }) {
               <TooltipTrigger asChild>
                 <Link
                   href={n.href}
+                  aria-label={n.label}
                   className={`flex size-10 items-center justify-center rounded-2xl transition-colors ${
                     on ? "bg-electric-indigo text-white shadow-sm" : "text-pebble hover:bg-black/[0.04] hover:text-charcoal"
                   }`}
@@ -66,6 +67,7 @@ export function IconRail({ active }: { active: string }) {
           <TooltipTrigger asChild>
             <Link
               href="/settings"
+              aria-label="Settings"
               className={`flex size-10 items-center justify-center rounded-2xl transition-colors ${
                 active === "settings" ? "bg-black/[0.05] text-charcoal" : "text-pebble hover:bg-black/[0.04] hover:text-charcoal"
               }`}
@@ -79,6 +81,7 @@ export function IconRail({ active }: { active: string }) {
           <TooltipTrigger asChild>
             <button
               onClick={() => setHelp(true)}
+              aria-label="Help and shortcuts"
               className="flex size-10 items-center justify-center rounded-2xl text-pebble transition-colors hover:bg-black/[0.04] hover:text-charcoal"
             >
               <CircleHelp className="size-[18px]" strokeWidth={1.75} />

@@ -69,10 +69,10 @@ export default function Settings() {
 
           <Section title="Safety">
             <Row label="Ask before commands & edits" hint="The approval prompt is the safety model. Recommended.">
-              <Switch defaultChecked />
+              <Switch defaultChecked aria-label="Ask before commands and edits" />
             </Row>
             <Row label="Safe mode — Docker sandbox" hint="Run tools in a throwaway container. Slower; for untrusted repos.">
-              <Switch />
+              <Switch aria-label="Safe mode — Docker sandbox" />
             </Row>
             <Row label="Egress allow-list" hint="Domains the sandbox may reach. Deny-all by default.">
               <span className="font-mono text-[12px] text-bark-grey">npmjs.org, github.com</span>

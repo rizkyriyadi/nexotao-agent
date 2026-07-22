@@ -163,7 +163,7 @@ export function TaskBoard() {
           </div>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[210px] flex-1"><Search className="absolute left-2.5 top-2.5 size-4 text-pebble" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tasks…" className="pl-8" /></div>
+          <div className="relative min-w-[210px] flex-1"><Search className="absolute left-2.5 top-2.5 size-4 text-pebble" /><Input aria-label="Search tasks" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search tasks…" className="pl-8" /></div>
           <Select aria-label="Project filter" value={projectId} onChange={() => undefined}><option value={projectId}>Current project</option></Select>
           <Select aria-label="Status filter" value={status} onChange={(event) => setStatus(event.target.value)}><option value="all">All statuses</option>{STATUSES.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</Select>
           <Select aria-label="Assignee filter" value={assignee} onChange={(event) => setAssignee(event.target.value)}><option value="all">All assignees</option><option value="unassigned">Unassigned</option>{agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}</Select>

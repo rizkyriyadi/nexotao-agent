@@ -29,6 +29,7 @@ export function SearchKeyRow() {
     <div className="flex items-center gap-2">
       <input
         type="password"
+        aria-label="Tavily API key"
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && value.trim() && save()}

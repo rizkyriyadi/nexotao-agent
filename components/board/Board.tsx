@@ -113,7 +113,7 @@ export function Board() {
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
           <DialogHeader><DialogTitle>New goal</DialogTitle></DialogHeader>
-          <Input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} placeholder="e.g. Add a login page with JWT auth" />
+          <Input aria-label="Goal title" autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => e.key === "Enter" && create()} placeholder="e.g. Add a login page with JWT auth" />
           <DialogFooter className="mt-1">
             <Button variant="ghost" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
             <Button size="sm" onClick={create} className={title.trim() ? "" : "pointer-events-none opacity-50"}>Start run</Button>
