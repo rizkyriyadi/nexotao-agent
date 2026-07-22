@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { Crown, Users, ArrowUp, ArrowUpRight, History, Plus, Loader2, ChevronRight, GitBranch } from "lucide-react";
+import { Crown, Sparkles, ArrowUpRight, History, Plus, Loader2, ChevronRight, GitBranch } from "lucide-react";
 import { useOrch, type IssueNode, type LogItem } from "./orchestrator-context";
-import { Textarea } from "../ui/textarea";
+import { Composer, type RunMode } from "./Composer";
 import { Button } from "../ui/button";
 import { agentPP, LEAD_PP } from "@/lib/avatars";
 import { Markdown } from "../ui/markdown";
@@ -149,30 +149,32 @@ function Row({ node, pp, lead, selected, onSelect, depNames }: { node: IssueNode
 export function Orchestrator() {
   const { started, running, goalText, nodes, selected, log, recent, approval, approve, setSelected, start, openRun, newRun } = useOrch();
   const [input, setInput] = useState("");
+  const [mode, setMode] = useState<RunMode>("agent");
   const activeRuns = recent.filter((r) => r.active);
   const historyRuns = recent.filter((r) => !r.active);
 
   if (!started) {
     return (
       <div className="scroll-thin flex h-full min-w-0 flex-1 flex-col items-center overflow-y-auto px-8 py-10">
-        <div className="w-full max-w-[560px] text-center">
-          <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-mist-lavender text-electric-indigo"><Users className="size-5" /></span>
-          <h2 className="mt-4 text-[20px] font-semibold tracking-[-0.01em] text-charcoal">Give the lead a goal</h2>
-          <p className="mt-1.5 text-[14px] text-bark-grey">The lead breaks it into tasks, delegates to specialists, and integrates the result.</p>
-          <div className="mt-5 flex items-end gap-2 rounded-2xl border border-line-strong bg-paper-white p-2 text-left">
-            <Textarea
-              rows={1}
+        <div className="w-full max-w-[600px]">
+          <div className="text-center">
+            <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-mist-lavender text-electric-indigo"><Sparkles className="size-5" /></span>
+            <h2 className="mt-4 text-[20px] font-semibold tracking-[-0.01em] text-charcoal">What should the lead work on?</h2>
+            <p className="mt-1.5 text-[14px] text-bark-grey">Type a prompt and pick a mode — the lead takes it straight to work. Nothing to file, no columns to manage.</p>
+          </div>
+          <div className="mt-5">
+            <Composer
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); start(input); } }}
-              placeholder="e.g. Add a login page with JWT auth"
-              className="max-h-40 min-h-9 flex-1 resize-none border-0 bg-transparent px-2.5 py-2 text-[15px] shadow-none focus-visible:ring-0"
+              onChange={setInput}
+              mode={mode}
+              onModeChange={setMode}
+              onSubmit={(m) => { start(input, m); setInput(""); }}
+              autoFocus
             />
-            <Button size="icon" className="rounded-xl" disabled={!input.trim()} onClick={() => start(input)}><ArrowUp className="size-4" /></Button>
           </div>
           <div className="mt-4 flex flex-wrap justify-center gap-2">
             {SUGGESTIONS.map((s) => (
-              <button key={s} onClick={() => start(s)} className="rounded-full border border-line-strong px-3.5 py-1.5 text-[13px] text-bark-grey transition-colors hover:border-charcoal hover:text-charcoal">{s}</button>
+              <button key={s} onClick={() => start(s, mode)} className="rounded-full border border-line-strong px-3.5 py-1.5 text-[13px] text-bark-grey transition-colors hover:border-charcoal hover:text-charcoal">{s}</button>
             ))}
           </div>
         </div>

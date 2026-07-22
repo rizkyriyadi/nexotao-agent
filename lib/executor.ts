@@ -48,8 +48,10 @@ async function verificationCommands(root: string, configured: unknown) {
   throw new Error("No verification commands are configured for lead integration");
 }
 
-/** Create the root issue for a goal and start the run. */
-export async function submitGoal(projectId: string, text: string, idempotencyKey?: string): Promise<I.Issue> {
+/** Create the root issue for a goal and start the run. The run mode (chosen in
+ *  the control panel) decides how the lead handles it: `agent` builds directly,
+ *  `plan` writes a plan, `ask` just answers. */
+export async function submitGoal(projectId: string, text: string, mode: I.RunMode = "agent", idempotencyKey?: string): Promise<I.Issue> {
   let lead = await I.leadAgent(projectId);
   if (!lead) {
     const project = await getProject(projectId);
@@ -59,7 +61,7 @@ export async function submitGoal(projectId: string, text: string, idempotencyKey
   const root = await I.createIssue({
     projectId, title: text, detail: text,
     assigneeAgentId: lead?.id ?? null, createdByAgentId: null,
-    status: lead ? "todo" : "backlog", stage: "plan", idempotencyKey,
+    status: lead ? "todo" : "backlog", stage: "execute", runMode: mode, idempotencyKey,
   });
   tick(projectId);
   return root;
@@ -159,13 +161,23 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     run.push({ type: "run", runId });
     run.push({ type: "status", status: "running" });
 
+    // The control panel delegates the user's request straight to the lead, who
+    // handles it in the mode the user picked: `ask` answers read-only, `plan`
+    // writes a plan read-only, `agent` builds directly in an isolated workspace.
+    // Legacy delegated children still run as `worker`, and a lead whose plan was
+    // delegated still integrates via `lead-integrate`.
     const isLead = agent.role === "lead";
-    const mode = isLead ? (issue.stage === "integrate" ? "lead-integrate" : "lead-plan") : "worker";
+    const mode: import("./agent").IssueAgentMode = isLead
+      ? (issue.stage === "integrate"
+          ? "lead-integrate"
+          : issue.runMode === "ask" ? "lead-ask" : issue.runMode === "plan" ? "lead-plan-doc" : "lead-execute")
+      : "worker";
+    const writesFiles = mode === "worker" || mode === "lead-execute" || mode === "lead-integrate";
     if (heartbeat.signal.aborted) cancel();
 
     let executionRoot = root;
     let beforeMutation: ((tool: { name: string; input: unknown }) => Promise<void>) | undefined;
-    if (mode !== "lead-plan") {
+    if (writesFiles) {
       const assignment = await workspaceManager.provision({ projectId, issueId, identifier: issue.ref, runId, repositoryPath: root });
       executionRoot = assignment.workspacePath;
       beforeMutation = workspaceManager.mutationGuard(issueId, runId);
@@ -215,7 +227,7 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
         agentName: agent.name, agentScope: agent.scope,
         goal: issue.title, detail: issue.detail, workers, childrenReport, onDelegate, beforeMutation,
       });
-      if (mode === "worker") {
+      if (mode === "worker" || mode === "lead-execute") {
         const finalized = await workspaceManager.finalizeCommit(issueId, runId, issue.ref);
         result.text = `${result.text}\n\nCommit: ${finalized.commit}`;
       } else if (mode === "lead-integrate") {
@@ -223,6 +235,10 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
         const commands = await verificationCommands(executionRoot, rawAgent?.runtimeConfig?.verificationCommands);
         const verified = await workspaceManager.verifyAndPromote(issueId, runId, issue.ref, commands);
         result.text = `${result.text}\n\nVerified commit: ${verified.commit}\n${verified.logs.join("\n\n")}`;
+      } else if (mode === "lead-plan-doc") {
+        // Persist the plan as the issue's `plan` document so it's reviewable and
+        // the user can re-run in Agent mode to execute it.
+        await repositories.putDocument({ issueId, key: "plan", body: result.text, createdByType: "agent", createdById: agent.id }).catch(() => {});
       }
       await eventWrites;
       await heartbeat.emit("output", { text: result.text, thread: mode === "worker" ? agent.name : "lead" });

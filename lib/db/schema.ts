@@ -47,6 +47,7 @@ export const issues = sqliteTable("issues", {
   id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   identifier: text("identifier").notNull(), parentId: text("parent_id"), title: text("title").notNull(), description: text("description").notNull().default(""),
   status: text("status").notNull(), stage: text("stage").notNull().default("execute"), priority: text("priority").notNull().default("medium"),
+  runMode: text("run_mode").notNull().default("agent"),
   assigneeAgentId: text("assignee_agent_id").references(() => agents.id, { onDelete: "set null" }),
   createdByAgentId: text("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }), checkoutRunId: text("checkout_run_id"),
   executionLockedAt: integer("execution_locked_at"), summary: text("summary").notNull().default(""), startedAt: integer("started_at"),

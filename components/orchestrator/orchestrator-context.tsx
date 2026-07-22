@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
 import { summarizeRuns, type RunSummary } from "@/lib/runs";
+import type { RunMode } from "./Composer";
 
 export type LogItem =
   | { kind: "text"; text: string }
@@ -37,7 +38,7 @@ type Ctx = {
   approval: Approval;
   approve: (decision: "allow" | "deny") => void;
   setSelected: (id: string) => void;
-  start: (goal: string) => void;
+  start: (goal: string, mode?: RunMode) => void;
   openRun: (rootId: string) => void;
   newRun: () => void;
 };
@@ -213,15 +214,15 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
     setNodes([]);
     setLog([]);
     streamingRunId.current = null;
-    window.history.replaceState({}, "", `/orchestrator?goal=${rid}`);
+    window.history.replaceState({}, "", `/board?goal=${rid}`);
     startPolling();
   }, [startPolling]);
 
-  const start = useCallback(async (raw: string) => {
+  const start = useCallback(async (raw: string, mode: RunMode = "agent") => {
     const goal = raw.trim();
     if (!goal || running) return;
     try {
-      const r = await fetch("/api/issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal }) });
+      const r = await fetch("/api/issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal, mode }) });
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || "Request failed"); }
       const { root } = await r.json();
       enterRun(root.id, goal);
@@ -245,7 +246,7 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
     setNodes([]);
     setLog([]);
     setGoalText("");
-    window.history.replaceState({}, "", "/orchestrator");
+    window.history.replaceState({}, "", "/board");
     refreshRecent();
   }, [refreshRecent]);
 

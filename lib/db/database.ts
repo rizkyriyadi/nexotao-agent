@@ -147,6 +147,12 @@ ALTER TABLE approvals ADD COLUMN resumed_at INTEGER;
 CREATE INDEX IF NOT EXISTS approvals_project_status_idx ON approvals(project_id, status);
 CREATE UNIQUE INDEX IF NOT EXISTS approvals_run_tool_uq ON approvals(run_id, tool_call_id);
 `,
+}, {
+  version: 7,
+  name: "issue-run-mode",
+  sql: `
+ALTER TABLE issues ADD COLUMN run_mode TEXT NOT NULL DEFAULT 'agent';
+`,
 }];
 
 // Applies pending migrations, each in its own IMMEDIATE transaction so a failing

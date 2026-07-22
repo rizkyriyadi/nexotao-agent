@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   KeyRound, FolderOpen, Sparkles, Check, ArrowRight, ArrowLeft, Folder, Lock,
-  Bot, Users, Loader2, RotateCw, X, Cpu, ChevronUp,
+  Users, Loader2, RotateCw, X, Cpu, ChevronUp,
 } from "lucide-react";
 import { agentPP } from "@/lib/avatars";
 import { Wordmark } from "@/components/ui";
@@ -35,7 +35,8 @@ export function OnboardingFlow() {
   const [dirs, setDirs] = useState<{ name: string; path: string }[]>([]);
   const [browseLoading, setBrowseLoading] = useState(false);
 
-  const [mode, setMode] = useState<"single" | "multi" | null>(null);
+  // Default to a single lead agent (Hutao). Adding specialists is optional.
+  const [mode, setMode] = useState<"single" | "multi" | null>("single");
   const [agents, setAgents] = useState<Agent[]>([]);
   const [agentsLoading, setAgentsLoading] = useState(false);
   const [agentSource, setAgentSource] = useState<string>("");
@@ -318,18 +319,19 @@ export function OnboardingFlow() {
                 <h2 className="text-[15px] font-medium text-charcoal">How should <span className="font-mono">{projectName}</span> work?</h2>
               </div>
               <p className="mb-4 text-[13px] leading-relaxed text-bark-grey">
-                Pick a setup. You can change it per task later.
+                You start with one lead agent, <span className="font-medium text-charcoal">Hutao</span>. Adding specialists is optional — you can do it anytime.
               </p>
               <div className="grid grid-cols-2 gap-3">
-                <button onClick={() => { setMode("single"); setAgents([]); }} className={cn("rounded-2xl border p-4 text-left transition-colors", mode === "single" ? "border-electric-indigo bg-electric-indigo/[0.05]" : "border-line hover:border-line-strong")}>
-                  <Bot className="size-5 text-electric-indigo" />
-                  <p className="mt-2.5 text-[14px] font-medium text-charcoal">Single agent</p>
-                  <p className="mt-0.5 text-[12.5px] leading-snug text-bark-grey">One agent does everything. Simple & cheap.</p>
+                <button onClick={() => { setMode("single"); setAgents([]); }} className={cn("relative rounded-2xl border p-4 text-left transition-colors", mode === "single" ? "border-electric-indigo bg-electric-indigo/[0.05]" : "border-line hover:border-line-strong")}>
+                  <span className="absolute right-3 top-3 rounded-full bg-mist-lavender px-2 py-0.5 text-[10px] font-medium text-electric-indigo">Default</span>
+                  <img src={agentPP(0)} alt="Hutao" className="size-8 rounded-xl object-cover" />
+                  <p className="mt-2.5 text-[14px] font-medium text-charcoal">Just Hutao (lead)</p>
+                  <p className="mt-0.5 text-[12.5px] leading-snug text-bark-grey">One lead handles every request end-to-end. Simple &amp; cheap.</p>
                 </button>
                 <button onClick={loadAgents} className={cn("rounded-2xl border p-4 text-left transition-colors", mode === "multi" ? "border-electric-indigo bg-electric-indigo/[0.05]" : "border-line hover:border-line-strong")}>
                   <Users className="size-5 text-electric-indigo" />
-                  <p className="mt-2.5 text-[14px] font-medium text-charcoal">Multi-agent</p>
-                  <p className="mt-0.5 text-[12.5px] leading-snug text-bark-grey">A lead splits big tasks across specialists.</p>
+                  <p className="mt-2.5 text-[14px] font-medium text-charcoal">Add specialists</p>
+                  <p className="mt-0.5 text-[12.5px] leading-snug text-bark-grey">Hutao leads a team of specialists for bigger projects.</p>
                 </button>
               </div>
 

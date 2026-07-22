@@ -9,17 +9,18 @@ export type AgentRole = "lead" | "worker";
 export type Agent = { id: string; projectId: string; name: string; role: AgentRole; scope: string; reportsTo: string | null; createdAt: number };
 export type IssueStatus = "backlog" | "todo" | "in_progress" | "in_review" | "done" | "blocked" | "cancelled";
 export type IssueStage = "plan" | "execute" | "integrate";
+export type RunMode = "agent" | "plan" | "ask";
 export type Issue = {
   id: string; projectId: string; ref: string; title: string; detail: string; parentId: string | null;
   assigneeAgentId: string | null; createdByAgentId: string | null; status: IssueStatus; stage: IssueStage;
-  priority: string; blockedBy: string[]; runId: string | null; summary: string; createdAt: number; updatedAt: number;
+  priority: string; runMode: RunMode; blockedBy: string[]; runId: string | null; summary: string; createdAt: number; updatedAt: number;
 };
 
 const agentFromRow = (row: typeof agents.$inferSelect): Agent => ({ id: row.id, projectId: row.projectId, name: row.name, role: row.role, scope: row.scope, reportsTo: row.reportsTo, createdAt: row.createdAt });
 function issueFromRow(row: typeof issues.$inferSelect, blockedBy: string[]): Issue {
   return { id: row.id, projectId: row.projectId, ref: row.identifier, title: row.title, detail: row.description, parentId: row.parentId,
     assigneeAgentId: row.assigneeAgentId, createdByAgentId: row.createdByAgentId, status: row.status as IssueStatus,
-    stage: row.stage as IssueStage, priority: row.priority, blockedBy, runId: row.checkoutRunId, summary: row.summary, createdAt: row.createdAt, updatedAt: row.updatedAt };
+    stage: row.stage as IssueStage, priority: row.priority, runMode: (row.runMode as RunMode) ?? "agent", blockedBy, runId: row.checkoutRunId, summary: row.summary, createdAt: row.createdAt, updatedAt: row.updatedAt };
 }
 async function hydrate(rows: Array<typeof issues.$inferSelect>) {
   const database = await getDatabase();
@@ -48,7 +49,7 @@ export async function seedAgents(projectId: string, team: AgentSpec[]): Promise<
     const existing = db.select().from(agents).where(eq(agents.projectId, projectId)).orderBy(asc(agents.createdAt)).all();
     if (existing.length) return existing.map(agentFromRow);
     const now = Date.now();
-    const lead: Agent = { id: randomUUID(), projectId, name: "Lead", role: "lead", scope: "Plan, delegate & integrate", reportsTo: null, createdAt: now };
+    const lead: Agent = { id: randomUUID(), projectId, name: "Hutao", role: "lead", scope: "Handles your requests end-to-end — answers, plans, and builds", reportsTo: null, createdAt: now };
     const workers: Agent[] = (team ?? []).map((spec, index) => ({ id: randomUUID(), projectId, name: spec.name, role: "worker", scope: spec.scope, reportsTo: lead.id, createdAt: now + index + 1 }));
     for (const agent of [lead, ...workers]) db.insert(agents).values({ ...agent, updatedAt: agent.createdAt }).run();
     return [lead, ...workers];
@@ -71,14 +72,14 @@ export async function childrenOf(parentId: string) {
 export async function createIssue(input: {
   projectId: string; title: string; detail?: string; parentId?: string | null; assigneeAgentId?: string | null;
   createdByAgentId?: string | null; status?: IssueStatus; stage?: IssueStage; blockedBy?: string[];
-  priority?: string;
+  priority?: string; runMode?: RunMode;
   idempotencyKey?: string; actor?: IssueActor;
 }): Promise<Issue> {
   const database = await getDatabase();
   const row = await new IssueLifecycleService(database).create({
     projectId: input.projectId, title: input.title, description: input.detail, parentId: input.parentId,
     assigneeAgentId: input.assigneeAgentId, createdByAgentId: input.createdByAgentId, status: input.status,
-    stage: input.stage, priority: input.priority, blockerIds: input.blockedBy, idempotencyKey: input.idempotencyKey, actor: input.actor,
+    stage: input.stage, priority: input.priority, runMode: input.runMode, blockerIds: input.blockedBy, idempotencyKey: input.idempotencyKey, actor: input.actor,
   });
   return (await hydrate([row]))[0];
 }

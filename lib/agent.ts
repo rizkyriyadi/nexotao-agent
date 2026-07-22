@@ -277,7 +277,13 @@ const DELEGATE_TOOL = {
   },
 } as const;
 
-export type IssueAgentMode = "lead-plan" | "lead-integrate" | "worker";
+export type IssueAgentMode =
+  // Legacy delegation lifecycle: lead plans + delegates, workers execute, lead integrates.
+  | "lead-plan" | "lead-integrate" | "worker"
+  // Control-panel direct execution, chosen by the user's run mode.
+  | "lead-execute"  // Agent mode: the lead builds directly (full tools, auto-approve).
+  | "lead-plan-doc" // Plan mode: the lead investigates read-only and writes a plan.
+  | "lead-ask";     // Ask mode: the lead answers read-only, changing nothing.
 
 export async function runIssueAgent(opts: {
   run: Run;
@@ -303,6 +309,21 @@ export async function runIssueAgent(opts: {
   let toolDefs: any[] = TOOL_DEFS as any;
   let extraTools: any[] = [];
   let convo: Msg[];
+  // Direct control-panel modes reuse the shared execution policy: agent → auto
+  // approve (destructive still gated), plan/ask → deny every mutation.
+  let approvalPolicy: ExecutionPolicy = "ask";
+
+  if (opts.mode === "lead-execute" || opts.mode === "lead-plan-doc" || opts.mode === "lead-ask") {
+    const runMode: AgentMode = opts.mode === "lead-ask" ? "ask" : opts.mode === "lead-plan-doc" ? "plan" : "agent";
+    approvalPolicy = modeToPolicy(runMode);
+    system = `${baseSystem(opts.root)} You are ${opts.agentName}, the lead agent handling the user's request directly. Work on it end-to-end and finish with a short summary.${modeSystemDirective(runMode)}`;
+    convo = [{ role: "user", content: `${opts.goal}${hasDetail ? `\n\n${opts.detail}` : ""}` }];
+    const text = await toolLoop({
+      run: opts.run, client, model: opts.model, system, convo, root: opts.root, thread,
+      beforeMutation: opts.beforeMutation, approvalPolicy, toolDefs,
+    });
+    return { text: text || "(done)", delegated: false };
+  }
 
   if (opts.mode === "lead-plan") {
     const team = (opts.workers ?? []).map((w) => `- ${w.name}: ${w.scope}`).join("\n");
@@ -325,7 +346,7 @@ export async function runIssueAgent(opts: {
   const text = await toolLoop({
     run: opts.run, client, model: opts.model, system, convo, root: opts.root, thread,
     beforeMutation: opts.beforeMutation,
-    approvalPolicy: "ask", toolDefs, extraTools, handlers,
+    approvalPolicy, toolDefs, extraTools, handlers,
   });
   return { text: text || "(done)", delegated };
 }
