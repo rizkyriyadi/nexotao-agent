@@ -54,6 +54,24 @@ The backup represents state immediately before migration. Changes made after the
 - Node.js **18.18+**
 - A Nexotao API key
 
+## Documentation
+
+Full operator and end-user documentation lives in [`docs/`](docs/README.md):
+
+- [Privacy](docs/privacy.md) — what is collected/stored, what leaves your machine, retention, deletion.
+- [Security](docs/security.md) — threat model, localhost binding, session auth, permissions, redaction.
+- [Gateway data flow](docs/gateway-data-flow.md) — how a request travels to the Gateway and back.
+- [Permissions & approvals](docs/permissions.md) — execution approvals, budgets, tool access.
+- [Storage](docs/storage.md) — data directory, SQLite schema areas, backups, portability.
+- [Platforms](docs/platforms.md) — supported OS and Node versions.
+- [Updating & rollback](docs/update-rollback.md) — updating, rolling back, restoring from backup.
+- [Reporting a vulnerability](docs/vulnerability-reporting.md) — how to report a security issue.
+- [Staged rollout](docs/staged-rollout.md) — the public-beta rollout and rollback decision.
+- [Accessibility](docs/accessibility.md) — the beta accessibility threshold and audit.
+- [Telemetry](docs/telemetry.md) — opt-in, redacted, off by default.
+
+See also [`SECURITY.md`](SECURITY.md).
+
 ## License
 
 MIT
