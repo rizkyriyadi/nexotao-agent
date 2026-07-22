@@ -79,18 +79,17 @@ async function toolLoop(opts: {
       run.push({ type: "tool_use", id: tu.id, name: tu.name, input: tu.input, thread });
 
       let out: { ok: boolean; output: string; [k: string]: any };
-      if (tu.name === "spawn_agents" && onSpawn) {
+      const allowed = await authorizeTool(run, approvalPolicy, { id: tu.id, name: tu.name, input: tu.input, thread });
+      if (!allowed) {
+        out = { ok: false, output: "The user denied this action." };
+      } else if (tu.name === "spawn_agents" && onSpawn) {
         const r = await onSpawn(tu.input);
         out = { ok: true, output: r.output };
       } else if (handlers[tu.name]) {
         const r = await handlers[tu.name](tu.input);
         out = { ok: true, output: r.output };
       } else {
-        const allowed = await authorizeTool(run, approvalPolicy, { id: tu.id, name: tu.name, input: tu.input, thread });
-        out =
-          !allowed
-            ? { ok: false, output: "The user denied this action." }
-            : await executeTool(tu.name, tu.input, root, run.signal, beforeMutation);
+        out = await executeTool(tu.name, tu.input, root, run.signal, beforeMutation);
       }
 
       run.push({

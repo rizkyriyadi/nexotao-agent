@@ -90,8 +90,12 @@ export const documentRevisions = sqliteTable("document_revisions", {
   id: text("id").primaryKey(), documentId: text("document_id").notNull().references(() => documents.id, { onDelete: "cascade" }), revision: integer("revision").notNull(), body: text("body").notNull(), createdByType: text("created_by_type").notNull(), createdById: text("created_by_id"), createdAt: integer("created_at").notNull(),
 }, (t) => [uniqueIndex("document_revisions_document_revision_uq").on(t.documentId, t.revision)]);
 export const approvals = sqliteTable("approvals", {
-  id: text("id").primaryKey(), type: text("type").notNull(), issueId: text("issue_id").references(() => issues.id, { onDelete: "cascade" }), runId: text("run_id"), payload: text("payload", { mode: "json" }).$type<unknown>().notNull(), status: text("status").notNull(), decisionNote: text("decision_note"), decidedAt: integer("decided_at"), createdAt: integer("created_at").notNull(),
-}, (t) => [index("approvals_issue_status_idx").on(t.issueId, t.status)]);
+  id: text("id").primaryKey(), type: text("type").notNull(), projectId: text("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  issueId: text("issue_id").references(() => issues.id, { onDelete: "cascade" }), runId: text("run_id"), toolCallId: text("tool_call_id"),
+  action: text("action"), target: text("target"), risk: text("risk"), preview: text("preview"),
+  payload: text("payload", { mode: "json" }).$type<unknown>().notNull(), status: text("status").notNull(), decisionNote: text("decision_note"),
+  expiresAt: integer("expires_at"), decidedAt: integer("decided_at"), resumedAt: integer("resumed_at"), createdAt: integer("created_at").notNull(),
+}, (t) => [index("approvals_issue_status_idx").on(t.issueId, t.status), index("approvals_project_status_idx").on(t.projectId, t.status), uniqueIndex("approvals_run_tool_uq").on(t.runId, t.toolCallId)]);
 export const costEvents = sqliteTable("cost_events", {
   id: text("id").primaryKey(), runId: text("run_id").notNull(), agentId: text("agent_id").notNull().references(() => agents.id, { onDelete: "cascade" }), model: text("model").notNull(), inputTokens: integer("input_tokens").notNull(), outputTokens: integer("output_tokens").notNull(), cost: real("cost").notNull(), createdAt: integer("created_at").notNull(),
 }, (t) => [index("cost_events_agent_created_idx").on(t.agentId, t.createdAt), index("cost_events_run_idx").on(t.runId)]);

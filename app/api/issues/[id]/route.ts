@@ -3,6 +3,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/database";
+import { resolveExecutionApproval } from "@/lib/execution-policy";
 import { ControlPlaneRepositories } from "@/lib/db/repositories";
 import {
   approvals, costEvents, documentRevisions, heartbeatRuns, issueDocuments,
@@ -92,18 +93,23 @@ export async function POST(request: Request, context: Context) {
   }
 
   if (body.action === "approval" && typeof body.approvalId === "string" && (body.decision === "approved" || body.decision === "rejected")) {
+    const current = database.read((db) => db.select().from(approvals).where(and(eq(approvals.id, body.approvalId as string), eq(approvals.issueId, id))).get());
+    if (!current) return NextResponse.json({ error: "Approval not found" }, { status: 404 });
+    if (current.type === "execution") {
+      const result = await resolveExecutionApproval({
+        approvalId: current.id, decision: body.decision === "approved" ? "allow" : "deny",
+        note: typeof body.note === "string" ? body.note : undefined,
+      }, database);
+      if (result.state === "expired") return NextResponse.json({ error: "Run is no longer waiting" }, { status: 409 });
+      return NextResponse.json({ approval: result.approval, idempotent: result.state === "already_resolved" });
+    }
     const updated = await database.write((db) => {
-      const current = db.select().from(approvals).where(and(eq(approvals.id, body.approvalId as string), eq(approvals.issueId, id))).get();
-      if (!current || current.status !== "pending") return null;
-      db.update(approvals).set({
-        status: body.decision as string,
-        decisionNote: typeof body.note === "string" ? body.note : null,
-        decidedAt: Date.now(),
-      }).where(eq(approvals.id, current.id)).run();
+      const pending = db.select().from(approvals).where(eq(approvals.id, current.id)).get();
+      if (!pending || pending.status !== "pending") return pending ?? null;
+      db.update(approvals).set({ status: body.decision as string, decisionNote: typeof body.note === "string" ? body.note : null, decidedAt: Date.now() }).where(eq(approvals.id, current.id)).run();
       return db.select().from(approvals).where(eq(approvals.id, current.id)).get();
     });
-    if (!updated) return NextResponse.json({ error: "Approval is no longer pending" }, { status: 409 });
-    return NextResponse.json({ approval: updated });
+    return NextResponse.json({ approval: updated, idempotent: current.status !== "pending" });
   }
 
   return NextResponse.json({ error: "Unsupported issue action" }, { status: 400 });

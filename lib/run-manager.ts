@@ -7,7 +7,7 @@ export type RunEvent =
   | { type: "text"; text: string; thread?: string }
   | { type: "usage"; inputTokens: number; outputTokens: number; thread?: string }
   | { type: "tool_use"; id: string; name: string; input: any; thread?: string }
-  | { type: "approval"; id: string; name: string; input: any; thread?: string }
+  | { type: "approval"; id: string; approvalId?: string; name: string; input: any; thread?: string; action?: string; target?: string; risk?: string; preview?: string }
   | { type: "tool_result"; id: string; name: string; ok: boolean; display?: string; kind?: string; file?: string; content?: string; output: string; thread?: string }
   | { type: "thread_created"; id: string; scope: string; dependsOn?: string[] }
   | { type: "thread_status"; id: string; status: "running" | "done" | "error" }

@@ -329,10 +329,20 @@ export class ControlPlaneRepositories {
   }
   createApproval(input: Omit<typeof approvals.$inferInsert, "id" | "createdAt">) {
     const row = { id: randomUUID(), createdAt: Date.now(), ...input };
-    return this.database.write((db) => { db.insert(approvals).values(row).run(); return row; });
+    return this.database.write((db) => {
+      if (row.runId && row.toolCallId) {
+        const existing = db.select().from(approvals).where(and(eq(approvals.runId, row.runId), eq(approvals.toolCallId, row.toolCallId))).get();
+        if (existing) return existing;
+      }
+      db.insert(approvals).values(row).run();
+      return db.select().from(approvals).where(eq(approvals.id, row.id)).get()!;
+    });
   }
   listApprovals(issueId: string) {
     return this.database.read((db) => db.select().from(approvals).where(eq(approvals.issueId, issueId)).orderBy(asc(approvals.createdAt)).all());
+  }
+  listProjectApprovals(projectId: string, status?: string) {
+    return this.database.read((db) => db.select().from(approvals).where(and(eq(approvals.projectId, projectId), status ? eq(approvals.status, status) : undefined)).orderBy(asc(approvals.createdAt)).all());
   }
   addCost(input: Omit<typeof costEvents.$inferInsert, "id" | "createdAt">) {
     const row = { id: randomUUID(), createdAt: Date.now(), ...input };

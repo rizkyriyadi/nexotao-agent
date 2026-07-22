@@ -130,6 +130,21 @@ CREATE TABLE IF NOT EXISTS git_workspaces (
 );
 CREATE INDEX IF NOT EXISTS git_workspaces_state_idx ON git_workspaces(state);
 `,
+}, {
+  version: 6,
+  name: "persistent-execution-approvals",
+  sql: `
+ALTER TABLE approvals ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE;
+ALTER TABLE approvals ADD COLUMN tool_call_id TEXT;
+ALTER TABLE approvals ADD COLUMN action TEXT;
+ALTER TABLE approvals ADD COLUMN target TEXT;
+ALTER TABLE approvals ADD COLUMN risk TEXT;
+ALTER TABLE approvals ADD COLUMN preview TEXT;
+ALTER TABLE approvals ADD COLUMN expires_at INTEGER;
+ALTER TABLE approvals ADD COLUMN resumed_at INTEGER;
+CREATE INDEX IF NOT EXISTS approvals_project_status_idx ON approvals(project_id, status);
+CREATE UNIQUE INDEX IF NOT EXISTS approvals_run_tool_uq ON approvals(run_id, tool_call_id);
+`,
 }];
 
 export class AppDatabase {
