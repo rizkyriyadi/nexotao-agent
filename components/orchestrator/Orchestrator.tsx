@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Crown, Users, ArrowUp, History, Plus, Loader2, ChevronRight, GitBranch } from "lucide-react";
+import { Crown, Users, ArrowUp, ArrowUpRight, History, Plus, Loader2, ChevronRight, GitBranch } from "lucide-react";
 import { useOrch, type IssueNode, type LogItem } from "./orchestrator-context";
 import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
@@ -34,6 +34,12 @@ function ago(ts: number) {
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60) return "just now"; if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`; return `${Math.floor(s / 86400)}d ago`;
+}
+
+function activityLabel(r: { runningCount: number; taskCount: number }) {
+  if (r.runningCount > 0) return `${r.runningCount} agent${r.runningCount > 1 ? "s" : ""} working`;
+  if (r.taskCount > 0) return `${r.taskCount} task${r.taskCount > 1 ? "s" : ""} queued`;
+  return "planning";
 }
 
 /* ── transcript (grouped tool accordions + markdown) ───────────── */
@@ -143,6 +149,8 @@ function Row({ node, pp, lead, selected, onSelect, depNames }: { node: IssueNode
 export function Orchestrator() {
   const { started, running, goalText, nodes, selected, log, recent, approval, approve, setSelected, start, openRun, newRun } = useOrch();
   const [input, setInput] = useState("");
+  const activeRuns = recent.filter((r) => r.active);
+  const historyRuns = recent.filter((r) => !r.active);
 
   if (!started) {
     return (
@@ -169,15 +177,33 @@ export function Orchestrator() {
           </div>
         </div>
 
-        {recent.length > 0 && (
+        {activeRuns.length > 0 && (
           <div className="mt-10 w-full max-w-[560px] text-left">
+            <p className="label mb-3 flex items-center gap-1.5 text-electric-indigo">
+              <Loader2 className="size-3.5 animate-spin" /> Active now · {activeRuns.length}
+            </p>
+            <div className="space-y-2">
+              {activeRuns.map((r) => (
+                <button key={r.rootId} onClick={() => openRun(r.rootId)} className="flex w-full items-center gap-3 rounded-xl border border-electric-indigo/30 bg-electric-indigo/[0.04] px-3.5 py-3 text-left transition-colors hover:border-electric-indigo">
+                  <span className="size-[7px] shrink-0 rounded-full bg-electric-indigo nx-pulse" />
+                  <span className="min-w-0 flex-1 truncate text-[13.5px] font-medium text-charcoal">{r.title}</span>
+                  <span className="shrink-0 font-mono text-[11px] text-bark-grey">{activityLabel(r)}</span>
+                  <ArrowUpRight className="size-4 shrink-0 text-electric-indigo" />
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {historyRuns.length > 0 && (
+          <div className="mt-8 w-full max-w-[560px] text-left">
             <p className="label mb-3 flex items-center gap-1.5"><History className="size-3.5" /> Recent runs</p>
             <div className="space-y-2">
-              {recent.map((r) => (
-                <button key={r.id} onClick={() => openRun(r.id)} className="flex w-full items-center gap-3 rounded-xl border border-line bg-paper-white px-3.5 py-3 text-left transition-colors hover:border-line-strong">
+              {historyRuns.map((r) => (
+                <button key={r.rootId} onClick={() => openRun(r.rootId)} className="flex w-full items-center gap-3 rounded-xl border border-line bg-paper-white px-3.5 py-3 text-left transition-colors hover:border-line-strong">
                   <span className={`size-[7px] shrink-0 rounded-full ${statusDot(r.status)}`} />
                   <span className="min-w-0 flex-1 truncate text-[13.5px] text-charcoal">{r.title}</span>
-                  <span className="shrink-0 font-mono text-[11px] text-pebble">{r.status === "in_progress" ? "running" : ago(r.updatedAt)}</span>
+                  <span className="shrink-0 font-mono text-[11px] text-pebble">{STATUS_LABEL[r.status] ?? r.status} · {ago(r.updatedAt)}</span>
                 </button>
               ))}
             </div>
@@ -190,6 +216,8 @@ export function Orchestrator() {
   const root = nodes.find((n) => n.parentId === null);
   const children = nodes.filter((n) => n.parentId && n.parentId === root?.id);
   const sel = nodes.find((n) => n.id === selected) ?? root;
+  // the node actually executing right now — prefer a delegate over the lead
+  const liveNode = nodes.find((n) => n.status === "in_progress" && n.parentId) ?? nodes.find((n) => n.status === "in_progress");
   const ppFor = (n: IssueNode) => (n.role === "lead" ? LEAD_PP : agentPP(children.findIndex((c) => c.id === n.id) + 1));
   const depNamesFor = (n: IssueNode) => n.blockedBy.map((bid) => nodes.find((x) => x.id === bid)?.agentName).filter(Boolean) as string[];
 
@@ -198,6 +226,15 @@ export function Orchestrator() {
       <header className="flex h-14 shrink-0 items-center justify-between gap-3 border-b border-line px-6">
         <h1 className="truncate text-[15px] font-medium text-charcoal">{goalText}</h1>
         <div className="flex shrink-0 items-center gap-3">
+          {liveNode && selected !== liveNode.id && (
+            <button
+              onClick={() => setSelected(liveNode.id)}
+              className="flex items-center gap-1.5 rounded-lg border border-electric-indigo/30 bg-electric-indigo/[0.06] px-2.5 py-1 text-[12px] font-medium text-electric-indigo transition-colors hover:bg-electric-indigo/10"
+              title={`Jump to ${liveNode.agentName}'s live transcript`}
+            >
+              <span className="size-[6px] rounded-full bg-electric-indigo nx-pulse" /> Jump to live
+            </button>
+          )}
           <span className="flex items-center gap-1.5 font-mono text-[12px] text-bark-grey">
             {running && <Loader2 className="size-3.5 animate-spin text-electric-indigo" />}
             <span className={`size-[6px] rounded-full ${running ? "bg-electric-indigo nx-pulse" : "bg-lichen-green"}`} />

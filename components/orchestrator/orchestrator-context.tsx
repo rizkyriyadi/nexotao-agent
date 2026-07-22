@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { summarizeRuns, type RunSummary } from "@/lib/runs";
 
 export type LogItem =
   | { kind: "text"; text: string }
@@ -32,7 +33,7 @@ type Ctx = {
   agents: { id: string; name: string; role: string }[];
   selected: string | null;
   log: LogItem[];
-  recent: { id: string; title: string; status: string; updatedAt: number }[];
+  recent: RunSummary[];
   approval: Approval;
   approve: (decision: "allow" | "deny") => void;
   setSelected: (id: string) => void;
@@ -64,10 +65,11 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<{ id: string; name: string; role: string }[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [log, setLog] = useState<LogItem[]>([]);
-  const [recent, setRecent] = useState<{ id: string; title: string; status: string; updatedAt: number }[]>([]);
+  const [recent, setRecent] = useState<RunSummary[]>([]);
   const [approval, setApproval] = useState<Approval>(null);
 
   const rootId = useRef<string | null>(null);
+  const pendingSelect = useRef<string | null>(null);
   const poller = useRef<any>(null);
   const streamAbort = useRef<AbortController | null>(null);
   const streamingRunId = useRef<string | null>(null);
@@ -198,16 +200,16 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
 
   const refreshRecent = useCallback(() => {
     fetch("/api/issues").then((r) => r.json()).then((d) => {
-      const roots = (d.issues ?? []).filter((i: any) => !i.parentId).sort((a: any, b: any) => b.updatedAt - a.updatedAt);
-      setRecent(roots.map((r: any) => ({ id: r.id, title: r.title, status: r.status, updatedAt: r.updatedAt })));
+      setRecent(summarizeRuns(d.issues ?? []));
     }).catch(() => {});
   }, []);
 
-  const enterRun = useCallback((rid: string, goal: string) => {
+  const enterRun = useCallback((rid: string, goal: string, nodeId?: string) => {
     rootId.current = rid;
+    pendingSelect.current = nodeId ?? rid;
     setGoalText(goal);
     setStarted(true);
-    setSelected(rid);
+    setSelected(pendingSelect.current);
     setNodes([]);
     setLog([]);
     streamingRunId.current = null;
@@ -229,8 +231,9 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
   }, [running, enterRun]);
 
   const openRun = useCallback((rid: string) => {
-    const g = recent.find((x) => x.id === rid);
-    enterRun(rid, g?.title ?? "Run");
+    const g = recent.find((x) => x.rootId === rid);
+    // jump straight to the node holding the live transcript when one is running
+    enterRun(rid, g?.title ?? "Run", g?.liveNodeId);
     poll();
   }, [recent, enterRun, poll]);
 
@@ -246,17 +249,18 @@ export function OrchestratorProvider({ children }: { children: ReactNode }) {
     refreshRecent();
   }, [refreshRecent]);
 
-  // select the root once the tree first loads
+  // select the pending target (live node or root) once the tree first loads
   useEffect(() => {
-    if (started && !selected && nodes.length) setSelected(rootId.current);
+    if (started && !selected && nodes.length) setSelected(pendingSelect.current ?? rootId.current);
   }, [started, selected, nodes]);
 
   useEffect(() => {
     if (booted.current) return;
     booted.current = true;
     refreshRecent();
-    const gid = new URLSearchParams(window.location.search).get("goal");
-    if (gid) enterRun(gid, "Run");
+    const params = new URLSearchParams(window.location.search);
+    const gid = params.get("goal");
+    if (gid) enterRun(gid, "Run", params.get("node") ?? undefined);
     return () => { if (poller.current) clearInterval(poller.current); streamAbort.current?.abort(); };
   }, [refreshRecent, enterRun]);
 

@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { IconRail } from "./IconRail";
 import { CommandPalette } from "./CommandPalette";
 import { UpdateBanner } from "./UpdateBanner";
+import { ActiveRunIndicator } from "./ActiveRunIndicator";
 
 /* Floating app shell: soft canvas backdrop + rounded panel + slim icon rail.
    Referenced from the Moneta dashboard layout. */
@@ -16,6 +17,7 @@ export function AppShell({ active, children }: { active: string; children: React
         </div>
       </div>
       <CommandPalette />
+      <ActiveRunIndicator />
     </div>
   );
 }
