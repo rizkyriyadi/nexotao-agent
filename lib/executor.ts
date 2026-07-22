@@ -5,6 +5,7 @@
 import { promises as fs } from "fs";
 import { getConfig } from "./config";
 import { getProject, addAgentRun } from "./store";
+import { appendRunToWorkGraph } from "./graphify";
 import { expandHome } from "./paths";
 import { DEFAULT_MODEL } from "./nexotao";
 import { createRun, type RunEvent } from "./run-manager";
@@ -210,6 +211,10 @@ async function onIssueFinished(
 ) {
   const status = ok ? (requeue ? "todo" : "done") : "in_review";
   await I.updateIssue(issue.id, { status, summary: result.text }, { type: "agent", id: agent.id, runId: issue.runId });
-  addAgentRun(projectId, { agent: agent.name, task: issue.title, summary: result.text.slice(0, 400), ok }).catch(() => {});
+  // Record the run, then fold it into the work-history graph incrementally. Both
+  // are fire-and-forget so run completion isn't slowed or blocked by indexing.
+  addAgentRun(projectId, { agent: agent.name, task: issue.title, summary: result.text.slice(0, 400), ok })
+    .then((run) => appendRunToWorkGraph(projectId, { run, issue: { identifier: issue.ref, title: issue.title, status } }))
+    .catch(() => {});
   tick(projectId);
 }

@@ -13,7 +13,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { DIR } from "./config";
-import { listAgentRuns, listIssueDependencies, listIssues, listRunRecords, listTasks } from "./store";
+import { listAgentRuns, listIssueDependencies, listIssues, listRunRecords, listSessions, listTasks } from "./store";
 
 export type EdgeConf = "EXTRACTED" | "INFERRED";
 /** Work-history edge kinds we emit (a subset of GraphEdge.rel's open string). */
@@ -63,6 +63,9 @@ export function workGraphPath(projectId: string): string {
 // an existing node.
 const ISSUE_REF = /\b[A-Z][A-Z0-9]*-\d+\b/g;
 const KANBAN_REF = /#\d+\b/g;
+// `[[slug]]` memory references (the wiki-link convention agents use to relate
+// memories). Lower-cased so `[[Nexa-30]]` and `[[nexa-30]]` collapse to one node.
+const MEMORY_LINK = /\[\[([^\]\n]+)\]\]/g;
 
 function scanRefs(...texts: Array<string | null | undefined>): string[] {
   const found = new Set<string>();
@@ -74,6 +77,19 @@ function scanRefs(...texts: Array<string | null | undefined>): string[] {
   return [...found];
 }
 
+/** Extract `[[slug]]` memory references from free text as normalized slugs. */
+function scanMemoryLinks(...texts: Array<string | null | undefined>): string[] {
+  const found = new Set<string>();
+  for (const text of texts) {
+    if (!text) continue;
+    for (const m of text.matchAll(MEMORY_LINK)) {
+      const slug = m[1].trim().toLowerCase();
+      if (slug) found.add(slug);
+    }
+  }
+  return [...found];
+}
+
 /** Persisted work.json — a WorkGraph plus generation metadata. Extra top-level
  * fields are ignored by loadWorkGraph, so this stays read-compatible. */
 export type PersistedWorkGraph = WorkGraph & { version: 1; projectId: string; generatedAt: number };
@@ -81,17 +97,21 @@ export type PersistedWorkGraph = WorkGraph & { version: 1; projectId: string; ge
 /**
  * Build the Work-History Graph for a project from the live SQLite store and
  * persist it to `~/.nexotao/graph/<projectId>/work.json`. Nodes: task (issues +
- * kanban tasks), run (agent_runs + run_records), agent. Edges: child / blockedBy
- * (EXTRACTED from the issue tree), references (EXTRACTED cross-task id mentions),
- * touched (INFERRED run/agent participation). Returns the graph and its file.
+ * kanban tasks), run (agent_runs + run_records), agent, session, memory. Edges:
+ * child / blockedBy (EXTRACTED from the issue tree), references (EXTRACTED
+ * cross-task id mentions, incl. from sessions), touched (INFERRED run/agent
+ * participation), memory-link (EXTRACTED `[[slug]]` references). Returns the
+ * graph and its file. This is the full rebuild; run completion appends
+ * incrementally via appendRunToWorkGraph (Phase 3) rather than rebuilding.
  */
 export async function buildWorkGraph(projectId: string): Promise<{ graph: PersistedWorkGraph; file: string }> {
-  const [issues, dependencies, tasks, agentRuns, runRecords] = await Promise.all([
+  const [issues, dependencies, tasks, agentRuns, runRecords, sessions] = await Promise.all([
     listIssues(projectId),
     listIssueDependencies(projectId),
     listTasks(projectId),
     listAgentRuns(projectId),
     listRunRecords(projectId),
+    listSessions(projectId),
   ]);
 
   const nodes = new Map<string, GraphNode>();
@@ -133,9 +153,23 @@ export async function buildWorkGraph(projectId: string): Promise<{ graph: Persis
   for (const run of runRecords) {
     addNode({ id: `run:${run.id}`, kind: "run", label: run.title || run.id, status: run.status, meta: { kind: run.kind, ts: run.updatedAt } });
   }
+  // Sessions: chat threads carrying their own history. They reference tasks and
+  // memories through the ids/`[[slug]]` links mentioned in their messages.
+  for (const session of sessions) {
+    addNode({ id: `session:${session.id}`, kind: "session", label: session.title, meta: { ts: session.updatedAt, projectId: session.projectId } });
+  }
 
   // --- Edges ---
   const resolve = (ref: string) => byIdentifier.get(ref.toUpperCase()) ?? byIdentifier.get(ref);
+  // memory-link (EXTRACTED): a `[[slug]]` reference in a record's text links its
+  // node to a lightweight `memory:<slug>` node created on demand.
+  const addMemoryLinks = (from: string, ...texts: Array<string | null | undefined>) => {
+    for (const slug of scanMemoryLinks(...texts)) {
+      const to = `memory:${slug}`;
+      addNode({ id: to, kind: "memory", label: slug, meta: {} });
+      addEdge(from, to, "memory-link", "EXTRACTED");
+    }
+  };
   // child (EXTRACTED): parent issue -> child issue, straight from parent_id.
   for (const issue of issues) {
     if (!issue.parentId) continue;
@@ -156,6 +190,7 @@ export async function buildWorkGraph(projectId: string): Promise<{ graph: Persis
       const to = resolve(ref);
       if (to) addEdge(from, to, "references", "EXTRACTED");
     }
+    addMemoryLinks(from, issue.title, issue.description, issue.summary);
   }
   for (const task of tasks) {
     const from = `task:${task.ref}`;
@@ -163,6 +198,7 @@ export async function buildWorkGraph(projectId: string): Promise<{ graph: Persis
       const to = resolve(ref);
       if (to) addEdge(from, to, "references", "EXTRACTED");
     }
+    addMemoryLinks(from, task.title, task.summary);
   }
   // touched (INFERRED): an agent produced a run; a run touched the tasks its
   // text mentions; a kanban task's assigned agent participated in it.
@@ -173,6 +209,7 @@ export async function buildWorkGraph(projectId: string): Promise<{ graph: Persis
       const to = resolve(ref);
       if (to) addEdge(from, to, "touched", "INFERRED");
     }
+    addMemoryLinks(from, run.task, run.summary);
   }
   for (const run of runRecords) {
     const from = `run:${run.id}`;
@@ -184,6 +221,17 @@ export async function buildWorkGraph(projectId: string): Promise<{ graph: Persis
   for (const task of tasks) {
     if (task.agent) addEdge(`agent:${task.agent}`, `task:${task.ref}`, "touched", "INFERRED");
   }
+  // Session edges: references to the tasks their messages mention, plus any
+  // `[[slug]]` memory links. Message bodies are capped so a long thread stays cheap.
+  for (const session of sessions) {
+    const from = `session:${session.id}`;
+    const text = [session.title, ...(session.messages ?? []).map((m) => m.content)].join("\n").slice(0, 20_000);
+    for (const ref of scanRefs(text)) {
+      const to = resolve(ref);
+      if (to) addEdge(from, to, "references", "EXTRACTED");
+    }
+    addMemoryLinks(from, text);
+  }
 
   // Degrees reflect the emitted (deduped, non-dangling) edge set.
   for (const edge of edges) { nodes.get(edge.from)!.degree = (nodes.get(edge.from)!.degree ?? 0) + 1; nodes.get(edge.to)!.degree = (nodes.get(edge.to)!.degree ?? 0) + 1; }
@@ -192,6 +240,113 @@ export async function buildWorkGraph(projectId: string): Promise<{ graph: Persis
   const file = workGraphPath(projectId);
   await persistGraph(file, graph);
   return { graph, file };
+}
+
+// ---------------------------------------------------------------------------
+// Incremental indexing (Phase 3 / NEXA-30) — append a single finished run's
+// nodes/edges to the persisted graph instead of rebuilding. Keeps the graph
+// fresh on every run completion without measurably slowing it down.
+// ---------------------------------------------------------------------------
+
+/** The just-finished run, as recorded in `agent_runs` (see store.addAgentRun). */
+export type FinishedRun = { id: string; agent: string; task: string; summary: string; ok: boolean; ts: number };
+/** The issue the run executed on — used to guarantee a task node to attach to. */
+export type FinishedRunIssue = { identifier: string; title: string; status?: string };
+
+// Read-modify-write of one work.json is not atomic across concurrent runs, so
+// serialize appends per project within this process. Cross-process races are
+// out of scope (a single runtime owns the store); the tmp+rename in persistGraph
+// still guarantees readers never see a torn file.
+const appendChains = new Map<string, Promise<unknown>>();
+
+/**
+ * Append a finished run to a project's work-history graph: a `run` node, its
+ * `agent`, the `touched` edges to the tasks it names (and to its own issue), and
+ * any `[[slug]]` memory-links — deduped against what's already persisted. If no
+ * graph exists yet (nothing indexed), seeds it with a one-time full build. Cheap:
+ * a few nodes/edges, one file read and one atomic write, no store-wide rebuild.
+ */
+export function appendRunToWorkGraph(
+  projectId: string,
+  input: { run: FinishedRun; issue?: FinishedRunIssue },
+): Promise<{ appended: number; file: string }> {
+  const prior = appendChains.get(projectId) ?? Promise.resolve();
+  const next = prior.catch(() => {}).then(() => appendRunNow(projectId, input));
+  // Keep the chain alive even if this append rejects, so the next one still runs.
+  appendChains.set(projectId, next.catch(() => {}));
+  return next;
+}
+
+async function appendRunNow(
+  projectId: string,
+  input: { run: FinishedRun; issue?: FinishedRunIssue },
+): Promise<{ appended: number; file: string }> {
+  const file = workGraphPath(projectId);
+  const existing = await readGraphFile(file);
+  // Cold graph: nothing indexed yet. addAgentRun already wrote this run to the
+  // store, so a single full build captures it and its full context.
+  if (!existing) return { appended: -1, file: (await buildWorkGraph(projectId)).file };
+
+  const nodes = new Map<string, GraphNode>(existing.nodes.map((n) => [n.id, n]));
+  const edgeKey = (from: string, to: string, rel: string) => `${from}|${to}|${rel}`;
+  const edges = new Map<string, GraphEdge>(existing.edges.map((e) => [edgeKey(e.from, e.to, e.rel), e]));
+  let appended = 0;
+
+  const addNode = (node: GraphNode) => { if (!nodes.has(node.id)) { nodes.set(node.id, { degree: 0, ...node }); appended++; } };
+  const addEdge = (from: string, to: string, rel: EdgeRel, conf: EdgeConf) => {
+    if (from === to || !nodes.has(from) || !nodes.has(to)) return;
+    const key = edgeKey(from, to, rel);
+    if (edges.has(key)) return;
+    edges.set(key, { from, to, rel, conf });
+    appended++;
+  };
+
+  // Resolve `NEXA-xx` / `#7` references against the task nodes already in the graph.
+  const byIdentifier = new Map<string, string>();
+  for (const node of nodes.values()) {
+    if (node.kind !== "task") continue;
+    const suffix = node.id.slice("task:".length);
+    byIdentifier.set(suffix.toUpperCase(), node.id);
+    byIdentifier.set(suffix, node.id);
+  }
+  const resolve = (ref: string) => byIdentifier.get(ref.toUpperCase()) ?? byIdentifier.get(ref);
+
+  const { run, issue } = input;
+  const runId = `run:${run.id}`;
+  addNode({ id: runId, kind: "run", label: run.task || run.summary.slice(0, 80) || run.id, status: run.ok ? "done" : "error", meta: { agent: run.agent, ok: run.ok, summary: run.summary, ts: run.ts } });
+  addNode({ id: `agent:${run.agent}`, kind: "agent", label: run.agent, meta: {} });
+  if (issue) {
+    const taskId = `task:${issue.identifier}`;
+    addNode({ id: taskId, kind: "task", label: issue.title, status: issue.status, meta: { identifier: issue.identifier } });
+    byIdentifier.set(issue.identifier.toUpperCase(), taskId);
+  }
+
+  addEdge(`agent:${run.agent}`, runId, "touched", "INFERRED");
+  for (const ref of scanRefs(run.task, run.summary)) {
+    const to = resolve(ref);
+    if (to) addEdge(runId, to, "touched", "INFERRED");
+  }
+  if (issue) addEdge(runId, `task:${issue.identifier}`, "touched", "INFERRED");
+  for (const slug of scanMemoryLinks(run.summary, run.task, issue?.title)) {
+    const to = `memory:${slug}`;
+    addNode({ id: to, kind: "memory", label: slug, meta: {} });
+    addEdge(runId, to, "memory-link", "EXTRACTED");
+  }
+
+  if (!appended) return { appended: 0, file };
+
+  // Recompute degrees over the merged edge set so they stay exact after append.
+  for (const node of nodes.values()) node.degree = 0;
+  for (const edge of edges.values()) {
+    const from = nodes.get(edge.from);
+    const to = nodes.get(edge.to);
+    if (from) from.degree = (from.degree ?? 0) + 1;
+    if (to) to.degree = (to.degree ?? 0) + 1;
+  }
+
+  const graph: PersistedWorkGraph = { version: 1, projectId, generatedAt: Date.now(), nodes: [...nodes.values()], edges: [...edges.values()] };
+  await persistGraph(file, graph);
+  return { appended, file };
 }
 
 // Atomic, owner-only write (mirrors the SQLite persist path): tmp file + rename
