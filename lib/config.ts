@@ -3,12 +3,16 @@ import { promises as fs } from "fs";
 import { chmodSync, existsSync, mkdirSync } from "fs";
 import os from "os";
 import path from "path";
+import type { AgentMode } from "./execution-policy";
 
 export type Config = {
   apiKey?: string;
   model?: string;
   onboarded?: boolean;
   activeProjectId?: string | null;
+  // Default paperclip-style run mode for new runs. `agent` (auto) is the
+  // default so file edits and commands run without an approval prompt.
+  defaultMode?: AgentMode;
   searchApiKey?: string; // optional Tavily key for reliable web search
   // Redacted log/event retention windows in days. null / 0 / absent = keep
   // forever. Applied deterministically by lib/governance.applyRetention.
@@ -52,6 +56,7 @@ export function publicView(c: Config) {
     hasKey: !!c.apiKey,
     model: c.model ?? null,
     activeProjectId: c.activeProjectId ?? null,
+    defaultMode: c.defaultMode ?? "agent",
     hasSearchKey: !!c.searchApiKey,
     retention: { ...DEFAULT_RETENTION, ...(c.retention ?? {}) },
     telemetry: c.telemetry === true,

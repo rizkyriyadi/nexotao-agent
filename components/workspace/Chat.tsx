@@ -7,7 +7,13 @@ import { toast } from "sonner";
 import { Textarea } from "../ui/textarea";
 import { Button } from "../ui/button";
 import { Markdown } from "../ui/markdown";
-import { useWorkspace, target, type Item } from "./workspace-context";
+import { useWorkspace, target, type Item, type AgentMode } from "./workspace-context";
+
+const MODES: { id: AgentMode; label: string; hint: string }[] = [
+  { id: "agent", label: "Agent", hint: "Edits & runs code automatically" },
+  { id: "plan", label: "Plan", hint: "Read-only — proposes a plan" },
+  { id: "ask", label: "Ask", hint: "Read-only — answers questions" },
+];
 
 const SUGGESTIONS = [
   "Explain what this project does",
@@ -49,7 +55,7 @@ async function fileToB64(f: File): Promise<string> {
 }
 
 export function Chat() {
-  const { items, streaming, send, cancel } = useWorkspace();
+  const { items, streaming, send, cancel, mode, setMode } = useWorkspace();
   const [input, setInput] = useState("");
   const [files, setFiles] = useState<Attach[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -110,7 +116,7 @@ export function Chat() {
                 <Sparkles className="size-5" />
               </span>
               <h2 className="mt-4 text-[20px] font-semibold tracking-[-0.01em] text-charcoal">What should we build?</h2>
-              <p className="mt-1.5 text-[14px] text-bark-grey">The agent reads, edits, and runs code in this project — with your approval.</p>
+              <p className="mt-1.5 text-[14px] text-bark-grey">In Agent mode it reads, edits, and runs code automatically. Switch to Plan or Ask for read-only.</p>
               <div className="mt-5 flex flex-wrap justify-center gap-2">
                 {SUGGESTIONS.map((s) => (
                   <button key={s} onClick={() => send(s)} className="rounded-full border border-line-strong px-3.5 py-1.5 text-[13px] text-bark-grey transition-colors hover:border-charcoal hover:text-charcoal">
@@ -173,6 +179,27 @@ export function Chat() {
               ))}
             </div>
           )}
+          <div className="mb-2 flex items-center gap-1" role="radiogroup" aria-label="Run mode">
+            {MODES.map((m) => {
+              const on = mode === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => setMode(m.id)}
+                  title={m.hint}
+                  className={`rounded-full px-3 py-1 text-[12.5px] font-medium transition-colors ${
+                    on ? "bg-electric-indigo text-white shadow-sm" : "text-bark-grey hover:bg-black/[0.04] hover:text-charcoal"
+                  }`}
+                >
+                  {m.label}
+                </button>
+              );
+            })}
+            <span className="ml-1 hidden text-[11.5px] text-pebble sm:inline">{MODES.find((m) => m.id === mode)?.hint}</span>
+          </div>
           <div className="flex items-end gap-2 rounded-2xl border border-line-strong bg-paper-white p-2 transition-colors focus-within:border-bark-grey">
             <input ref={fileRef} type="file" multiple hidden onChange={(e) => onPick(e.target.files)} />
             <Button size="icon" variant="ghost" className="rounded-xl text-pebble hover:text-charcoal" onClick={() => fileRef.current?.click()} title="Attach text/code files">

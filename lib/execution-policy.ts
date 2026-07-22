@@ -6,6 +6,12 @@ import { redactText, redactValue } from "./redact";
 import { getRun, type Run } from "./run-manager";
 
 export type ExecutionPolicy = "ask" | "allow" | "deny";
+/** Paperclip-style run modes. `agent` runs autonomously (auto-approve edits
+ *  and commands), `plan` investigates read-only and writes a plan, `ask` just
+ *  answers questions. Modes map onto the execution policy below. */
+export type AgentMode = "agent" | "plan" | "ask";
+export const AGENT_MODES: readonly AgentMode[] = ["agent", "plan", "ask"];
+export const DEFAULT_MODE: AgentMode = "agent";
 export type PolicyAction = "read" | "write" | "exec" | "network" | "destructive" | "control";
 export type PolicyRisk = "low" | "medium" | "high";
 export type PolicyDetails = { action: PolicyAction; target: string; risk: PolicyRisk; preview: string };
@@ -48,7 +54,27 @@ export function describeToolAction(name: string, input: unknown): PolicyDetails 
 
 export function evaluateExecutionPolicy(policy: ExecutionPolicy, details: PolicyDetails): "allow" | "deny" | "ask" {
   if (details.action === "read" || details.action === "control") return "allow";
+  // Auto ("allow") mode still routes genuinely destructive actions (rm -rf,
+  // git reset --hard, mkfs, …) through an explicit approval prompt.
+  if (policy === "allow" && details.action === "destructive") return "ask";
   return policy;
+}
+
+/** Tool execution policy for a run mode. `agent` auto-approves (destructive
+ *  actions are still gated by evaluateExecutionPolicy); `plan`/`ask` deny every
+ *  mutation, leaving only the always-allowed read/control tools. */
+export function modeToPolicy(mode: AgentMode): ExecutionPolicy {
+  return mode === "agent" ? "allow" : "deny";
+}
+
+/** System-prompt directive appended for a run mode. Agent mode adds nothing —
+ *  it keeps the default autonomous behaviour. */
+export function modeSystemDirective(mode: AgentMode): string {
+  if (mode === "plan")
+    return "\n\nPLAN MODE: Investigate the project read-only and produce a clear, numbered implementation plan. File writes and shell commands are disabled — do not attempt to modify anything or you will be denied. Finish with the proposed plan and tell the user to switch to Agent mode to execute it.";
+  if (mode === "ask")
+    return "\n\nASK MODE: Answer the user's question using read-only inspection only (list_dir, read_file, grep, web_search, web_fetch). File writes and shell commands are disabled — do not modify the project.";
+  return "";
 }
 
 export async function authorizeTool(run: Run, policy: ExecutionPolicy, tool: ToolRequest) {

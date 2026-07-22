@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getConfig, saveConfig, publicView, type Config } from "@/lib/config";
 import { addProject, getActiveProject } from "@/lib/store";
 import { seedAgents } from "@/lib/issues";
+import { AGENT_MODES, type AgentMode } from "@/lib/execution-policy";
 
 export const runtime = "nodejs";
 
@@ -16,6 +17,7 @@ export async function POST(req: Request) {
   if (body.apiKey !== undefined) patch.apiKey = body.apiKey;
   if (body.model !== undefined) patch.model = body.model;
   if (body.onboarded !== undefined) patch.onboarded = body.onboarded;
+  if (body.defaultMode !== undefined && AGENT_MODES.includes(body.defaultMode as AgentMode)) patch.defaultMode = body.defaultMode as AgentMode;
   if (body.searchApiKey !== undefined) patch.searchApiKey = body.searchApiKey;
   if (body.telemetry !== undefined) patch.telemetry = body.telemetry === true;
   if (body.retention !== undefined && body.retention !== null) {

@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { openDatabase } from "../lib/db/database";
 import { ControlPlaneRepositories } from "../lib/db/repositories";
 import { activityLog, approvals, projects } from "../lib/db/schema";
-import { describeToolAction, evaluateExecutionPolicy, resolveExecutionApproval } from "../lib/execution-policy";
+import { describeToolAction, evaluateExecutionPolicy, resolveExecutionApproval, modeToPolicy, modeSystemDirective } from "../lib/execution-policy";
 import { createRun } from "../lib/run-manager";
 
 test("shared policy covers network, destructive, and unknown bypass attempts", () => {
@@ -17,6 +17,35 @@ test("shared policy covers network, destructive, and unknown bypass attempts", (
   assert.equal(unknown.risk, "high");
   assert.equal(evaluateExecutionPolicy("ask", unknown), "ask");
   assert.equal(evaluateExecutionPolicy("deny", describeToolAction("read_file", { path: "README.md" })), "allow");
+});
+
+test("run modes map to the expected execution policy", () => {
+  assert.equal(modeToPolicy("agent"), "allow");
+  assert.equal(modeToPolicy("plan"), "deny");
+  assert.equal(modeToPolicy("ask"), "deny");
+});
+
+test("agent (auto) mode auto-approves edits but still gates destructive actions", () => {
+  const edit = describeToolAction("edit_file", { path: "src/app.ts", old_str: "a", new_str: "b" });
+  const runCmd = describeToolAction("bash", { command: "npm test" });
+  const destructive = describeToolAction("bash", { command: "rm -rf ./build" });
+  // Auto mode: file edits and ordinary commands run without a prompt…
+  assert.equal(evaluateExecutionPolicy(modeToPolicy("agent"), edit), "allow");
+  assert.equal(evaluateExecutionPolicy(modeToPolicy("agent"), runCmd), "allow");
+  // …but a destructive command is still escalated to an approval prompt.
+  assert.equal(evaluateExecutionPolicy(modeToPolicy("agent"), destructive), "ask");
+});
+
+test("plan and ask modes deny every mutation while allowing read-only tools", () => {
+  const edit = describeToolAction("write_file", { path: "x.ts", content: "y" });
+  const read = describeToolAction("read_file", { path: "README.md" });
+  for (const mode of ["plan", "ask"] as const) {
+    assert.equal(evaluateExecutionPolicy(modeToPolicy(mode), edit), "deny");
+    assert.equal(evaluateExecutionPolicy(modeToPolicy(mode), read), "allow");
+  }
+  assert.match(modeSystemDirective("plan"), /PLAN MODE/);
+  assert.match(modeSystemDirective("ask"), /ASK MODE/);
+  assert.equal(modeSystemDirective("agent"), "");
 });
 
 test("approval previews redact secrets", () => {

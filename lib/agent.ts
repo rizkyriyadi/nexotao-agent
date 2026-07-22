@@ -1,6 +1,6 @@
 import { nexotao } from "./nexotao";
 import { TOOL_DEFS, executeTool } from "./tools";
-import { authorizeTool, type ExecutionPolicy } from "./execution-policy";
+import { authorizeTool, modeToPolicy, modeSystemDirective, DEFAULT_MODE, type ExecutionPolicy, type AgentMode } from "./execution-policy";
 import { safeError } from "./redact";
 import { saveSessionMessages, addTask, updateTask, addAgentRun } from "./store";
 import type { Run } from "./run-manager";
@@ -113,9 +113,10 @@ async function toolLoop(opts: {
 
 /** Single agent. Persists to the session store on the SERVER, so a client
  * refresh/disconnect never loses the prompt or the reply. */
-export async function runAgent(opts: { run: Run; messages: Msg[]; model: string; apiKey: string; root: string; approvalPolicy: ExecutionPolicy; sessionId?: string }) {
+export async function runAgent(opts: { run: Run; messages: Msg[]; model: string; apiKey: string; root: string; mode?: AgentMode; sessionId?: string }) {
   const client = nexotao(opts.apiKey);
   const { sessionId, messages } = opts;
+  const mode = opts.mode ?? DEFAULT_MODE;
 
   // incrementally persist the assistant reply as it streams, so a refresh or
   // disconnect mid-run keeps whatever the agent has produced so far.
@@ -135,11 +136,11 @@ export async function runAgent(opts: { run: Run; messages: Msg[]; model: string;
       run: opts.run,
       client,
       model: opts.model,
-      system: baseSystem(opts.root),
+      system: baseSystem(opts.root) + modeSystemDirective(mode),
       convo: [...messages],
       root: opts.root,
       thread: "agent",
-      approvalPolicy: opts.approvalPolicy,
+      approvalPolicy: modeToPolicy(mode),
       onProgress: (full) => persist(full),
     });
     persist(text || "(no response)", true);

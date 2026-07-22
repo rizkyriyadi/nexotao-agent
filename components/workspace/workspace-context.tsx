@@ -10,12 +10,17 @@ export type Item =
 
 type Approval = { runId: string; id: string; name: string; input: any } | null;
 
+/** Paperclip-style run mode picked in the composer. Mirrors lib/execution-policy. */
+export type AgentMode = "agent" | "plan" | "ask";
+
 type Ctx = {
   items: Item[];
   streaming: boolean;
   approval: Approval;
   terminal: string[];
   diff: { file: string; content: string } | null;
+  mode: AgentMode;
+  setMode: (m: AgentMode) => void;
   send: (text: string, meta?: { display?: string; files?: string[] }) => void;
   approve: (decision: "allow" | "deny") => void;
   cancel: () => void;
@@ -42,8 +47,11 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [approval, setApproval] = useState<Approval>(null);
   const [terminal, setTerminal] = useState<string[]>([]);
   const [diff, setDiff] = useState<{ file: string; content: string } | null>(null);
+  const [mode, setMode] = useState<AgentMode>("agent");
 
   const runId = useRef("");
+  const modeRef = useRef<AgentMode>("agent");
+  modeRef.current = mode;
   const sessionRef = useRef<string | null>(null);
   const taskRef = useRef<string | null>(null);
   const booted = useRef(false);
@@ -163,7 +171,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: [...history, { role: "user", content: text }], multi: false, sessionId: sessionRef.current }),
+          body: JSON.stringify({ messages: [...history, { role: "user", content: text }], multi: false, sessionId: sessionRef.current, mode: modeRef.current }),
         });
         if (!res.ok) {
           const err = await res.json().catch(() => ({ error: "Request failed" }));
@@ -182,6 +190,14 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     },
     [streaming, items, consumeStream],
   );
+
+  // seed the composer's mode from the user's configured default (agent by default)
+  useEffect(() => {
+    fetch("/api/config")
+      .then((r) => r.json())
+      .then((c) => { if (c?.defaultMode) setMode(c.defaultMode as AgentMode); })
+      .catch(() => {});
+  }, []);
 
   // boot: load a session from ?session= (and reconnect to any in-flight run),
   // or auto-start from ?task=
@@ -233,5 +249,5 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
     await fetch("/api/run/cancel", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: runId.current }) }).catch(() => {});
   }, []);
 
-  return <WorkspaceCtx.Provider value={{ items, streaming, approval, terminal, diff, send, approve, cancel }}>{children}</WorkspaceCtx.Provider>;
+  return <WorkspaceCtx.Provider value={{ items, streaming, approval, terminal, diff, mode, setMode, send, approve, cancel }}>{children}</WorkspaceCtx.Provider>;
 }
