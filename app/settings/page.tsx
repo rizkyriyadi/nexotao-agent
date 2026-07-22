@@ -3,6 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { Switch } from "@/components/ui/switch";
 import { IconKeyStub } from "@/components/settings-icons";
 import { SearchKeyRow } from "@/components/settings/SearchKeyRow";
+import { DataControls } from "@/components/settings/DataControls";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -76,6 +77,10 @@ export default function Settings() {
             <Row label="Egress allow-list" hint="Domains the sandbox may reach. Deny-all by default.">
               <span className="font-mono text-[12px] text-bark-grey">npmjs.org, github.com</span>
             </Row>
+          </Section>
+
+          <Section title="Local data">
+            <DataControls />
           </Section>
 
           <div className="mt-8 flex items-center gap-2 text-[13px] text-bark-grey">

@@ -17,6 +17,14 @@ export async function POST(req: Request) {
   if (body.model !== undefined) patch.model = body.model;
   if (body.onboarded !== undefined) patch.onboarded = body.onboarded;
   if (body.searchApiKey !== undefined) patch.searchApiKey = body.searchApiKey;
+  if (body.retention !== undefined && body.retention !== null) {
+    const clampDays = (value: unknown): number | null => {
+      if (value === null || value === undefined || value === "") return null;
+      const days = Number(value);
+      return Number.isFinite(days) && days > 0 ? Math.min(Math.floor(days), 3650) : null;
+    };
+    patch.retention = { runEventDays: clampDays(body.retention.runEventDays), auditDays: clampDays(body.retention.auditDays) };
+  }
 
   if (body.project) {
     const p = await addProject(body.project);

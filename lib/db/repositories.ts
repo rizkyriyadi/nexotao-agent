@@ -467,4 +467,17 @@ export class ControlPlaneRepositories {
   listActivity(entityType: string, entityId: string) {
     return this.database.read((db) => db.select().from(activityLog).where(and(eq(activityLog.entityType, entityType), eq(activityLog.entityId, entityId))).orderBy(asc(activityLog.createdAt)).all());
   }
+  /** Project-scoped append-only activity feed: every sensitive mutation whose
+   * entity (issue, agent, or approval) belongs to the project, newest first.
+   * Summaries are already redacted at write time. */
+  listProjectActivity(projectId: string, limit = 200) {
+    return this.database.read((db) => {
+      const issueIds = db.select({ id: issues.id }).from(issues).where(eq(issues.projectId, projectId)).all().map((row) => row.id);
+      const agentIds = db.select({ id: agents.id }).from(agents).where(eq(agents.projectId, projectId)).all().map((row) => row.id);
+      const approvalIds = db.select({ id: approvals.id }).from(approvals).where(eq(approvals.projectId, projectId)).all().map((row) => row.id);
+      const entityIds = [...new Set([...issueIds, ...agentIds, ...approvalIds])];
+      if (!entityIds.length) return [];
+      return db.select().from(activityLog).where(inArray(activityLog.entityId, entityIds)).orderBy(desc(activityLog.createdAt)).limit(limit).all();
+    });
+  }
 }

@@ -4,6 +4,7 @@ import type { AppDatabase } from "./db/database";
 import {
   activityLog, agentConfigRevisions, agents, costEvents, heartbeatRuns, issues,
 } from "./db/schema";
+import { configActivityDiff } from "./governance";
 
 export const AGENT_STATUSES = ["idle", "queued", "running", "paused", "error", "terminated"] as const;
 export type AgentStatus = (typeof AGENT_STATUSES)[number];
@@ -60,10 +61,12 @@ function snapshot(row: typeof agents.$inferSelect): AgentConfigInput {
 
 function revisionRow(db: AppDatabase["orm"], row: typeof agents.$inferSelect, actor: AgentActor, now: number) {
   const previous = db.select().from(agentConfigRevisions).where(eq(agentConfigRevisions.agentId, row.id)).orderBy(desc(agentConfigRevisions.revision)).get();
+  const revision = (previous?.revision ?? 0) + 1;
   db.insert(agentConfigRevisions).values({
-    id: randomUUID(), agentId: row.id, revision: (previous?.revision ?? 0) + 1,
+    id: randomUUID(), agentId: row.id, revision,
     snapshot: snapshot(row), actorType: actor.type, actorId: actor.id ?? null, createdAt: now,
   }).run();
+  return revision;
 }
 
 function auditRow(db: AppDatabase["orm"], agentId: string, action: string, summary: unknown, actor: AgentActor, now: number) {
@@ -153,11 +156,14 @@ export class AgentLifecycleService {
         const manager = merged.reportsTo ? db.select().from(agents).where(eq(agents.id, merged.reportsTo)).get() : null;
         if (!manager || manager.projectId !== current.projectId || manager.role !== "lead" || manager.status === "terminated") throw new AgentLifecycleError("invalid", "Specialists must report to the active lead");
       }
+      const before = snapshot(current);
       const now = Date.now();
       db.update(agents).set({ ...merged, updatedAt: now }).where(eq(agents.id, id)).run();
       const updated = db.select().from(agents).where(eq(agents.id, id)).get()!;
-      revisionRow(db, updated, actor, now);
-      auditRow(db, id, "agent.config_updated", { revision: "created" }, actor, now);
+      const revision = revisionRow(db, updated, actor, now);
+      // Redacted before/after diff — surfaces permission, budget, and adapter
+      // config changes in the audit trail without ever persisting a secret.
+      auditRow(db, id, "agent.config_updated", { revision, ...configActivityDiff(before, snapshot(updated)) }, actor, now);
       return updated;
     });
   }

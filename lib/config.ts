@@ -10,7 +10,12 @@ export type Config = {
   onboarded?: boolean;
   activeProjectId?: string | null;
   searchApiKey?: string; // optional Tavily key for reliable web search
+  // Redacted log/event retention windows in days. null / 0 / absent = keep
+  // forever. Applied deterministically by lib/governance.applyRetention.
+  retention?: { runEventDays?: number | null; auditDays?: number | null };
 };
+
+export const DEFAULT_RETENTION = { runEventDays: null as number | null, auditDays: null as number | null };
 
 export const DIR = process.env.NEXOTAO_DATA_DIR
   ? path.resolve(process.env.NEXOTAO_DATA_DIR)
@@ -45,5 +50,6 @@ export function publicView(c: Config) {
     model: c.model ?? null,
     activeProjectId: c.activeProjectId ?? null,
     hasSearchKey: !!c.searchApiKey,
+    retention: { ...DEFAULT_RETENTION, ...(c.retention ?? {}) },
   };
 }
