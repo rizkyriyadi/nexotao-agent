@@ -43,8 +43,10 @@
     "lint": "eslint",
     "prepublishOnly": "npm run lint && npm test && npm run build",
     "test": "tsx --test tests/*.test.ts",
+    "test:e2e": "node scripts/e2e-run.mjs",
     "typecheck": "tsc --noEmit",
-    "smoke": "node scripts/release-smoke.mjs"
+    "smoke": "node scripts/release-smoke.mjs",
+    "audit:a11y": "node scripts/a11y-audit.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.112.4",
@@ -59,7 +61,7 @@
     "cmdk": "^1.1.1",
     "drizzle-orm": "^0.45.2",
     "lucide-react": "^1.25.0",
-    "next": "16.2.10",
+    "next": "16.2.11",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-markdown": "^9.1.0",
@@ -82,5 +84,9 @@
     "tailwindcss": "^4",
     "tsx": "^4.23.1",
     "typescript": "^5"
+  },
+  "overrides": {
+    "sharp": ">=0.35.3",
+    "postcss": ">=8.5.21"
   }
 }

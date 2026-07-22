@@ -5,6 +5,10 @@ node_modules/
 .next/
 out/
 
+# local test browsers and e2e/a11y artifacts
+.cache/
+e2e-artifacts/
+
 # local env / secrets
 .env
 .env.*
