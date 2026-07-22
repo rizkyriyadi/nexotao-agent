@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type WheelEvent as ReactWheelEvent } from "react";
-import { Search, Share2, Crosshair, X, RefreshCw } from "lucide-react";
+import { Search, Share2, Crosshair, X, RefreshCw, Boxes } from "lucide-react";
 
 // ── Types (mirror /api/graph) ────────────────────────────────────────────────
 type Node = {
@@ -23,6 +23,10 @@ type GraphResponse = {
   edges: Edge[];
   generatedAt: number | null;
 };
+// Mirror of POST /api/graph (build knowledge graph).
+type BuildResponse =
+  | { ok: true; work: { nodes: number; edges: number }; code: { available: boolean; nodes: number } }
+  | { ok: false; error?: string };
 
 // ── Visual language ──────────────────────────────────────────────────────────
 const KIND_COLOR: Record<string, string> = {
@@ -145,6 +149,8 @@ export function GraphView() {
   const [data, setData] = useState<GraphResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [building, setBuilding] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<string | null>(null);
@@ -163,6 +169,30 @@ export function GraphView() {
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
+
+  // Build the knowledge graph on demand: full rebuild of the work-history graph
+  // from the project's entire task history, plus the optional graphify code
+  // layer. Then reload so the fresh graph renders. (POST /api/graph.)
+  const build = () => {
+    if (building) return;
+    setBuilding(true);
+    setNotice("Building knowledge graph…");
+    fetch("/api/graph", { method: "POST" })
+      .then((r) => r.json())
+      .then((res: BuildResponse) => {
+        if (!res.ok) {
+          setNotice(res.error ?? "Could not build the graph.");
+          return;
+        }
+        const parts = [`Indexed ${res.work.nodes} nodes · ${res.work.edges} edges`];
+        if (res.code.available) parts.push(`+${res.code.nodes} code nodes`);
+        else parts.push("install graphify for code-level nodes");
+        setNotice(parts.join(" · "));
+        load();
+      })
+      .catch(() => setNotice("Could not build the graph."))
+      .finally(() => setBuilding(false));
+  };
 
   const nodes = useMemo(() => data?.nodes ?? [], [data]);
   const edges = useMemo(() => data?.edges ?? [], [data]);
@@ -262,7 +292,21 @@ export function GraphView() {
           <h1 className="text-[15px] font-semibold">Knowledge graph</h1>
         </div>
         {data?.project && <span className="font-mono text-[11px] text-pebble">{data.project.name}</span>}
+        {notice && (
+          <span className="truncate text-[11.5px] text-bark-grey" title={notice}>
+            {notice}
+          </span>
+        )}
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={build}
+            disabled={building || !data?.project}
+            title={data?.project ? "Rebuild the knowledge graph from the project's full history" : "Open a project first"}
+            className="flex h-8 items-center gap-1.5 rounded-full bg-electric-indigo px-3.5 text-[12.5px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          >
+            <Boxes className={`size-4 ${building ? "animate-pulse" : ""}`} strokeWidth={2} />
+            {building ? "Building…" : "Build graph"}
+          </button>
           <label className="flex h-8 w-[240px] items-center gap-2 rounded-full border border-line-strong px-3.5 focus-within:border-electric-indigo">
             <Search className="size-4 text-pebble" />
             <input
@@ -327,7 +371,12 @@ export function GraphView() {
       <div className="flex min-h-0 flex-1">
         <div className="relative min-h-0 flex-1 bg-code-surface/40">
           {empty ? (
-            <EmptyState projectId={data?.projectId ?? null} hasProject={!!data?.project} />
+            <EmptyState
+              projectId={data?.projectId ?? null}
+              hasProject={!!data?.project}
+              onBuild={build}
+              building={building}
+            />
           ) : error ? (
             <div className="flex h-full items-center justify-center text-[13px] text-alarm-red">{error}</div>
           ) : (
@@ -548,7 +597,14 @@ function NodeList({
   );
 }
 
-function EmptyState({ projectId, hasProject }: { projectId: string | null; hasProject: boolean }) {
+function EmptyState({
+  projectId, hasProject, onBuild, building,
+}: {
+  projectId: string | null;
+  hasProject: boolean;
+  onBuild: () => void;
+  building: boolean;
+}) {
   return (
     <div className="flex h-full items-center justify-center p-6">
       <div className="max-w-md rounded-2xl border border-line bg-white px-6 py-7 text-center shadow-float">
@@ -559,9 +615,17 @@ function EmptyState({ projectId, hasProject }: { projectId: string | null; hasPr
         {hasProject ? (
           <>
             <p className="mt-1.5 text-[13px] leading-relaxed text-bark-grey">
-              The knowledge graph builds itself as agents complete tasks — every task, run, agent and memory link becomes a
-              node you can explore here.
+              Build the knowledge graph from this project&apos;s full history — every task, run, agent and memory link
+              becomes a node you can explore. After that it keeps itself fresh as agents complete work.
             </p>
+            <button
+              onClick={onBuild}
+              disabled={building}
+              className="mx-auto mt-4 flex h-9 items-center gap-1.5 rounded-full bg-electric-indigo px-4 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              <Boxes className={`size-4 ${building ? "animate-pulse" : ""}`} strokeWidth={2} />
+              {building ? "Building…" : "Build knowledge graph"}
+            </button>
             {projectId && (
               <p className="mt-3 break-all rounded-lg bg-code-surface px-3 py-2 font-mono text-[11px] text-pebble">
                 ~/.nexotao/graph/{projectId}/work.json
