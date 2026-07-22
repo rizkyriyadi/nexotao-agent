@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  Scissors, LayoutGrid, Columns3, Boxes, Bot, Settings, CircleHelp, Inbox as InboxIcon, Share2, Store,
+  Scissors, LayoutGrid, Columns3, Boxes, Bot, Settings, CircleHelp, Inbox as InboxIcon, Share2, Store, Users,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "./ui/tooltip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "./ui/dialog";
@@ -14,6 +14,7 @@ import { useInboxSignal } from "./inbox/useInboxSignal";
 const NAV = [
   { id: "home", href: "/", label: "Overview", icon: LayoutGrid },
   { id: "board", href: "/board", label: "Control Panel", icon: Columns3 },
+  { id: "team-room", href: "/team-room", label: "Live Team Room", icon: Users },
   { id: "inbox", href: "/inbox", label: "Approval Inbox", icon: InboxIcon },
   { id: "agents", href: "/agents", label: "Agents", icon: Bot },
   { id: "marketplace", href: "/marketplace", label: "Marketplace", icon: Store },
