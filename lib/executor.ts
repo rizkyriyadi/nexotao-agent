@@ -134,7 +134,19 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     const workspaceManager = new GitWorkspaceManager(repositories);
     const run = createRun(runId, undefined, { kind: "orchestrator", title: issue.title, projectId });
     let eventWrites = Promise.resolve();
+    // Adapters report cumulative token usage per thread; track the max per thread
+    // so the settled ledger row reflects the run's true total without double
+    // counting the incremental updates.
+    const usageByThread = new Map<string, { inputTokens: number; outputTokens: number }>();
     const stopMirroring = run.subscribe((event) => {
+      if (event.type === "usage") {
+        const key = event.thread ?? "main";
+        const prev = usageByThread.get(key) ?? { inputTokens: 0, outputTokens: 0 };
+        usageByThread.set(key, {
+          inputTokens: Math.max(prev.inputTokens, event.inputTokens || 0),
+          outputTokens: Math.max(prev.outputTokens, event.outputTokens || 0),
+        });
+      }
       const durable = durableEvent(event);
       if (!durable) return;
       eventWrites = eventWrites.then(() => heartbeat.emit(durable[0], durable[1])).catch((error) => {
@@ -225,6 +237,12 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
       await eventWrites;
       stopMirroring();
       heartbeat.signal.removeEventListener("abort", cancel);
+      // Settle the run's usage onto the cost ledger. Idempotent per runId, so a
+      // retry that reuses this runId overwrites rather than double-counts.
+      if (usageByThread.size) {
+        const usage = [...usageByThread.values()].map((tokens) => ({ model, ...tokens }));
+        await repositories.settleRunCost({ runId, agentId: agent.id, usage }).catch(() => {});
+      }
     }
     await onIssueFinished(projectId, issue, agent, mode, result, true);
 }

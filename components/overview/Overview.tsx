@@ -8,6 +8,16 @@ import { agentPP } from "@/lib/avatars";
 type Project = { id: string; name: string; path: string; mode: "single" | "multi"; agents: { name: string; scope: string }[] } | null;
 type Session = { id: string; title: string; updatedAt: number; count: number };
 type Task = { id: string; col: string };
+type Usage = { spend: number; inputTokens: number; outputTokens: number; budget: number | null } | null;
+
+function usd(amount: number) {
+  return `$${amount.toFixed(amount >= 1 ? 2 : 4)}`;
+}
+function compactTokens(count: number) {
+  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  if (count >= 1_000) return `${(count / 1_000).toFixed(1)}K`;
+  return String(count);
+}
 
 
 function ago(ts: number) {
@@ -28,15 +38,18 @@ export function Overview() {
   const [model, setModel] = useState("");
   const [sessions, setSessions] = useState<Session[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [usage, setUsage] = useState<Usage>(null);
 
   useEffect(() => {
     fetch("/api/config").then((r) => r.json()).then((d) => { setProject(d.project); setModel(d.model ?? ""); });
     fetch("/api/sessions").then((r) => r.json()).then((d) => setSessions(d.sessions ?? []));
     fetch("/api/tasks").then((r) => r.json()).then((d) => setTasks(d.tasks ?? []));
+    fetch("/api/usage").then((r) => r.json()).then((d) => setUsage(d.usage ?? null)).catch(() => {});
   }, []);
 
   const doneTasks = tasks.filter((t) => t.col === "done").length;
   const taskPct = tasks.length ? Math.round((doneTasks / tasks.length) * 100) : 0;
+  const budgetPct = usage?.budget ? Math.round((usage.spend / usage.budget) * 100) : 0;
   const isMulti = project?.mode === "multi";
   const agents = project?.agents ?? [];
 
@@ -111,6 +124,18 @@ export function Overview() {
               <div className="border-l border-line pl-5"><p className="label !text-[10px]">Tasks done</p><p className="mt-1 text-[26px] font-semibold leading-none text-charcoal">{doneTasks}/{tasks.length}</p></div>
             </div>
             <div className="mt-5 grid grid-cols-2 gap-3"><Bar pct={sessions.length ? 100 : 0} /><Bar pct={taskPct} tone="lavender" /></div>
+            {usage && (
+              <div className="mt-5 border-t border-line pt-4">
+                <div className="flex items-baseline justify-between">
+                  <p className="label !text-[10px]">Spend</p>
+                  <p className="font-mono text-[11px] text-pebble">{compactTokens(usage.inputTokens + usage.outputTokens)} tok</p>
+                </div>
+                <p className="mt-1 text-[26px] font-semibold leading-none text-charcoal">
+                  {usd(usage.spend)}{usage.budget ? <span className="text-[13px] font-normal text-pebble"> / {usd(usage.budget)}</span> : null}
+                </p>
+                {usage.budget ? <div className="mt-3"><Bar pct={budgetPct} tone={budgetPct >= 80 ? "lavender" : "indigo"} /></div> : null}
+              </div>
+            )}
           </div>
         </div>
 
