@@ -9,7 +9,9 @@ import initSqlJs from "sql.js/dist/sql-asm.js";
 const DATABASE_NAME = "nexotao.sqlite";
 const LEGACY_FILES = ["projects.json", "sessions.json", "tasks.json", "agent-runs.json", "runs.json", "agents.json", "issues.json"] as const;
 
-const migrations = [{
+export type Migration = { version: number; name: string; sql: string };
+
+export const migrations: Migration[] = [{
   version: 1,
   name: "control-plane-foundation",
   sql: `
@@ -147,6 +149,27 @@ CREATE UNIQUE INDEX IF NOT EXISTS approvals_run_tool_uq ON approvals(run_id, too
 `,
 }];
 
+// Applies pending migrations, each in its own IMMEDIATE transaction so a failing
+// migration rolls back atomically and leaves the schema at its last good version.
+// Throws on the first failure without closing the connection so callers can inspect
+// (or discard) the rolled-back database.
+export function applyMigrations(raw: Database, list: Migration[] = migrations): void {
+  raw.run("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)");
+  const applied = new Set((raw.exec("SELECT version FROM schema_migrations")[0]?.values ?? []).map((row) => Number(row[0])));
+  for (const migration of list) {
+    if (applied.has(migration.version)) continue;
+    raw.run("BEGIN IMMEDIATE");
+    try {
+      raw.run(migration.sql);
+      raw.run("INSERT INTO schema_migrations VALUES (?, ?, ?)", [migration.version, migration.name, Date.now()]);
+      raw.run("COMMIT");
+    } catch (error) {
+      raw.run("ROLLBACK");
+      throw error;
+    }
+  }
+}
+
 export class AppDatabase {
   readonly orm: SQLJsDatabase<typeof schema>;
   private queue: Promise<unknown> = Promise.resolve();
@@ -233,14 +256,8 @@ export async function openDatabase(file = path.join(DIR, DATABASE_NAME), options
   try { bytes = await fs.readFile(file); } catch {}
   const raw = bytes ? new SQL.Database(bytes) : new SQL.Database();
   raw.run("PRAGMA foreign_keys = ON");
-  raw.run("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at INTEGER NOT NULL)");
-  const applied = new Set((raw.exec("SELECT version FROM schema_migrations")[0]?.values ?? []).map((row) => Number(row[0])));
-  for (const migration of migrations) {
-    if (applied.has(migration.version)) continue;
-    raw.run("BEGIN IMMEDIATE");
-    try { raw.run(migration.sql); raw.run("INSERT INTO schema_migrations VALUES (?, ?, ?)", [migration.version, migration.name, Date.now()]); raw.run("COMMIT"); }
-    catch (error) { raw.run("ROLLBACK"); raw.close(); throw error; }
-  }
+  try { applyMigrations(raw, migrations); }
+  catch (error) { raw.close(); throw error; }
   if (options.migrateJson !== false) await migrateLegacyJson(raw, path.dirname(file));
   await persist(raw, file);
   return new AppDatabase(raw, file);
