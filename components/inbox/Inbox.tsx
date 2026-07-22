@@ -2,17 +2,16 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { AlertTriangle, Check, Clock3, ExternalLink, ShieldAlert, WalletCards, X } from "lucide-react";
+import { AlertTriangle, Check, Clock3, ExternalLink, ShieldAlert, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
 type InboxData = {
   approvals: Array<{ id: string; action: string | null; target: string | null; risk: string | null; preview: string | null; issue: string | null; href: string; createdAt: number }>;
   issues: Array<{ id: string; identifier: string; title: string; status: string; priority: string; href: string; updatedAt: number }>;
   runs: Array<{ id: string; status: string; error: string | null; href: string; startedAt: number }>;
-  budgets: Array<{ id: string; name: string; spent: number; limit: number; ratio: number; href: string }>;
 };
 
-const empty: InboxData = { approvals: [], issues: [], runs: [], budgets: [] };
+const empty: InboxData = { approvals: [], issues: [], runs: [] };
 
 export function InboxPage() {
   const [data, setData] = useState<InboxData>(empty);
@@ -25,7 +24,7 @@ export function InboxPage() {
     await load();
     setBusy(null);
   };
-  const total = data.approvals.length + data.issues.length + data.runs.length + data.budgets.length;
+  const total = data.approvals.length + data.issues.length + data.runs.length;
 
   return <main className="scroll-thin min-w-0 flex-1 overflow-y-auto p-6 lg:p-8">
     <div className="mx-auto max-w-5xl">
@@ -38,10 +37,9 @@ export function InboxPage() {
           <div className="mt-3 flex justify-end gap-2"><Button variant="outline" size="sm" disabled={busy === item.id} onClick={() => void decide(item.id, "deny")}><X className="mr-1 size-3.5" />Deny</Button><Button size="sm" disabled={busy === item.id} onClick={() => void decide(item.id, "allow")}><Check className="mr-1 size-3.5" />Allow once</Button></div>
         </article>)}
       </Section>
-      <div className="mt-6 grid gap-6 lg:grid-cols-3">
+      <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <Section title="Tasks" count={data.issues.length} icon={<AlertTriangle className="size-4" />}>{data.issues.map((item) => <Row key={item.id} href={item.href} title={`${item.identifier} · ${item.title}`} meta={`${item.status.replace("_", " ")} · ${item.priority}`} />)}</Section>
         <Section title="Failed or stale runs" count={data.runs.length} icon={<Clock3 className="size-4" />}>{data.runs.map((item) => <Row key={item.id} href={item.href} title={item.status} meta={item.error || item.id.slice(0, 8)} />)}</Section>
-        <Section title="Budget warnings" count={data.budgets.length} icon={<WalletCards className="size-4" />}>{data.budgets.map((item) => <Row key={item.id} href={item.href} title={item.name} meta={`$${item.spent.toFixed(2)} / $${item.limit.toFixed(2)} · ${Math.round(item.ratio * 100)}%`} />)}</Section>
       </div>
     </div>
   </main>;

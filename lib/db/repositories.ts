@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./database";
 import {
-  activityLog, agents, approvals, costEvents, documentRevisions, documents, gitWorkspaces, heartbeatRuns,
+  activityLog, agents, approvals, documentRevisions, documents, gitWorkspaces, heartbeatRuns,
   issueComments, issueDependencies, issueDocuments, issues, runEvents, wakeupRequests,
 } from "./schema";
 import { IssueDomainError, IssueLifecycleService } from "../issue-lifecycle";
@@ -10,7 +10,6 @@ import {
   isTerminalRunEvent, publishRunEvent, RunEventDomainError, sanitizeRunEventPayload,
   type DurableRunEvent,
 } from "../run-events";
-import { budgetStatus, crossedThresholds, settleUsage, type RunUsage } from "../cost-ledger";
 
 export type NewAgent = typeof agents.$inferInsert;
 export type AgentRow = typeof agents.$inferSelect;
@@ -190,12 +189,6 @@ export class ControlPlaneRepositories {
       for (const candidate of candidates) {
         const agent = db.select().from(agents).where(eq(agents.id, candidate.agentId)).get();
         if (!agent || ["paused", "error", "terminated"].includes(agent.status)) continue;
-        // Spent-at-or-above budget defers new wakeups: the request stays queued
-        // (recoverable if the budget is raised) but is never claimed while the
-        // agent is over budget.
-        const agentSpend = db.select().from(costEvents).where(eq(costEvents.agentId, candidate.agentId)).all()
-          .reduce((total, row) => total + row.cost, 0);
-        if (budgetStatus(agentSpend, agent.budgetLimit).exhausted) continue;
         const concurrency = Math.max(1, agent.concurrency);
         const active = db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.agentId, candidate.agentId), inArray(heartbeatRuns.status, ["running", "waiting"]))).all().length;
         if (active >= concurrency) continue;
@@ -350,115 +343,6 @@ export class ControlPlaneRepositories {
   }
   listProjectApprovals(projectId: string, status?: string) {
     return this.database.read((db) => db.select().from(approvals).where(and(eq(approvals.projectId, projectId), status ? eq(approvals.status, status) : undefined)).orderBy(asc(approvals.createdAt)).all());
-  }
-  addCost(input: Omit<typeof costEvents.$inferInsert, "id" | "createdAt">) {
-    const row = { id: randomUUID(), createdAt: Date.now(), ...input };
-    return this.database.write((db) => { db.insert(costEvents).values(row).run(); return row; });
-  }
-  /** Persist the settled cost of a heartbeat run and reconcile the agent's
-   * budget. Idempotent per run: re-settling the same runId (e.g. after a retry
-   * that reuses the runId) replaces that run's ledger rows instead of appending,
-   * so retry chains never double-count. Emits one deduplicated warning event per
-   * newly crossed threshold and a budget.exhausted event at the hard limit. */
-  settleRunCost(input: { runId: string; agentId: string; usage: RunUsage[] }) {
-    return this.database.write((db) => {
-      const now = Date.now();
-      const agent = db.select().from(agents).where(eq(agents.id, input.agentId)).get();
-      if (!agent) throw new IssueDomainError("not_found", `Agent ${input.agentId} not found`);
-      // Spend attributable to every other run — the baseline this run adds to.
-      const others = db.select().from(costEvents).where(eq(costEvents.agentId, input.agentId)).all()
-        .filter((row) => row.runId !== input.runId);
-      const baseline = others.reduce((total, row) => total + row.cost, 0);
-      // Replace prior rows for this run so a re-settle is a pure overwrite.
-      db.delete(costEvents).where(eq(costEvents.runId, input.runId)).run();
-      const settled = settleUsage(input.usage);
-      for (const row of settled) {
-        db.insert(costEvents).values({
-          id: randomUUID(), runId: input.runId, agentId: input.agentId, model: row.model,
-          inputTokens: row.inputTokens, outputTokens: row.outputTokens, cost: row.cost, createdAt: now,
-        }).run();
-      }
-      const runCost = settled.reduce((total, row) => total + row.cost, 0);
-      const totalSpend = baseline + runCost;
-      db.update(agents).set({ spentAmount: totalSpend, updatedAt: now }).where(eq(agents.id, input.agentId)).run();
-      const crossings = this.emitBudgetWarnings(db, agent, baseline, totalSpend, input.runId, now);
-      const status = budgetStatus(totalSpend, agent.budgetLimit);
-      return { runCost, totalSpend, crossings, exhausted: status.exhausted, status };
-    });
-  }
-  /** Deduplicated budget-warning / budget-exhausted events. Each threshold (and
-   * the hard-stop marker 1.0) is recorded at most once per agent by checking the
-   * activity log, so concurrent or replayed settlements never duplicate. */
-  private emitBudgetWarnings(
-    db: Parameters<Parameters<AppDatabase["write"]>[0]>[0], agent: AgentRow,
-    previousSpend: number, newSpend: number, runId: string, now: number,
-  ) {
-    const limit = agent.budgetLimit;
-    if (limit === null || !Number.isFinite(limit) || limit <= 0) return [] as number[];
-    const emitted = new Set<number>(
-      db.select().from(activityLog)
-        .where(and(eq(activityLog.entityType, "agent"), eq(activityLog.entityId, agent.id))).all()
-        .filter((event) => event.action === "budget.warning" || event.action === "budget.exhausted")
-        .map((event) => (event.summary as { threshold?: number } | null)?.threshold)
-        .filter((threshold): threshold is number => typeof threshold === "number"),
-    );
-    const marks = [...crossedThresholds(previousSpend, newSpend, limit)];
-    if (budgetStatus(newSpend, limit).exhausted) marks.push(1);
-    const fresh: number[] = [];
-    for (const threshold of marks) {
-      if (emitted.has(threshold)) continue;
-      emitted.add(threshold);
-      fresh.push(threshold);
-      db.insert(activityLog).values({
-        id: randomUUID(), actorType: "system", actorId: null,
-        action: threshold >= 1 ? "budget.exhausted" : "budget.warning",
-        entityType: "agent", entityId: agent.id,
-        summary: { threshold, spent: newSpend, limit, runId }, runId, createdAt: now,
-      }).run();
-    }
-    return fresh;
-  }
-  /** Ledger-derived spend for an agent (source of truth for budget checks). */
-  agentSpend(agentId: string) {
-    return this.database.read((db) =>
-      db.select().from(costEvents).where(eq(costEvents.agentId, agentId)).all()
-        .reduce((total, row) => total + row.cost, 0));
-  }
-  /** Budget status for an agent, spend derived from the ledger. */
-  agentBudgetStatus(agentId: string) {
-    return this.database.read((db) => {
-      const agent = db.select().from(agents).where(eq(agents.id, agentId)).get();
-      if (!agent) return null;
-      const spend = db.select().from(costEvents).where(eq(costEvents.agentId, agentId)).all()
-        .reduce((total, row) => total + row.cost, 0);
-      return budgetStatus(spend, agent.budgetLimit);
-    });
-  }
-  agentBudgetExhausted(agentId: string) {
-    return this.agentBudgetStatus(agentId)?.exhausted ?? false;
-  }
-  /** Project-wide usage totals derived from the ledger (Dashboard surface). */
-  projectUsage(projectId: string) {
-    return this.database.read((db) => {
-      const roster = db.select().from(agents).where(eq(agents.projectId, projectId)).all();
-      const ids = new Set(roster.map((agent) => agent.id));
-      const rows = roster.length
-        ? db.select().from(costEvents).where(inArray(costEvents.agentId, [...ids])).all()
-        : [];
-      const spend = rows.reduce((total, row) => total + row.cost, 0);
-      const inputTokens = rows.reduce((total, row) => total + row.inputTokens, 0);
-      const outputTokens = rows.reduce((total, row) => total + row.outputTokens, 0);
-      const budget = roster.reduce((total, agent) => total + (agent.budgetLimit ?? 0), 0);
-      return {
-        spend, inputTokens, outputTokens, events: rows.length,
-        budget: budget > 0 ? budget : null,
-        agents: roster.map((agent) => {
-          const agentRows = rows.filter((row) => row.agentId === agent.id);
-          const agentSpend = agentRows.reduce((total, row) => total + row.cost, 0);
-          return { id: agent.id, name: agent.name, ...budgetStatus(agentSpend, agent.budgetLimit) };
-        }),
-      };
-    });
   }
   appendActivity(input: Omit<typeof activityLog.$inferInsert, "id" | "createdAt">) {
     const row = { id: randomUUID(), createdAt: Date.now(), ...input };

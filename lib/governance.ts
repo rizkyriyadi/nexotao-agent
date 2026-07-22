@@ -8,7 +8,7 @@
 import { and, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./db/database";
 import {
-  activityLog, agentConfigRevisions, agentRuns, agents, approvals, costEvents, documentRevisions,
+  activityLog, agentConfigRevisions, agentRuns, agents, approvals, documentRevisions,
   documents, gitWorkspaces, heartbeatRuns, issueComments, issueDependencies, issueDocuments,
   issueMutationRequests, issues, projects, runEvents, runRecords, sessions, tasks, wakeupRequests,
 } from "./db/schema";
@@ -19,13 +19,11 @@ const DAY_MS = 86_400_000;
 export type RetentionPolicy = { runEventDays?: number | null; auditDays?: number | null };
 
 // Audit actions that are load-bearing for other invariants and must survive
-// retention regardless of age. Budget threshold markers gate one-shot warning
-// emission (see ControlPlaneRepositories.emitBudgetWarnings, which dedupes
-// against these rows) — pruning them would let a crossed threshold re-fire.
-export const INTEGRITY_REQUIRED_ACTIONS: ReadonlySet<string> = new Set([
-  "budget.warning",
-  "budget.exhausted",
-]);
+// retention regardless of age, even when older than the audit window. Empty for
+// now — no action currently gates another invariant — but the planner keeps
+// honoring this set so a future integrity-required action is protected as soon
+// as it is listed here.
+export const INTEGRITY_REQUIRED_ACTIONS: ReadonlySet<string> = new Set([]);
 
 function cutoff(now: number, days?: number | null): number | null {
   if (days === null || days === undefined || !Number.isFinite(days) || days <= 0) return null;
@@ -148,7 +146,6 @@ export function exportProjectData(database: AppDatabase, projectId: string, now 
       wakeupRequests: agentIds.length ? chunk(agentIds).flatMap((ids) => db.select().from(wakeupRequests).where(inArray(wakeupRequests.agentId, ids)).all()) : [],
       runEvents: runIds.length ? chunk(runIds).flatMap((ids) => db.select().from(runEvents).where(inArray(runEvents.runId, ids)).all()) : [],
       approvals: approvalRows,
-      costEvents: agentIds.length ? chunk(agentIds).flatMap((ids) => db.select().from(costEvents).where(inArray(costEvents.agentId, ids)).all()) : [],
       activity: activityIds.length ? chunk(activityIds).flatMap((ids) => db.select().from(activityLog).where(inArray(activityLog.entityId, ids)).all()) : [],
       gitWorkspaces: db.select().from(gitWorkspaces).where(eq(gitWorkspaces.projectId, projectId)).all(),
       sessions: db.select().from(sessions).where(eq(sessions.projectId, projectId)).all(),
@@ -184,8 +181,7 @@ export class DataControlError extends Error {
  * and are removed by hand to avoid orphans: `run_events` (keyed by run id, no
  * foreign key) and `documents`/`document_revisions` (only the join row cascades
  * from an issue). The append-only `activity_log` is deliberately RETAINED — it
- * is the durable audit trail, and budget markers within it remain integrity
- * required — so the outcome reports it under `retained`. */
+ * is the durable audit trail — so the outcome reports it under `retained`. */
 export async function deleteProjectData(
   database: AppDatabase,
   projectId: string,
@@ -221,7 +217,6 @@ export async function deleteProjectData(
       comments: inSet(issueIds, (ids) => db.select({ id: issueComments.id }).from(issueComments).where(inArray(issueComments.issueId, ids)).all()),
       dependencies: inSet(issueIds, (ids) => db.select({ id: issueDependencies.issueId }).from(issueDependencies).where(inArray(issueDependencies.issueId, ids)).all()),
       approvals: approvalRows.length,
-      costEvents: inSet(agentIds, (ids) => db.select({ id: costEvents.id }).from(costEvents).where(inArray(costEvents.agentId, ids)).all()),
       agentConfigRevisions: inSet(agentIds, (ids) => db.select({ id: agentConfigRevisions.id }).from(agentConfigRevisions).where(inArray(agentConfigRevisions.agentId, ids)).all()),
       wakeupRequests: inSet(agentIds, (ids) => db.select({ id: wakeupRequests.id }).from(wakeupRequests).where(inArray(wakeupRequests.agentId, ids)).all()),
       gitWorkspaces: db.select({ id: gitWorkspaces.id }).from(gitWorkspaces).where(eq(gitWorkspaces.projectId, projectId)).all().length,
@@ -237,8 +232,8 @@ export async function deleteProjectData(
     for (const ids of chunk(documentIds)) db.delete(documentRevisions).where(inArray(documentRevisions.documentId, ids)).run();
     for (const ids of chunk(documentIds)) db.delete(documents).where(inArray(documents.id, ids)).run();
     // Cascades the rest: agents, issues (+ links, comments, deps, mutation
-    // requests), heartbeat runs, wakeups, approvals, cost events, config
-    // revisions, git workspaces, sessions, tasks, agent runs, run records.
+    // requests), heartbeat runs, wakeups, approvals, config revisions, git
+    // workspaces, sessions, tasks, agent runs, run records.
     db.delete(projects).where(eq(projects.id, projectId)).run();
 
     return {
@@ -247,8 +242,7 @@ export async function deleteProjectData(
       deleted,
       retained: { activityLog: retainedActivity },
       integrityNote:
-        "Append-only audit activity is retained after deletion as the durable record of what happened; " +
-        "budget threshold markers within it stay integrity-required so warnings never re-fire. " +
+        "Append-only audit activity is retained after deletion as the durable record of what happened. " +
         "All other project records are removed, including redacted run events and document history.",
     } satisfies DeletionOutcome;
   });
@@ -261,8 +255,8 @@ function clipValue(value: unknown): unknown {
 
 /** Redacted, bounded before/after diff of an agent configuration change — the
  * safe summary that lets an audit entry show which fields moved (permissions,
- * budget, adapter config, …) without leaking a secret an adapter config or
- * permission map might hold. */
+ * adapter config, …) without leaking a secret an adapter config or permission
+ * map might hold. */
 export function configActivityDiff(before: Record<string, unknown>, after: Record<string, unknown>) {
   const fields: string[] = [];
   const beforeChanged: Record<string, unknown> = {};

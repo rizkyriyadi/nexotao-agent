@@ -2,22 +2,20 @@
    stable set of item ids, an unread count, and a human summary for notifications.
    Kept framework-free so it is unit-testable and reusable from the nav badge hook. */
 
-export type InboxItemKind = "approval" | "issue" | "run" | "budget";
+export type InboxItemKind = "approval" | "issue" | "run";
 
 export type InboxSnapshot = {
   approvals?: Array<{ id: string }>;
   issues?: Array<{ id: string }>;
   runs?: Array<{ id: string }>;
-  budgets?: Array<{ id: string }>;
 };
 
-const KINDS: InboxItemKind[] = ["approval", "issue", "run", "budget"];
+const KINDS: InboxItemKind[] = ["approval", "issue", "run"];
 
 const LABELS: Record<InboxItemKind, [string, string]> = {
   approval: ["approval", "approvals"],
   issue: ["task", "tasks"],
   run: ["run needs attention", "runs need attention"],
-  budget: ["budget alert", "budget alerts"],
 };
 
 /* Namespaced ids so the same underlying id in two sections can't collide. */
@@ -26,7 +24,6 @@ export function inboxItemIds(data: InboxSnapshot): string[] {
     ...(data.approvals ?? []).map((item) => `approval:${item.id}`),
     ...(data.issues ?? []).map((item) => `issue:${item.id}`),
     ...(data.runs ?? []).map((item) => `run:${item.id}`),
-    ...(data.budgets ?? []).map((item) => `budget:${item.id}`),
   ];
 }
 
@@ -53,7 +50,7 @@ export function kindOf(id: string): InboxItemKind | null {
 
 /* "2 approvals · 1 task" — a compact, pluralized summary of a set of item ids. */
 export function describeInboxItems(ids: string[]): string {
-  const counts: Record<InboxItemKind, number> = { approval: 0, issue: 0, run: 0, budget: 0 };
+  const counts: Record<InboxItemKind, number> = { approval: 0, issue: 0, run: 0 };
   for (const id of ids) {
     const kind = kindOf(id);
     if (kind) counts[kind] += 1;

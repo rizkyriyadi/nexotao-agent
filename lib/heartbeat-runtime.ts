@@ -109,21 +109,6 @@ export class DurableHeartbeatRuntime {
     }
   }
 
-  /** In-flight hard-stop policy: when an agent is at-or-above budget, cancel its
-   * currently executing heartbeats. Deterministic — runs are cancelled in id
-   * order — and a no-op under the "drain" policy, which lets in-flight work
-   * finish and relies on the claim-time gate to block the next wakeup. Returns
-   * the runIds that were cancelled. */
-  async enforceBudget(agentId: string, policy: "hard_stop" | "drain" = "hard_stop") {
-    if (policy === "drain" || !this.repositories.agentBudgetExhausted(agentId)) return [];
-    const cancelled: string[] = [];
-    for (const runId of [...this.active.keys()].sort()) {
-      if (this.repositories.getHeartbeat(runId)?.agentId !== agentId) continue;
-      if (await this.cancel(runId, "Budget exhausted")) cancelled.push(runId);
-    }
-    return cancelled;
-  }
-
   async retry(runId: string, availableAt: number, error?: string) {
     const requeued = await this.repositories.requeueHeartbeat(runId, availableAt, error);
     if (requeued) void this.drain();

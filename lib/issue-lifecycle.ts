@@ -284,6 +284,35 @@ export class IssueLifecycleService {
     });
   }
 
+  /**
+   * Reopen a finished (or paused) task so its assignee runs again on the same
+   * issue — this is how a follow-up message continues the conversation. A task
+   * already executing is left alone (the follow-up is picked up by the queued
+   * wakeup once the current run finishes). Optionally switches the run mode.
+   */
+  reopen(issueId: string, actor: IssueActor, runMode?: string, now = Date.now()) {
+    return this.database.write((db) => {
+      const issue = db.select().from(issues).where(eq(issues.id, issueId)).get();
+      if (!issue) throw new IssueDomainError("not_found", "Issue not found");
+      const unmet = hasUnmetBlockers(db, issue.id);
+      const target = unmet ? "blocked" : "todo";
+      const modePatch = runMode ? { runMode } : {};
+      // Already running or queued — just update the mode and let the pending
+      // wakeup carry the follow-up through.
+      if (issue.status === "in_progress" || issue.status === "todo" || issue.status === "blocked") {
+        db.update(issues).set({ ...modePatch, updatedAt: now }).where(eq(issues.id, issue.id)).run();
+        return db.select().from(issues).where(eq(issues.id, issue.id)).get()!;
+      }
+      db.update(issues).set({
+        ...modePatch, status: target, checkoutRunId: null, executionLockedAt: null,
+        completedAt: null, cancelledAt: null, updatedAt: now,
+      }).where(eq(issues.id, issue.id)).run();
+      audit(db, { actor, action: "issue.reopened", issueId, summary: { from: issue.status, to: target }, now });
+      // The caller (executor.tick) enqueues the wakeup for the now-runnable task.
+      return db.select().from(issues).where(eq(issues.id, issue.id)).get()!;
+    });
+  }
+
   recover(input: { staleAfterMs: number; now?: number; activeRunIds?: Iterable<string>; actor?: IssueActor }) {
     return this.database.write((db) => {
       const now = input.now ?? Date.now();

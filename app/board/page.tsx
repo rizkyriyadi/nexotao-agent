@@ -1,18 +1,15 @@
 import { AppShell } from "@/components/AppShell";
-import { OrchestratorProvider } from "@/components/orchestrator/orchestrator-context";
-import { Orchestrator } from "@/components/orchestrator/Orchestrator";
+import { ControlPanel } from "@/components/task/ControlPanel";
 
 export const dynamic = "force-dynamic";
 
 // The control panel is the single front door: the user prompts, picks a run
-// mode (Ask / Agent / Plan), and the lead takes it straight to work. A run stays
-// viewable here via ?goal=<id>.
+// mode (Ask / Agent / Plan), and each request becomes its own task with its own
+// page. Existing tasks are listed here for quick re-entry.
 export default function BoardPage() {
   return (
     <AppShell active="board">
-      <OrchestratorProvider>
-        <Orchestrator />
-      </OrchestratorProvider>
+      <ControlPanel />
     </AppShell>
   );
 }

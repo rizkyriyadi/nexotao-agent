@@ -12,7 +12,7 @@ const base = (name: string, role: "lead" | "worker", reportsTo: string | null = 
   name, role, reportsTo, title: role === "lead" ? "Team lead" : "Engineer", scope: "Build the product",
   capabilities: ["coding"], adapterType: "nexotao", adapterConfig: { model: "nexotao-test" },
   runtimeConfig: {}, permissions: { shell: true }, instructions: "Work carefully", projectAccess: ["p"],
-  concurrency: 2, budgetLimit: 10,
+  concurrency: 2,
 });
 
 test("agent configuration, hierarchy, revisions, lifecycle, and audit are durable", async () => {

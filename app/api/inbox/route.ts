@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const project = await getActiveProject();
-  if (!project) return NextResponse.json({ approvals: [], issues: [], runs: [], budgets: [] });
+  if (!project) return NextResponse.json({ approvals: [], issues: [], runs: [] });
   const database = await getDatabase();
   await expireInvalidExecutionApprovals(project.id, database);
   const now = Date.now();
@@ -46,9 +46,6 @@ export async function GET() {
           href: "/board",
         })),
       ],
-      budgets: projectAgents.filter((agent) => agent.budgetLimit !== null && agent.budgetLimit > 0 && agent.spentAmount >= agent.budgetLimit * 0.8).map((agent) => ({
-        id: agent.id, name: agent.name, spent: agent.spentAmount, limit: agent.budgetLimit!, ratio: agent.spentAmount / agent.budgetLimit!, href: `/agents?agent=${agent.id}`,
-      })),
     };
   });
   return NextResponse.json(data);

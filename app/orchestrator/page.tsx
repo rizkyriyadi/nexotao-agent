@@ -2,8 +2,9 @@ import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-// The orchestrator has been folded into the control panel (/board). Preserve any
-// deep link's goal/node so older links keep resolving to the live run.
+// The orchestrator has been retired in favour of a single-agent, task-centric
+// control panel (/board). Older deep links carried the run in ?goal=; forward
+// them to that task's own page.
 export default async function OrchestratorPage({
   searchParams,
 }: {
@@ -11,7 +12,5 @@ export default async function OrchestratorPage({
 }) {
   const sp = await searchParams;
   const goal = typeof sp.goal === "string" ? sp.goal : undefined;
-  const node = typeof sp.node === "string" ? sp.node : undefined;
-  if (!goal) redirect("/board");
-  redirect(`/board?goal=${goal}${node ? `&node=${node}` : ""}`);
+  redirect(goal ? `/board/${goal}` : "/board");
 }

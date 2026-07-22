@@ -13,15 +13,14 @@ import { Textarea } from "@/components/ui/textarea";
 type Status = "idle" | "queued" | "running" | "paused" | "error" | "terminated";
 type Run = { id: string; status: string; source: string; task: string | null; startedAt: number; finishedAt: number | null; error: string | null };
 type Revision = { id: string; revision: number; createdAt: number };
-type Cost = { id: string; model: string; inputTokens: number; outputTokens: number; cost: number; createdAt: number };
 type Agent = {
   id: string; name: string; role: "lead" | "worker"; title: string; scope: string; reportsTo: string | null; capabilities: string[];
   status: Status; adapterType: string; adapterConfig: Record<string, unknown>; runtimeConfig: Record<string, unknown>;
-  permissions: Record<string, unknown>; instructions: string; projectAccess: string[]; concurrency: number; budgetLimit: number | null;
-  spentAmount: number; pauseReason: string | null; errorReason: string | null; lastHeartbeatAt: number | null; currentTask: string | null;
-  currentRun: Run | null; lastTask: { id: string; title: string; status: string } | null; runs: Run[]; costs: Cost[]; revisions: Revision[];
+  permissions: Record<string, unknown>; instructions: string; projectAccess: string[]; concurrency: number;
+  pauseReason: string | null; errorReason: string | null; lastHeartbeatAt: number | null; currentTask: string | null;
+  currentRun: Run | null; lastTask: { id: string; title: string; status: string } | null; runs: Run[]; revisions: Revision[];
 };
-type FormState = { name: string; title: string; scope: string; instructions: string; capabilities: string; adapterType: string; model: string; concurrency: string; permissions: string; projectAccess: string; budgetLimit: string };
+type FormState = { name: string; title: string; scope: string; instructions: string; capabilities: string; adapterType: string; model: string; concurrency: string; permissions: string; projectAccess: string };
 
 const statusStyle: Record<Status, string> = {
   idle: "bg-line text-bark-grey", queued: "bg-mist-lavender text-deep-violet", running: "bg-mist-lavender text-deep-violet",
@@ -39,7 +38,7 @@ function blank(agent?: Agent): FormState {
   return { name: agent?.name ?? "", title: agent?.title ?? "Specialist", scope: agent?.scope ?? "", instructions: agent?.instructions ?? "",
     capabilities: agent?.capabilities.join(", ") ?? "", adapterType: agent?.adapterType ?? "nexotao", model: String(agent?.adapterConfig.model ?? ""),
     concurrency: String(agent?.concurrency ?? 1), permissions: JSON.stringify(agent?.permissions ?? {}, null, 2),
-    projectAccess: agent?.projectAccess.join(", ") ?? "", budgetLimit: agent?.budgetLimit == null ? "" : String(agent.budgetLimit) };
+    projectAccess: agent?.projectAccess.join(", ") ?? "" };
 }
 
 export function AgentsPage() {
@@ -88,7 +87,6 @@ export function AgentsPage() {
         capabilities: form.capabilities.split(",").map((item) => item.trim()).filter(Boolean), adapterType: form.adapterType,
         adapterConfig: { ...(editing ? selected.adapterConfig : {}), model: form.model }, runtimeConfig: editing ? selected.runtimeConfig : {},
         permissions, projectAccess: form.projectAccess.split(",").map((item) => item.trim()).filter(Boolean), concurrency: Number(form.concurrency),
-        budgetLimit: form.budgetLimit === "" ? null : Number(form.budgetLimit),
       };
       const response = await fetch("/api/agents", { method: editing ? "PATCH" : "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       const data = await response.json();
@@ -120,7 +118,7 @@ export function AgentsPage() {
         {loading ? <p className="p-4 text-[13px] text-pebble">Loading roster…</p> : agents.length === 0 ? <Empty text="No agents configured" icon /> : agents.map((agent, index) =>
           <button key={agent.id} onClick={() => setSelectedId(agent.id)} className={`mb-2 w-full rounded-2xl border p-3 text-left ${selectedId === agent.id ? "border-electric-indigo bg-electric-indigo/[0.04]" : "border-line hover:border-line-strong"}`}>
             <div className="flex items-center gap-3"><img src={agentPP(index)} alt="" className="size-9 rounded-xl object-cover" /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-[13.5px] font-medium">{agent.name}</span><StatusPill status={agent.status} /></div><p className="truncate text-[11.5px] text-bark-grey">{agent.currentTask ?? agent.title ?? agent.scope}</p></div></div>
-            <div className="mt-2 flex justify-between pl-12 font-mono text-[10px] text-pebble"><span>{ago(agent.lastHeartbeatAt)}</span><span>{"$"}{agent.spentAmount.toFixed(2)}</span></div>
+            <div className="mt-2 flex justify-between pl-12 font-mono text-[10px] text-pebble"><span>{ago(agent.lastHeartbeatAt)}</span><span className="capitalize">{agent.status}</span></div>
           </button>)}
       </div>
       <div className="border-t border-line p-3"><Button className="w-full" variant="outline" onClick={() => { setForm(blank()); setDialog("create"); }} disabled={!lead}><Plus /> Add specialist</Button></div>
@@ -132,10 +130,10 @@ export function AgentsPage() {
           <img src={agentPP(Math.max(0, agents.indexOf(selected)))} alt="" className="size-9 rounded-xl object-cover" /><div><div className="flex items-center gap-2"><h2 className="text-[16px] font-medium">{selected.name}</h2><StatusPill status={selected.status} /></div><p className="text-[12px] text-bark-grey">{selected.title || (selected.role === "lead" ? "Lead" : "Specialist")}</p></div>
           <div className="ml-auto flex gap-2"><Button size="sm" variant="outline" onClick={() => void load()}><RefreshCw /> Refresh</Button><Button size="sm" variant="outline" onClick={() => { setForm(blank(selected)); setDialog("edit"); }} disabled={selected.status === "terminated"}><Settings2 /> Edit</Button></div>
         </header>
-        <Tabs defaultValue="overview"><div className="border-b border-line px-6"><TabsList>{["overview", "instructions", "runtime", "permissions", "runs", "costs"].map((tab) => <TabsTrigger key={tab} value={tab} className="capitalize">{tab}</TabsTrigger>)}</TabsList></div>
+        <Tabs defaultValue="overview"><div className="border-b border-line px-6"><TabsList>{["overview", "instructions", "runtime", "permissions", "runs"].map((tab) => <TabsTrigger key={tab} value={tab} className="capitalize">{tab}</TabsTrigger>)}</TabsList></div>
           <div className="mx-auto max-w-5xl p-6">
             <TabsContent value="overview" className="space-y-5">
-              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="Status" value={selected.status} /><Metric label="Current task" value={selected.currentTask ?? "None"} /><Metric label="Last heartbeat" value={ago(selected.lastHeartbeatAt)} /><Metric label="Spend" value={`$${selected.spentAmount.toFixed(2)}`} /></div>
+              <div className="grid gap-3 sm:grid-cols-3"><Metric label="Status" value={selected.status} /><Metric label="Current task" value={selected.currentTask ?? "None"} /><Metric label="Last heartbeat" value={ago(selected.lastHeartbeatAt)} /></div>
               {selected.errorReason && <div className="flex gap-3 rounded-xl border border-red-100 bg-red-50 p-4 text-[13px] text-alarm-red"><AlertTriangle className="size-4" />{selected.errorReason}</div>}
               <Card title="Identity & hierarchy"><Details rows={[["Role", selected.role === "lead" ? "Lead" : "Specialist"], ["Reports to", agents.find((item) => item.id === selected.reportsTo)?.name ?? "—"], ["Title", selected.title || "—"], ["Scope", selected.scope || "—"], ["Capabilities", selected.capabilities.join(", ") || "—"]]} /></Card>
               <Card title="Configuration history">{selected.revisions.length ? <div className="space-y-2">{selected.revisions.slice(0, 8).map((revision) => <div key={revision.id} className="flex items-center justify-between rounded-xl border border-line px-3 py-2"><span className="text-[12.5px]">Revision {revision.revision} · {ago(revision.createdAt)}</span><Button size="sm" variant="ghost" disabled={busy !== null || selected.status === "terminated"} onClick={() => void action("restore_revision", { revision: revision.revision })}><RotateCcw /> Restore</Button></div>)}</div> : <Empty text="No revisions yet" />}</Card>
@@ -154,7 +152,6 @@ export function AgentsPage() {
             </TabsContent>
             <TabsContent value="permissions" className="space-y-5"><Card title="Permissions"><JsonBlock value={selected.permissions} /></Card><Card title="Project access"><p className="text-[13px] text-bark-grey">{selected.projectAccess.join(", ") || "No explicit projects"}</p></Card></TabsContent>
             <TabsContent value="runs"><Card title="Heartbeat runs">{selected.runs.length ? <div className="space-y-2">{selected.runs.map((run) => <div key={run.id} className="flex gap-3 rounded-xl border border-line p-3">{run.status === "failed" ? <XCircle className="size-4 text-alarm-red" /> : <Clock className="size-4 text-electric-indigo" />}<div><p className="text-[13px] font-medium">{run.task ?? "Agent heartbeat"}</p><p className="font-mono text-[10px] text-pebble">{run.status} · {ago(run.startedAt)} · {run.source}</p>{run.error && <p className="text-[12px] text-alarm-red">{run.error}</p>}</div></div>)}</div> : <Empty text="No runs yet" />}</Card></TabsContent>
-            <TabsContent value="costs" className="space-y-5"><div className="grid gap-3 sm:grid-cols-3"><Metric label="Total spend" value={`$${selected.spentAmount.toFixed(4)}`} /><Metric label="Budget" value={selected.budgetLimit == null ? "Unlimited" : `$${selected.budgetLimit.toFixed(2)}`} /><Metric label="Events" value={String(selected.costs.length)} /></div><Card title="Cost events">{selected.costs.length ? selected.costs.map((cost) => <div key={cost.id} className="mb-2 flex items-center rounded-xl border border-line p-3 text-[12px]"><span className="flex-1">{cost.model}</span><span className="mr-4 font-mono text-pebble">{cost.inputTokens + cost.outputTokens} tokens</span><span className="font-mono">{"$"}{cost.cost.toFixed(4)}</span></div>) : <Empty text="No cost events yet" />}</Card></TabsContent>
           </div>
         </Tabs></>}
     </main>
@@ -165,8 +162,8 @@ export function AgentsPage() {
         <Field label="Name"><Input value={form.name} onChange={(e) => set("name", e.target.value)} /></Field><Field label="Title"><Input value={form.title} onChange={(e) => set("title", e.target.value)} /></Field>
         <Field label="Scope" wide><Textarea value={form.scope} onChange={(e) => set("scope", e.target.value)} /></Field><Field label="Capabilities" wide><Input placeholder="coding, review" value={form.capabilities} onChange={(e) => set("capabilities", e.target.value)} /></Field>
         <Field label="Adapter"><Input value={form.adapterType} onChange={(e) => set("adapterType", e.target.value)} /></Field><Field label="Model"><Input value={form.model} onChange={(e) => set("model", e.target.value)} /></Field>
-        <Field label="Concurrency"><Input type="number" min="1" max="20" value={form.concurrency} onChange={(e) => set("concurrency", e.target.value)} /></Field><Field label="Budget limit"><Input type="number" min="0" value={form.budgetLimit} onChange={(e) => set("budgetLimit", e.target.value)} /></Field>
-        <Field label="Project access" wide><Input value={form.projectAccess} onChange={(e) => set("projectAccess", e.target.value)} /></Field><Field label="Permissions (JSON)" wide><Textarea className="min-h-28 font-mono text-[11px]" value={form.permissions} onChange={(e) => set("permissions", e.target.value)} /></Field>
+        <Field label="Concurrency"><Input type="number" min="1" max="20" value={form.concurrency} onChange={(e) => set("concurrency", e.target.value)} /></Field><Field label="Project access"><Input value={form.projectAccess} onChange={(e) => set("projectAccess", e.target.value)} /></Field>
+        <Field label="Permissions (JSON)" wide><Textarea className="min-h-28 font-mono text-[11px]" value={form.permissions} onChange={(e) => set("permissions", e.target.value)} /></Field>
         <Field label="Instructions" wide><Textarea className="min-h-36" value={form.instructions} onChange={(e) => set("instructions", e.target.value)} /></Field>
       </div><DialogFooter><Button variant="outline" onClick={() => setDialog(null)}>Cancel</Button><Button onClick={() => void save()} disabled={busy !== null}>{busy === "save" ? "Saving…" : "Save agent"}</Button></DialogFooter>
     </DialogContent></Dialog>

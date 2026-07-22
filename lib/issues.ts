@@ -111,6 +111,13 @@ export async function updateIssue(
   }
   return getIssue(id);
 }
+export async function reopenIssue(id: string, actor: IssueActor = { type: "user" }, runMode?: RunMode): Promise<Issue | null> {
+  const database = await getDatabase();
+  const before = await getIssue(id);
+  if (!before) return null;
+  const row = await new IssueLifecycleService(database).reopen(id, actor, runMode);
+  return (await hydrate([row]))[0];
+}
 export async function claimIssue(id: string, agentId: string, runId: string): Promise<Issue | null> {
   const database = await getDatabase();
   try {

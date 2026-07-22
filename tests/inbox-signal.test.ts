@@ -13,7 +13,6 @@ const snapshot = {
   approvals: [{ id: "a1" }, { id: "a2" }],
   issues: [{ id: "i1" }],
   runs: [{ id: "r1" }],
-  budgets: [] as Array<{ id: string }>,
 };
 
 test("item ids are namespaced by section and counted across all sections", () => {
@@ -42,7 +41,8 @@ test("newlyArrived reports items absent on the previous poll", () => {
 
 test("kindOf recognizes known sections and rejects unknown", () => {
   assert.equal(kindOf("approval:a1"), "approval");
-  assert.equal(kindOf("budget:b1"), "budget");
+  assert.equal(kindOf("run:r1"), "run");
+  assert.equal(kindOf("budget:b1"), null);
   assert.equal(kindOf("mystery:z"), null);
 });
 
@@ -52,6 +52,5 @@ test("describeInboxItems produces a compact pluralized summary in section order"
     "2 approvals · 1 task",
   );
   assert.equal(describeInboxItems(["run:r1"]), "1 run needs attention");
-  assert.equal(describeInboxItems(["budget:b1", "budget:b2"]), "2 budget alerts");
   assert.equal(describeInboxItems([]), "");
 });

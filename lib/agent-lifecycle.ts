@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./db/database";
 import {
-  activityLog, agentConfigRevisions, agents, costEvents, heartbeatRuns, issues,
+  activityLog, agentConfigRevisions, agents, heartbeatRuns, issues,
 } from "./db/schema";
 import { configActivityDiff } from "./governance";
 
@@ -24,7 +24,6 @@ export type AgentConfigInput = {
   instructions: string;
   projectAccess: string[];
   concurrency: number;
-  budgetLimit: number | null;
 };
 export type AgentEffects = {
   invoke(input: { agentId: string; issueId: string; eventId: string }): Promise<unknown>;
@@ -47,7 +46,6 @@ function validateConfig(input: AgentConfigInput) {
   if (!input.name.trim() || input.name.length > 80) throw new AgentLifecycleError("invalid", "Name must be between 1 and 80 characters");
   if (input.title.length > 120 || input.scope.length > 2_000 || input.instructions.length > 50_000) throw new AgentLifecycleError("invalid", "Agent text fields exceed their allowed length");
   if (!Number.isInteger(input.concurrency) || input.concurrency < 1 || input.concurrency > 20) throw new AgentLifecycleError("invalid", "Concurrency must be an integer between 1 and 20");
-  if (input.budgetLimit !== null && (!Number.isFinite(input.budgetLimit) || input.budgetLimit < 0)) throw new AgentLifecycleError("invalid", "Budget must be zero or greater");
 }
 
 function snapshot(row: typeof agents.$inferSelect): AgentConfigInput {
@@ -55,7 +53,7 @@ function snapshot(row: typeof agents.$inferSelect): AgentConfigInput {
     name: row.name, role: row.role, title: row.title, scope: row.scope, reportsTo: row.reportsTo,
     capabilities: row.capabilities, adapterType: row.adapterType, adapterConfig: row.adapterConfig,
     runtimeConfig: row.runtimeConfig, permissions: row.permissions, instructions: row.instructions,
-    projectAccess: row.projectAccess, concurrency: row.concurrency, budgetLimit: row.budgetLimit,
+    projectAccess: row.projectAccess, concurrency: row.concurrency,
   };
 }
 
@@ -89,18 +87,16 @@ export class AgentLifecycleService {
         const latestRun = runs[0] ?? null;
         const derived = currentRun ? statusFromHeartbeat(currentRun.status) : null;
         const status = (["paused", "error", "terminated"].includes(agent.status) ? agent.status : derived ?? agent.status) as AgentStatus;
-        const costs = db.select().from(costEvents).where(eq(costEvents.agentId, agent.id)).orderBy(desc(costEvents.createdAt)).all();
-        const spend = costs.reduce((total, event) => total + event.cost, 0) || agent.spentAmount;
         const revisions = db.select().from(agentConfigRevisions).where(eq(agentConfigRevisions.agentId, agent.id)).orderBy(desc(agentConfigRevisions.revision)).all();
         const activity = db.select().from(activityLog).where(and(eq(activityLog.entityType, "agent"), eq(activityLog.entityId, agent.id))).orderBy(desc(activityLog.createdAt)).all();
         const runDetails = runs.map((run) => ({ ...run, task: projectIssues.find((issue) => issue.id === run.issueId)?.title ?? null }));
         const latestTask = [...projectIssues].filter((issue) => issue.assigneeAgentId === agent.id).sort((a, b) => b.updatedAt - a.updatedAt)[0] ?? null;
         return {
-          ...agent, status, spentAmount: spend, currentRun: currentRun ? { ...currentRun, task: projectIssues.find((issue) => issue.id === currentRun.issueId)?.title ?? null } : null,
+          ...agent, status, currentRun: currentRun ? { ...currentRun, task: projectIssues.find((issue) => issue.id === currentRun.issueId)?.title ?? null } : null,
           currentTask: currentRun ? projectIssues.find((issue) => issue.id === currentRun.issueId)?.title ?? null : null,
           lastTask: latestTask ? { id: latestTask.id, title: latestTask.title, status: latestTask.status } : null,
           lastHeartbeatAt: latestRun?.updatedAt ?? latestRun?.startedAt ?? agent.lastHeartbeatAt,
-          runs: runDetails, costs, revisions, activity,
+          runs: runDetails, revisions, activity,
         };
       });
     });
@@ -125,7 +121,7 @@ export class AgentLifecycleService {
           throw new AgentLifecycleError("invalid", "Specialists must report to the active lead");
         }
         const now = Date.now();
-        const row: typeof agents.$inferInsert = { id: randomUUID(), projectId, ...input, reportsTo, status: "idle", spentAmount: 0, createdAt: now, updatedAt: now };
+        const row: typeof agents.$inferInsert = { id: randomUUID(), projectId, ...input, reportsTo, status: "idle", createdAt: now, updatedAt: now };
         db.insert(agents).values(row).run();
         const created = db.select().from(agents).where(eq(agents.id, row.id)).get()!;
         revisionRow(db, created, actor, now);
@@ -161,8 +157,8 @@ export class AgentLifecycleService {
       db.update(agents).set({ ...merged, updatedAt: now }).where(eq(agents.id, id)).run();
       const updated = db.select().from(agents).where(eq(agents.id, id)).get()!;
       const revision = revisionRow(db, updated, actor, now);
-      // Redacted before/after diff — surfaces permission, budget, and adapter
-      // config changes in the audit trail without ever persisting a secret.
+      // Redacted before/after diff — surfaces permission and adapter config
+      // changes in the audit trail without ever persisting a secret.
       auditRow(db, id, "agent.config_updated", { revision, ...configActivityDiff(before, snapshot(updated)) }, actor, now);
       return updated;
     });

@@ -1,8 +1,15 @@
-import { redirect } from "next/navigation";
+import { AppShell } from "@/components/AppShell";
+import { TaskView } from "@/components/task/TaskView";
 
-// Issue detail is now the live run view inside the control panel. Any deep link
-// to an issue (inbox, overview, notifications) opens that run.
-export default async function IssueDetailPage({ params }: { params: Promise<{ id: string }> }) {
+export const dynamic = "force-dynamic";
+
+// Each task has its own page: the conversation thread with the lead, the full
+// run history and transcript, and a composer to keep the conversation going.
+export default async function TaskPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  redirect(`/board?goal=${id}`);
+  return (
+    <AppShell active="board">
+      <TaskView id={id} />
+    </AppShell>
+  );
 }

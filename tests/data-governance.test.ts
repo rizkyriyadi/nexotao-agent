@@ -21,7 +21,7 @@ const config = (name: string, role: "lead" | "worker", reportsTo: string | null 
   name, role, reportsTo, title: "Engineer", scope: "Build", capabilities: ["coding"],
   adapterType: "nexotao", adapterConfig: { model: "nexotao-test", apiKey: SECRET },
   runtimeConfig: {}, permissions: { shell: false }, instructions: "Work carefully",
-  projectAccess: ["p"], concurrency: 1, budgetLimit: 10,
+  projectAccess: ["p"], concurrency: 1,
 });
 
 async function fixture() {
@@ -40,7 +40,7 @@ test("planRetention is deterministic and never prunes integrity-required audit r
   ];
   const activity = [
     { id: "a3", action: "issue.assigned", createdAt: now - 40 * DAY },
-    { id: "a1", action: "budget.exhausted", createdAt: now - 90 * DAY },
+    { id: "a1", action: "agent.config_updated", createdAt: now - 90 * DAY },
     { id: "a2", action: "agent.config_updated", createdAt: now - 1 * DAY },
   ];
   const policy = { runEventDays: 30, auditDays: 30 };
@@ -49,10 +49,12 @@ test("planRetention is deterministic and never prunes integrity-required audit r
   assert.deepEqual(first, second, "same inputs must produce the same plan");
   // Only the two old events are pruned, sorted deterministically.
   assert.deepEqual(first.runEvents, [{ runId: "run-a", seq: 1 }, { runId: "run-b", seq: 2 }]);
-  // Old ordinary audit row pruned; budget marker kept for integrity.
-  assert.deepEqual(first.activity, ["a3"]);
-  assert.equal(first.keptForIntegrity, 1);
-  assert.ok(INTEGRITY_REQUIRED_ACTIONS.has("budget.exhausted"));
+  // Both old audit rows pruned (sorted by id); the recent row survives.
+  assert.deepEqual(first.activity, ["a1", "a3"]);
+  assert.equal(first.keptForIntegrity, 0);
+  // No action currently gates another invariant, but the planner still honors
+  // the integrity set so a future entry would be protected.
+  assert.equal(INTEGRITY_REQUIRED_ACTIONS.size, 0);
 
   // A null / zero window keeps everything.
   const keepAll = planRetention({ now, policy: { runEventDays: null, auditDays: 0 }, runEvents: runEventRows, activity });
@@ -64,16 +66,15 @@ test("config-change audit records a redacted before/after summary without secret
   try {
     const service = new AgentLifecycleService(database);
     const agent = await service.create("p", config("Builder", "lead"));
-    // Change permissions, budget, and adapter config (which carries a secret).
-    await service.update(agent.id, { permissions: { shell: true }, budgetLimit: 25, adapterConfig: { model: "nexotao-2", apiKey: SECRET } });
+    // Change permissions and adapter config (which carries a secret).
+    await service.update(agent.id, { permissions: { shell: true }, adapterConfig: { model: "nexotao-2", apiKey: SECRET } });
 
     const rows = database.read((db) => db.select().from(activityLog).where(eq(activityLog.entityId, agent.id)).all());
     const updated = rows.find((row) => row.action === "agent.config_updated");
     assert.ok(updated, "config update must be audited");
     const summary = updated!.summary as { fields: string[]; before: Record<string, unknown>; after: Record<string, unknown> };
     assert.ok(summary.fields.includes("permissions"), "permission changes are surfaced");
-    assert.ok(summary.fields.includes("budgetLimit"), "budget changes are surfaced");
-    assert.deepEqual(summary.after.budgetLimit, 25);
+    assert.ok(summary.fields.includes("adapterConfig"), "adapter config changes are surfaced");
     // The secret must be masked everywhere in the audit summary.
     assert.ok(!JSON.stringify(summary).includes(SECRET), "no secret in the audit summary");
     assert.ok(!JSON.stringify(rows).includes(SECRET), "no secret anywhere in the activity feed");
@@ -84,10 +85,10 @@ test("config-change audit records a redacted before/after summary without secret
 });
 
 test("configActivityDiff only reports changed fields and redacts secret-shaped values", () => {
-  const before = { permissions: { shell: false }, budgetLimit: 10, adapterConfig: { apiKey: SECRET } };
-  const after = { permissions: { shell: true }, budgetLimit: 10, adapterConfig: { apiKey: SECRET } };
+  const before = { permissions: { shell: false }, concurrency: 1, adapterConfig: { apiKey: SECRET } };
+  const after = { permissions: { shell: true }, concurrency: 1, adapterConfig: { apiKey: SECRET } };
   const diff = configActivityDiff(before, after);
-  assert.deepEqual(diff.fields, ["permissions"], "unchanged budget/adapter are omitted");
+  assert.deepEqual(diff.fields, ["permissions"], "unchanged concurrency/adapter are omitted");
   assert.ok(!JSON.stringify(diff).includes(SECRET));
 });
 
@@ -126,18 +127,18 @@ test("retention prunes redacted events and old audit rows while keeping run inte
       db.insert(runEvents).values({ runId: "run-1", seq: 1, type: "tool", redactedPayload: { a: 1 }, createdAt: now - 60 * DAY }).run();
       db.insert(runEvents).values({ runId: "run-1", seq: 2, type: "success", redactedPayload: { a: 2 }, createdAt: now - 1 * DAY }).run();
       db.insert(activityLog).values({ id: "old", actorType: "system", actorId: null, action: "issue.assigned", entityType: "issue", entityId: "i", summary: {}, runId: null, createdAt: now - 60 * DAY }).run();
-      db.insert(activityLog).values({ id: "budget", actorType: "system", actorId: null, action: "budget.warning", entityType: "agent", entityId: "a", summary: { threshold: 0.5 }, runId: null, createdAt: now - 60 * DAY }).run();
+      db.insert(activityLog).values({ id: "recent", actorType: "system", actorId: null, action: "agent.config_updated", entityType: "agent", entityId: "a", summary: {}, runId: null, createdAt: now - 1 * DAY }).run();
     });
 
     const outcome = await applyRetention(database, { runEventDays: 30, auditDays: 30 }, now);
     assert.equal(outcome.removedRunEvents, 1);
     assert.equal(outcome.removedActivity, 1);
-    assert.equal(outcome.keptForIntegrity, 1);
+    assert.equal(outcome.keptForIntegrity, 0);
 
     const remainingEvents = database.read((db) => db.select().from(runEvents).all());
     assert.deepEqual(remainingEvents.map((row) => row.seq), [2], "recent event survives, old one pruned");
     const remainingAudit = database.read((db) => db.select().from(activityLog).all().map((row) => row.id));
-    assert.ok(remainingAudit.includes("budget"), "budget marker kept for integrity");
+    assert.ok(remainingAudit.includes("recent"), "recent audit row survives");
     assert.ok(!remainingAudit.includes("old"), "stale ordinary audit row pruned");
 
     // Re-running with the same clock is a no-op — deterministic and idempotent.

@@ -6,7 +6,7 @@ import { getActiveProject } from "@/lib/store";
 export const runtime = "nodejs";
 
 // Project-scoped append-only activity feed for sensitive mutations (assignment,
-// checkout, status, approval, budget, permission, agent-config). Summaries are
+// checkout, status, approval, permission, agent-config). Summaries are
 // redacted at write time; this endpoint only reads them back.
 export async function GET(request: Request) {
   const active = await getActiveProject();

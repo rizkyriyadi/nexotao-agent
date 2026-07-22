@@ -29,7 +29,6 @@ test("control-plane records survive a database restart", async () => {
     assert.equal(sameWakeup.id, firstWakeup.id);
     await repositories.appendRunEvent({ runId: "run-1", seq: 1, type: "status", redactedPayload: { status: "done" }, createdAt: 8 });
     await repositories.createApproval({ type: "shell", issueId: "issue-1", runId: "run-1", payload: { command: "npm test" }, status: "approved" });
-    await repositories.addCost({ runId: "run-1", agentId: "agent-1", model: "model", inputTokens: 10, outputTokens: 5, cost: 0.01 });
     await repositories.appendActivity({ actorType: "agent", actorId: "agent-1", action: "completed", entityType: "issue", entityId: "issue-1", summary: { status: "done" }, runId: "run-1" });
     await database.close();
 

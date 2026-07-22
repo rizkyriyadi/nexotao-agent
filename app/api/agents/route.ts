@@ -47,7 +47,6 @@ function configInput(body: Record<string, unknown>, leadId: string | null): Agen
     adapterConfig: objectField(body, "adapterConfig"), runtimeConfig: objectField(body, "runtimeConfig"),
     permissions: objectField(body, "permissions"), instructions: stringField(body, "instructions", { max: 50_000 }) ?? "",
     projectAccess: stringsField(body, "projectAccess"), concurrency: numberField(body, "concurrency", 1)!,
-    budgetLimit: numberField(body, "budgetLimit", null),
   };
 }
 
@@ -85,7 +84,7 @@ export async function PATCH(req: Request) {
       name: current.name, role: current.role, title: current.title, scope: current.scope, reportsTo: current.reportsTo,
       capabilities: current.capabilities, adapterType: current.adapterType, adapterConfig: current.adapterConfig,
       runtimeConfig: current.runtimeConfig, permissions: current.permissions, instructions: current.instructions,
-      projectAccess: current.projectAccess, concurrency: current.concurrency, budgetLimit: current.budgetLimit,
+      projectAccess: current.projectAccess, concurrency: current.concurrency,
       ...body,
     }, current.reportsTo);
     const agent = await service.update(id, full);

@@ -5,18 +5,17 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   KeyRound, FolderOpen, Sparkles, Check, ArrowRight, ArrowLeft, Folder, Lock,
-  Users, Loader2, RotateCw, X, Cpu, ChevronUp,
+  Loader2, Cpu, ChevronUp,
 } from "lucide-react";
-import { agentPP } from "@/lib/avatars";
+import { LEAD_PP } from "@/lib/avatars";
 import { Wordmark } from "@/components/ui";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
-const STEPS = ["Connect", "Model", "Project", "Team"];
+const STEPS = ["Connect", "Model", "Project"];
 
 type Model = { id: string; name: string; ctx: number | null };
-type Agent = { name: string; scope: string };
 
 export function OnboardingFlow() {
   const router = useRouter();
@@ -28,18 +27,12 @@ export function OnboardingFlow() {
   const [modelsLoading, setModelsLoading] = useState(true);
 
   const [choice, setChoice] = useState<"open" | "fresh" | null>(null);
-  const [path, setPath] = useState("");
   const [name, setName] = useState("my-app");
   const [browsePath, setBrowsePath] = useState("");
   const [parent, setParent] = useState<string | null>(null);
   const [dirs, setDirs] = useState<{ name: string; path: string }[]>([]);
   const [browseLoading, setBrowseLoading] = useState(false);
 
-  // Default to a single lead agent (Hutao). Adding specialists is optional.
-  const [mode, setMode] = useState<"single" | "multi" | null>("single");
-  const [agents, setAgents] = useState<Agent[]>([]);
-  const [agentsLoading, setAgentsLoading] = useState(false);
-  const [agentSource, setAgentSource] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
   const projectName = choice === "fresh" ? name : browsePath.split("/").filter(Boolean).pop() || "project";
@@ -67,30 +60,10 @@ export function OnboardingFlow() {
       setBrowsePath(d.path);
       setParent(d.parent);
       setDirs(d.dirs ?? []);
-      setPath(d.path);
     } catch {
       /* ignore */
     } finally {
       setBrowseLoading(false);
-    }
-  }
-
-  async function loadAgents() {
-    setMode("multi");
-    setAgentsLoading(true);
-    try {
-      const r = await fetch("/api/recommend-agents", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: projectName, path: projectPath, apiKey, model }),
-      });
-      const d = await r.json();
-      setAgents(d.agents ?? []);
-      setAgentSource(d.source ?? "");
-    } catch {
-      toast.error("Couldn't reach Nexotao — using defaults.");
-    } finally {
-      setAgentsLoading(false);
     }
   }
 
@@ -104,7 +77,7 @@ export function OnboardingFlow() {
           apiKey,
           model,
           onboarded: true,
-          project: { name: projectName, path: projectPath, mode: mode ?? "single", agents: mode === "multi" ? agents : [] },
+          project: { name: projectName, path: projectPath, mode: "single", agents: [] },
         }),
       });
       router.push("/");
@@ -298,89 +271,20 @@ export function OnboardingFlow() {
                   <p className="mt-2 font-mono text-[12px] text-pebble">~/code/{name || "…"}</p>
                 </div>
               )}
+              <p className="mt-4 flex items-start gap-1.5 text-[12.5px] leading-relaxed text-bark-grey">
+                <img src={LEAD_PP} alt="Hutao" className="size-7 shrink-0 rounded-lg object-cover" />
+                <span>
+                  Your workspace starts with one lead agent, <span className="font-medium text-charcoal">Hutao</span>, who
+                  handles every request end-to-end. You can add specialists later from the Agents page.
+                </span>
+              </p>
               <div className="mt-6 flex items-center justify-between">
                 <Button variant="ghost" size="sm" onClick={() => setStep(1)}><ArrowLeft className="size-4" /> Back</Button>
                 <Button
                   size="sm"
-                  onClick={() => choice && setStep(3)}
-                  className={cn((!choice || (choice === "open" && !browsePath)) && "pointer-events-none opacity-50")}
+                  onClick={finish}
+                  className={cn((!choice || (choice === "open" && !browsePath) || saving) && "pointer-events-none opacity-50")}
                 >
-                  Continue <ArrowRight className="size-4" />
-                </Button>
-              </div>
-            </>
-          )}
-
-          {/* Step 3 — team */}
-          {step === 3 && (
-            <>
-              <div className="mb-1 flex items-center gap-2">
-                <Users className="size-[18px] text-charcoal" />
-                <h2 className="text-[15px] font-medium text-charcoal">How should <span className="font-mono">{projectName}</span> work?</h2>
-              </div>
-              <p className="mb-4 text-[13px] leading-relaxed text-bark-grey">
-                You start with one lead agent, <span className="font-medium text-charcoal">Hutao</span>. Adding specialists is optional — you can do it anytime.
-              </p>
-              <div className="grid grid-cols-2 gap-3">
-                <button onClick={() => { setMode("single"); setAgents([]); }} className={cn("relative rounded-2xl border p-4 text-left transition-colors", mode === "single" ? "border-electric-indigo bg-electric-indigo/[0.05]" : "border-line hover:border-line-strong")}>
-                  <span className="absolute right-3 top-3 rounded-full bg-mist-lavender px-2 py-0.5 text-[10px] font-medium text-electric-indigo">Default</span>
-                  <img src={agentPP(0)} alt="Hutao" className="size-8 rounded-xl object-cover" />
-                  <p className="mt-2.5 text-[14px] font-medium text-charcoal">Just Hutao (lead)</p>
-                  <p className="mt-0.5 text-[12.5px] leading-snug text-bark-grey">One lead handles every request end-to-end. Simple &amp; cheap.</p>
-                </button>
-                <button onClick={loadAgents} className={cn("rounded-2xl border p-4 text-left transition-colors", mode === "multi" ? "border-electric-indigo bg-electric-indigo/[0.05]" : "border-line hover:border-line-strong")}>
-                  <Users className="size-5 text-electric-indigo" />
-                  <p className="mt-2.5 text-[14px] font-medium text-charcoal">Add specialists</p>
-                  <p className="mt-0.5 text-[12.5px] leading-snug text-bark-grey">Hutao leads a team of specialists for bigger projects.</p>
-                </button>
-              </div>
-
-              {mode === "multi" && (
-                <div className="mt-4">
-                  <div className="mb-2 flex items-center justify-between">
-                    <p className="label">
-                      Recommended agents {agentSource === "ai" && <span className="text-electric-indigo">· AI-generated</span>}
-                    </p>
-                    <button onClick={loadAgents} disabled={agentsLoading} className="flex items-center gap-1 text-[12px] text-sapphire-link hover:underline disabled:opacity-50">
-                      <RotateCw className={cn("size-3.5", agentsLoading && "animate-spin")} /> Regenerate
-                    </button>
-                  </div>
-                  {agentsLoading ? (
-                    <div className="rounded-xl border border-line px-3.5 py-3.5">
-                      <div className="flex items-center gap-2 text-[13px] text-bark-grey">
-                        <Loader2 className="size-4 animate-spin text-electric-indigo" /> AI is designing a team for <span className="font-mono text-charcoal">{projectName}</span>…
-                      </div>
-                      <div className="mt-2.5 space-y-1.5">
-                        {[0, 1, 2].map((i) => (
-                          <div key={i} className="h-[42px] animate-pulse rounded-xl bg-black/[0.045]" style={{ animationDelay: `${i * 120}ms` }} />
-                        ))}
-                      </div>
-                      <button onClick={finish} className="mt-2.5 text-[12px] text-sapphire-link hover:underline">
-                        Skip & open workspace →
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="space-y-1.5">
-                      {agents.map((a, i) => (
-                        <div key={i} className="flex items-center gap-2.5 rounded-xl border border-line px-3.5 py-2.5">
-                          <img src={agentPP(i)} alt={a.name} className="size-7 shrink-0 rounded-lg object-cover" />
-                          <span className="min-w-0 flex-1">
-                            <span className="block text-[13.5px] font-medium text-charcoal">{a.name}</span>
-                            <span className="block truncate text-[12px] text-bark-grey">{a.scope}</span>
-                          </span>
-                          <button onClick={() => setAgents((xs) => xs.filter((_, j) => j !== i))} className="text-pebble hover:text-charcoal">
-                            <X className="size-4" />
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="mt-6 flex items-center justify-between">
-                <Button variant="ghost" size="sm" onClick={() => setStep(2)}><ArrowLeft className="size-4" /> Back</Button>
-                <Button size="sm" onClick={finish} className={cn((!mode || saving) && "pointer-events-none opacity-50")}>
                   {saving ? <Loader2 className="size-4 animate-spin" /> : <>Open workspace <ArrowRight className="size-4" /></>}
                 </Button>
               </div>

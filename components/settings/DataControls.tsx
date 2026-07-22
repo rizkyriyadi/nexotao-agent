@@ -70,7 +70,7 @@ export function DataControls() {
       <div className="flex items-center justify-between gap-6">
         <div className="min-w-0">
           <p className="text-[14px] text-charcoal">Retention window</p>
-          <p className="mt-0.5 text-[13px] leading-relaxed text-bark-grey">Days to keep redacted run events and audit activity. Blank = keep forever. Budget markers are always kept.</p>
+          <p className="mt-0.5 text-[13px] leading-relaxed text-bark-grey">Days to keep redacted run events and audit activity. Blank = keep forever.</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <input type="number" min={0} placeholder="events" aria-label="Run event retention days" value={daysValue(retention.runEventDays)}

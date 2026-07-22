@@ -41,7 +41,7 @@ export function ActiveRunIndicator() {
 
   const jump = (run: RunSummary) => {
     setExpanded(false);
-    router.push(`/board?goal=${run.rootId}&node=${run.liveNodeId}`);
+    router.push(`/board/${run.rootId}`);
   };
 
   const top = runs[0];

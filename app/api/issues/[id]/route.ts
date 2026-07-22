@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import { and, asc, desc, eq, inArray } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { getDatabase } from "@/lib/db/database";
 import { resolveExecutionApproval } from "@/lib/execution-policy";
 import { ControlPlaneRepositories } from "@/lib/db/repositories";
 import {
-  approvals, costEvents, documentRevisions, heartbeatRuns, issueDocuments,
+  approvals, documentRevisions, heartbeatRuns, issueDocuments,
 } from "@/lib/db/schema";
 import { createIssue, getIssue, listAgents, listIssues } from "@/lib/issues";
 import { getActiveProject } from "@/lib/store";
@@ -34,10 +34,6 @@ export async function GET(_request: Request, context: Context) {
     const revision = db.select().from(documentRevisions).where(eq(documentRevisions.documentId, link.documentId)).orderBy(desc(documentRevisions.revision)).get();
     return { key: link.key, ...revision };
   }));
-  const runIds = runs.map((run) => run.id);
-  const usage = runIds.length
-    ? database.read((db) => db.select().from(costEvents).where(inArray(costEvents.runId, runIds)).orderBy(asc(costEvents.createdAt)).all())
-    : [];
   const branch = await fs.readFile(path.join(project.path, ".git", "HEAD"), "utf8")
     .then((head) => head.trim().replace(/^ref: refs\/heads\//, ""))
     .catch(() => null);
@@ -55,7 +51,6 @@ export async function GET(_request: Request, context: Context) {
     approvals: approvalRows,
     runs,
     activity,
-    usage,
   });
 }
 
