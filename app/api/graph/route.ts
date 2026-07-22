@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getActiveProject } from "@/lib/store";
 import { readProjectGraph } from "@/lib/graph-data";
+import { detectGraphify, refreshCodeGraph } from "@/lib/graphify-code";
+import { expandHome } from "@/lib/paths";
 
 export const runtime = "nodejs";
 
@@ -21,4 +23,22 @@ export async function GET() {
     edges: graph.edges,
     generatedAt: graph.generatedAt ?? null,
   });
+}
+
+// On-demand rebuild of the optional graphify code graph (Phase 5 / NEXA-32).
+// Explicit user action only — never runs on the hot path. A clean no-op when the
+// `graphify` CLI is not installed: reports availability so the UI can hint at the
+// opt-in `pip install` without ever installing anything itself.
+export async function POST() {
+  const project = await getActiveProject();
+  if (!project) {
+    return NextResponse.json({ ok: false, available: false, error: "No active project." }, { status: 400 });
+  }
+  const available = await detectGraphify();
+  if (!available) {
+    return NextResponse.json({ ok: true, available: false, nodes: 0, message: "graphify CLI not found; code graph skipped." });
+  }
+  const root = expandHome(project.path || process.cwd());
+  const nodes = await refreshCodeGraph(project.id, root, { autoInstall: false });
+  return NextResponse.json({ ok: true, available: true, nodes });
 }

@@ -53,6 +53,16 @@ export function workGraphPath(projectId: string): string {
   return path.join(graphDir(), projectId, "work.json");
 }
 
+/**
+ * Path to one project's optional code graph (Phase 5 / NEXA-32). Written by the
+ * graphify bridge (lib/graphify-code.ts) when the user has the `graphify` CLI on
+ * PATH; absent otherwise. Same location the UI reader (lib/graph-data.ts) loads
+ * from, so `graph_query`/`path`/`explain` and the /graph page see one code graph.
+ */
+export function codeGraphPath(projectId: string): string {
+  return path.join(graphDir(), projectId, "graphify-out", "graph.json");
+}
+
 // ---------------------------------------------------------------------------
 // Build side (Phase 1 / NEXA-28) — construct work.json from the live SQLite
 // store. Pure TS over the lib/store.ts boundary; no Python, no new dependency.
@@ -378,7 +388,24 @@ async function readGraphFile(file: string): Promise<WorkGraph | null> {
  * functional and simply report "graph is empty" rather than erroring.
  */
 export async function loadWorkGraph(projectId?: string): Promise<WorkGraph> {
-  if (projectId) return (await readGraphFile(workGraphPath(projectId))) ?? EMPTY;
+  const nodes = new Map<string, GraphNode>();
+  const edges = new Map<string, GraphEdge>();
+  const absorb = (g: WorkGraph | null) => {
+    if (!g) return;
+    for (const n of g.nodes) if (!nodes.has(n.id)) nodes.set(n.id, n);
+    for (const e of g.edges) edges.set(`${e.from} ${e.rel} ${e.to}`, e);
+  };
+  // Each project contributes its work-history graph plus, when present, its
+  // optional graphify code graph (Phase 5) — merged so code + history query as one.
+  const absorbProject = async (id: string) => {
+    absorb(await readGraphFile(workGraphPath(id)));
+    absorb(await readGraphFile(codeGraphPath(id)));
+  };
+
+  if (projectId) {
+    await absorbProject(projectId);
+    return { nodes: [...nodes.values()], edges: [...edges.values()] };
+  }
 
   let dirs: string[];
   try {
@@ -387,14 +414,7 @@ export async function loadWorkGraph(projectId?: string): Promise<WorkGraph> {
   } catch {
     return EMPTY;
   }
-  const nodes = new Map<string, GraphNode>();
-  const edges = new Map<string, GraphEdge>();
-  for (const d of dirs) {
-    const g = await readGraphFile(path.join(graphDir(), d, "work.json"));
-    if (!g) continue;
-    for (const n of g.nodes) if (!nodes.has(n.id)) nodes.set(n.id, n);
-    for (const e of g.edges) edges.set(`${e.from} ${e.rel} ${e.to}`, e);
-  }
+  for (const d of dirs) await absorbProject(d);
   return { nodes: [...nodes.values()], edges: [...edges.values()] };
 }
 

@@ -231,7 +231,7 @@ export async function executeTool(
   }
 }
 
-function runCommand(command: string, root: string, signal?: AbortSignal): Promise<{ code: number; output: string }> {
+export function runCommand(command: string, root: string, signal?: AbortSignal, timeoutMs = 60_000): Promise<{ code: number; output: string }> {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
     const child = spawn(command, { cwd: root, shell: true, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
@@ -244,7 +244,7 @@ function runCommand(command: string, root: string, signal?: AbortSignal): Promis
       if (!child.pid) return;
       try { process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch {} }
     };
-    const timer = setTimeout(stop, 60_000);
+    const timer = setTimeout(stop, timeoutMs);
     const abort = () => stop();
     signal?.addEventListener("abort", abort, { once: true });
     child.once("error", (error) => { if (!settled) { settled = true; clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(error); } });
