@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
-  AlertTriangle, Columns3, List, Loader2, Plus, RefreshCw, Search, WifiOff,
+  Columns3, List, Loader2, Lock, Plus, RefreshCw, Search, UserPlus, WifiOff,
 } from "lucide-react";
 import { toast } from "sonner";
-import { boardSurface } from "@/lib/task-ui-state";
+import { boardSurface, dependencyState } from "@/lib/task-ui-state";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../ui/dialog";
@@ -83,7 +83,11 @@ export function TaskBoard() {
 
   const agentName = (id: string | null) => agents.find((agent) => agent.id === id)?.name ?? "Unassigned";
   const surface = boardSurface(connection, filtered.length);
-  const attention = issues.filter((issue) => issue.status === "blocked" || (!issue.assigneeAgentId && issue.status !== "done")).length;
+  const byId = useMemo(() => new Map(issues.map((issue) => [issue.id, issue])), [issues]);
+  // Resolve each card's blockers to their live statuses so "blocked" is derived, not guessed.
+  const depOf = useCallback((issue: Issue) => dependencyState(issue.blockedBy.map((id) => byId.get(id)?.status ?? "todo")), [byId]);
+  const blockedCount = issues.filter((issue) => issue.status === "blocked" || depOf(issue).isBlocked).length;
+  const unassignedCount = issues.filter((issue) => !issue.assigneeAgentId && issue.status !== "done" && issue.status !== "cancelled").length;
 
   async function transition(id: string, nextStatus: IssueStatus) {
     const previous = issues;
@@ -127,34 +131,49 @@ export function TaskBoard() {
     } finally { setCreating(false); }
   }
 
-  const card = (issue: Issue) => (
-    <button
-      key={issue.id}
-      draggable
-      onDragStart={() => setDragging(issue.id)}
-      onDragEnd={() => setDragging(null)}
-      onClick={() => router.push("/board/" + issue.id)}
-      className={"group w-full rounded-xl border bg-paper-white p-3.5 text-left shadow-sm transition " + (dragging === issue.id ? "border-electric-indigo opacity-50" : "border-line hover:border-line-strong")}
-    >
-      <div className="mb-2 flex items-center gap-2">
-        <span className="font-mono text-[11px] text-pebble">{issue.ref}</span>
-        <span className={"rounded px-1.5 py-0.5 text-[10px] font-medium " + (issue.priority === "urgent" ? "bg-red-50 text-alarm-red" : "bg-code-surface text-bark-grey")}>{issue.priority}</span>
-        {(issue.status === "blocked" || (!issue.assigneeAgentId && issue.status !== "done")) && <AlertTriangle className="ml-auto size-3.5 text-alarm-red" />}
-      </div>
-      <p className="text-[13.5px] leading-snug text-charcoal">{issue.title}</p>
-      <div className="mt-3 flex items-center justify-between text-[11px] text-pebble">
-        <span>{agentName(issue.assigneeAgentId)}</span>
-        {issue.blockedBy.length > 0 && <span>{issue.blockedBy.length} blocker{issue.blockedBy.length === 1 ? "" : "s"}</span>}
-      </div>
-    </button>
-  );
+  const card = (issue: Issue) => {
+    const dep = depOf(issue);
+    const blocked = issue.status === "blocked" || dep.isBlocked;
+    const unassigned = !issue.assigneeAgentId && issue.status !== "done" && issue.status !== "cancelled";
+    // Name the issues we're waiting on so "on what" is answerable without opening the card.
+    const openRefs = issue.blockedBy.map((id) => byId.get(id)).filter((b): b is Issue => Boolean(b) && b!.status !== "done").map((b) => b.ref);
+    return (
+      <button
+        key={issue.id}
+        draggable
+        onDragStart={() => setDragging(issue.id)}
+        onDragEnd={() => setDragging(null)}
+        onClick={() => router.push("/board/" + issue.id)}
+        className={"group w-full rounded-xl border bg-paper-white p-3.5 text-left shadow-sm transition " + (dragging === issue.id ? "border-electric-indigo opacity-50" : blocked ? "border-amber-300 hover:border-amber-400" : "border-line hover:border-line-strong")}
+      >
+        <div className="mb-2 flex items-center gap-2">
+          <span className="font-mono text-[11px] text-pebble">{issue.ref}</span>
+          <span className={"rounded px-1.5 py-0.5 text-[10px] font-medium " + (issue.priority === "urgent" ? "bg-red-50 text-alarm-red" : "bg-code-surface text-bark-grey")}>{issue.priority}</span>
+          {blocked
+            ? <span className="ml-auto flex items-center gap-1 rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-800"><Lock className="size-3" aria-hidden />Blocked</span>
+            : unassigned && <span className="ml-auto flex items-center gap-1 text-[10px] font-medium text-pebble"><UserPlus className="size-3" aria-hidden />Unassigned</span>}
+        </div>
+        <p className="text-[13.5px] leading-snug text-charcoal">{issue.title}</p>
+        <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-pebble">
+          <span className="truncate">{agentName(issue.assigneeAgentId)}</span>
+          {dep.total > 0 && (
+            <span className={"flex shrink-0 items-center gap-1 " + (dep.open > 0 ? "text-amber-700" : "text-lichen-green")} title={dep.open > 0 ? "Waiting on " + openRefs.join(", ") : "All dependencies resolved"}>
+              {dep.open > 0
+                ? <>Waiting on {openRefs.slice(0, 2).join(", ")}{openRefs.length > 2 ? " +" + (openRefs.length - 2) : ""}</>
+                : <>{dep.total} dependenc{dep.total === 1 ? "y" : "ies"} clear</>}
+            </span>
+          )}
+        </div>
+      </button>
+    );
+  };
 
   return (
     <div className="relative flex h-full min-w-0 flex-1 flex-col">
       <header className="border-b border-line px-6 py-3">
         <div className="flex items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2"><h1 className="text-[15px] font-medium">Tasks</h1>{attention > 0 && <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-medium text-alarm-red">{attention} need attention</span>}</div>
+            <div className="flex items-center gap-2"><h1 className="text-[15px] font-medium">Tasks</h1>{blockedCount > 0 && <span className="flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800"><Lock className="size-3" aria-hidden />{blockedCount} blocked</span>}{unassignedCount > 0 && <span className="rounded-full bg-code-surface px-2 py-0.5 text-[10px] font-medium text-bark-grey">{unassignedCount} unassigned</span>}</div>
             <p className="font-mono text-[11px] text-pebble">{issues.length} canonical issues</p>
           </div>
           <div className="flex items-center gap-2">
@@ -207,7 +226,7 @@ export function TaskBoard() {
         <div className="scroll-thin flex-1 overflow-auto px-6 py-5">
           <div className="overflow-hidden rounded-xl border border-line bg-paper-white">
             <div className="grid grid-cols-[100px_1fr_130px_130px_130px] border-b border-line bg-code-surface px-4 py-2 label"><span>Key</span><span>Title</span><span>Status</span><span>Assignee</span><span>Priority</span></div>
-            {filtered.map((issue) => <button key={issue.id} onClick={() => router.push("/board/" + issue.id)} className="grid w-full grid-cols-[100px_1fr_130px_130px_130px] items-center border-b border-line px-4 py-3 text-left text-[12px] last:border-0 hover:bg-code-surface"><span className="font-mono text-pebble">{issue.ref}</span><span className="truncate pr-4 text-[13px]">{issue.title}</span><span>{issue.status.replace("_", " ")}</span><span>{agentName(issue.assigneeAgentId)}</span><span>{issue.priority}</span></button>)}
+            {filtered.map((issue) => { const dep = depOf(issue); const blocked = issue.status === "blocked" || dep.isBlocked; return <button key={issue.id} onClick={() => router.push("/board/" + issue.id)} className="grid w-full grid-cols-[100px_1fr_130px_130px_130px] items-center border-b border-line px-4 py-3 text-left text-[12px] last:border-0 hover:bg-code-surface"><span className="font-mono text-pebble">{issue.ref}</span><span className="truncate pr-4 text-[13px]">{issue.title}</span><span className={"flex items-center gap-1 " + (blocked ? "text-amber-800" : "")}>{blocked && <Lock className="size-3" aria-hidden />}{issue.status.replace("_", " ")}{blocked && dep.open > 0 ? " (" + dep.open + ")" : ""}</span><span>{agentName(issue.assigneeAgentId)}</span><span>{issue.priority}</span></button>; })}
           </div>
         </div>
       )}

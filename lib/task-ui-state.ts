@@ -13,3 +13,18 @@ export function detailSurface(state: RemoteState, hasCanonicalState: boolean) {
   if (!hasCanonicalState) return "error";
   return state === "disconnected" ? "disconnected" : "ready";
 }
+
+/**
+ * Classifies an issue's dependencies from its blockers' statuses.
+ *
+ * A blocker stays "open" until it reaches `done` — this mirrors the lifecycle's
+ * `hasUnmetBlockers` rule (status !== "done"), so the UI's blocked signal always
+ * agrees with when the server actually holds an issue in the `blocked` state.
+ */
+export type DependencyState = { total: number; open: number; resolved: number; isBlocked: boolean };
+
+export function dependencyState(blockerStatuses: string[]): DependencyState {
+  const total = blockerStatuses.length;
+  const open = blockerStatuses.filter((status) => status !== "done").length;
+  return { total, open, resolved: total - open, isBlocked: open > 0 };
+}
