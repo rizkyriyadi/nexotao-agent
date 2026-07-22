@@ -132,8 +132,46 @@ export class GitWorkspaceManager {
     return operation;
   }
 
+  /** Make a fresh project directory workable: if it isn't already a Git repo,
+   *  initialise one (with a usable identity and a base commit) so agent-mode runs
+   *  can provision a worktree instead of failing with "not a git repository". A
+   *  directory that already sits inside a repo is left untouched — the caller's
+   *  worktree-root check then reports any unexpected nesting. */
+  private async ensureRepository(repositoryPath: string) {
+    try {
+      await git(repositoryPath, "rev-parse", "--git-dir");
+      return;
+    } catch {
+      // Not a Git repository yet — initialise one below.
+    }
+    await git(repositoryPath, "init");
+    await this.ensureIdentity(repositoryPath);
+    const hasHead = await git(repositoryPath, "rev-parse", "--verify", "HEAD").then(() => true).catch(() => false);
+    if (!hasHead) {
+      const identity = await repositoryIdentity(repositoryPath);
+      // Capture any pre-existing files (honoring .gitignore) into the base commit
+      // so the run's worktree — created from that commit — is a faithful copy of
+      // the directory. An empty directory produces an empty initial commit.
+      await git(repositoryPath, "add", "-A").catch(() => undefined);
+      const staged = (await git(repositoryPath, "diff", "--cached", "--name-only")).stdout;
+      const identityArgs = ["-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`];
+      const commitArgs = staged ? ["commit", "-m", "chore: initialize workspace"] : ["commit", "--allow-empty", "-m", "chore: initialize workspace"];
+      await git(repositoryPath, ...identityArgs, ...commitArgs);
+    }
+  }
+
+  /** Ensure a repo has an author identity so commits succeed. Only fills in a
+   *  default when neither local nor global config provides one. */
+  private async ensureIdentity(repositoryPath: string) {
+    const name = await git(repositoryPath, "config", "user.name").then((r) => r.stdout).catch(() => "");
+    const email = await git(repositoryPath, "config", "user.email").then((r) => r.stdout).catch(() => "");
+    if (!name) await git(repositoryPath, "config", "user.name", "Nexotao Agent");
+    if (!email) await git(repositoryPath, "config", "user.email", "agent@nexotao.local");
+  }
+
   private async provisionLocked(input: { projectId: string; issueId: string; identifier: string; runId: string; repositoryPath: string }) {
     const repositoryPath = await fs.realpath(path.resolve(input.repositoryPath));
+    await this.ensureRepository(repositoryPath);
     const topLevel = await fs.realpath((await git(repositoryPath, "rev-parse", "--show-toplevel")).stdout);
     if (topLevel !== repositoryPath) throw new Error(`Project path must be the Git worktree root: ${repositoryPath}`);
     const targetBranch = (await git(repositoryPath, "symbolic-ref", "--short", "HEAD")).stdout;

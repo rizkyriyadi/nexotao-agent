@@ -15,3 +15,9 @@ export const LEAD_PP = AGENT_PPS[0];
 export function agentPP(index: number): string {
   return AGENT_PPS[((index % AGENT_PPS.length) + AGENT_PPS.length) % AGENT_PPS.length];
 }
+
+/** Resolve an agent's avatar: a custom one (a selected default path or an
+ *  uploaded data URI) when set, otherwise the deterministic roster picture. */
+export function agentAvatar(avatar: string | null | undefined, index = 0): string {
+  return avatar && avatar.trim() ? avatar : agentPP(index);
+}

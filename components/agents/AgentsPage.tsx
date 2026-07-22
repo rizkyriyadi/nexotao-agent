@@ -3,7 +3,8 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AlertTriangle, Bot, CheckCircle2, Clock, Pause, Play, Plus, RefreshCw, RotateCcw, Settings2, Square, Users, XCircle } from "lucide-react";
 import { toast } from "sonner";
-import { agentPP } from "@/lib/avatars";
+import { agentAvatar } from "@/lib/avatars";
+import { AvatarPicker } from "./AvatarPicker";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -14,13 +15,13 @@ type Status = "idle" | "queued" | "running" | "paused" | "error" | "terminated";
 type Run = { id: string; status: string; source: string; task: string | null; startedAt: number; finishedAt: number | null; error: string | null };
 type Revision = { id: string; revision: number; createdAt: number };
 type Agent = {
-  id: string; name: string; role: "lead" | "worker"; title: string; scope: string; reportsTo: string | null; capabilities: string[];
+  id: string; name: string; role: "lead" | "worker"; title: string; avatar: string | null; scope: string; reportsTo: string | null; capabilities: string[];
   status: Status; adapterType: string; adapterConfig: Record<string, unknown>; runtimeConfig: Record<string, unknown>;
   permissions: Record<string, unknown>; instructions: string; projectAccess: string[]; concurrency: number;
   pauseReason: string | null; errorReason: string | null; lastHeartbeatAt: number | null; currentTask: string | null;
   currentRun: Run | null; lastTask: { id: string; title: string; status: string } | null; runs: Run[]; revisions: Revision[];
 };
-type FormState = { name: string; title: string; scope: string; instructions: string; capabilities: string; adapterType: string; model: string; concurrency: string; permissions: string; projectAccess: string };
+type FormState = { name: string; title: string; avatar: string | null; scope: string; instructions: string; capabilities: string; adapterType: string; model: string; concurrency: string; permissions: string; projectAccess: string };
 
 const statusStyle: Record<Status, string> = {
   idle: "bg-line text-bark-grey", queued: "bg-mist-lavender text-deep-violet", running: "bg-mist-lavender text-deep-violet",
@@ -35,7 +36,7 @@ function ago(ts: number | null) {
   return `${Math.floor(seconds / 86400)}d ago`;
 }
 function blank(agent?: Agent): FormState {
-  return { name: agent?.name ?? "", title: agent?.title ?? "Specialist", scope: agent?.scope ?? "", instructions: agent?.instructions ?? "",
+  return { name: agent?.name ?? "", title: agent?.title ?? "Specialist", avatar: agent?.avatar ?? null, scope: agent?.scope ?? "", instructions: agent?.instructions ?? "",
     capabilities: agent?.capabilities.join(", ") ?? "", adapterType: agent?.adapterType ?? "nexotao", model: String(agent?.adapterConfig.model ?? ""),
     concurrency: String(agent?.concurrency ?? 1), permissions: JSON.stringify(agent?.permissions ?? {}, null, 2),
     projectAccess: agent?.projectAccess.join(", ") ?? "" };
@@ -82,7 +83,7 @@ export function AgentsPage() {
     try {
       const editing = dialog === "edit" && selected;
       const payload = {
-        ...(editing ? { id: selected.id, role: selected.role } : { role: "worker" }), name: form.name, title: form.title, scope: form.scope,
+        ...(editing ? { id: selected.id, role: selected.role } : { role: "worker" }), name: form.name, title: form.title, avatar: form.avatar, scope: form.scope,
         instructions: form.instructions, reportsTo: editing ? selected.reportsTo : lead?.id ?? null,
         capabilities: form.capabilities.split(",").map((item) => item.trim()).filter(Boolean), adapterType: form.adapterType,
         adapterConfig: { ...(editing ? selected.adapterConfig : {}), model: form.model }, runtimeConfig: editing ? selected.runtimeConfig : {},
@@ -117,7 +118,7 @@ export function AgentsPage() {
       <div className="scroll-thin flex-1 overflow-y-auto p-3">
         {loading ? <p className="p-4 text-[13px] text-pebble">Loading roster…</p> : agents.length === 0 ? <Empty text="No agents configured" icon /> : agents.map((agent, index) =>
           <button key={agent.id} onClick={() => setSelectedId(agent.id)} className={`mb-2 w-full rounded-2xl border p-3 text-left ${selectedId === agent.id ? "border-electric-indigo bg-electric-indigo/[0.04]" : "border-line hover:border-line-strong"}`}>
-            <div className="flex items-center gap-3"><img src={agentPP(index)} alt="" className="size-9 rounded-xl object-cover" /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-[13.5px] font-medium">{agent.name}</span><StatusPill status={agent.status} /></div><p className="truncate text-[11.5px] text-bark-grey">{agent.currentTask ?? agent.title ?? agent.scope}</p></div></div>
+            <div className="flex items-center gap-3"><img src={agentAvatar(agent.avatar, index)} alt="" className="size-9 rounded-xl object-cover" /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><span className="truncate text-[13.5px] font-medium">{agent.name}</span><StatusPill status={agent.status} /></div><p className="truncate text-[11.5px] text-bark-grey">{agent.currentTask ?? agent.title ?? agent.scope}</p></div></div>
             <div className="mt-2 flex justify-between pl-12 font-mono text-[10px] text-pebble"><span>{ago(agent.lastHeartbeatAt)}</span><span className="capitalize">{agent.status}</span></div>
           </button>)}
       </div>
@@ -127,7 +128,7 @@ export function AgentsPage() {
     <main className="scroll-thin min-w-0 flex-1 overflow-y-auto bg-warm-bone">
       {!selected ? <div className="flex h-full items-center justify-center text-[13px] text-pebble">Select an agent</div> :
         <><header className="sticky top-0 z-10 flex min-h-16 items-center gap-3 border-b border-line bg-warm-bone/95 px-6 backdrop-blur">
-          <img src={agentPP(Math.max(0, agents.indexOf(selected)))} alt="" className="size-9 rounded-xl object-cover" /><div><div className="flex items-center gap-2"><h2 className="text-[16px] font-medium">{selected.name}</h2><StatusPill status={selected.status} /></div><p className="text-[12px] text-bark-grey">{selected.title || (selected.role === "lead" ? "Lead" : "Specialist")}</p></div>
+          <img src={agentAvatar(selected.avatar, Math.max(0, agents.indexOf(selected)))} alt="" className="size-9 rounded-xl object-cover" /><div><div className="flex items-center gap-2"><h2 className="text-[16px] font-medium">{selected.name}</h2><StatusPill status={selected.status} /></div><p className="text-[12px] text-bark-grey">{selected.title || (selected.role === "lead" ? "Lead" : "Specialist")}</p></div>
           <div className="ml-auto flex gap-2"><Button size="sm" variant="outline" onClick={() => void load()}><RefreshCw /> Refresh</Button><Button size="sm" variant="outline" onClick={() => { setForm(blank(selected)); setDialog("edit"); }} disabled={selected.status === "terminated"}><Settings2 /> Edit</Button></div>
         </header>
         <Tabs defaultValue="overview"><div className="border-b border-line px-6"><TabsList>{["overview", "instructions", "runtime", "permissions", "runs"].map((tab) => <TabsTrigger key={tab} value={tab} className="capitalize">{tab}</TabsTrigger>)}</TabsList></div>
@@ -159,6 +160,7 @@ export function AgentsPage() {
     <Dialog open={dialog !== null} onOpenChange={(open) => !open && setDialog(null)}><DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[620px]">
       <DialogHeader><DialogTitle>{dialog === "edit" ? "Edit agent" : "Create specialist"}</DialogTitle><DialogDescription>Configuration changes are versioned and recorded.</DialogDescription></DialogHeader>
       <div className="grid gap-4 sm:grid-cols-2">
+        <Field label="Avatar" wide><AvatarPicker value={form.avatar} index={dialog === "edit" && selected ? Math.max(0, agents.indexOf(selected)) : agents.length} onChange={(avatar) => setForm((current) => ({ ...current, avatar }))} /></Field>
         <Field label="Name"><Input value={form.name} onChange={(e) => set("name", e.target.value)} /></Field><Field label="Title"><Input value={form.title} onChange={(e) => set("title", e.target.value)} /></Field>
         <Field label="Scope" wide><Textarea value={form.scope} onChange={(e) => set("scope", e.target.value)} /></Field><Field label="Capabilities" wide><Input placeholder="coding, review" value={form.capabilities} onChange={(e) => set("capabilities", e.target.value)} /></Field>
         <Field label="Adapter"><Input value={form.adapterType} onChange={(e) => set("adapterType", e.target.value)} /></Field><Field label="Model"><Input value={form.model} onChange={(e) => set("model", e.target.value)} /></Field>

@@ -14,6 +14,7 @@ export type AgentConfigInput = {
   name: string;
   role: "lead" | "worker";
   title: string;
+  avatar?: string | null;
   scope: string;
   reportsTo: string | null;
   capabilities: string[];
@@ -46,11 +47,12 @@ function validateConfig(input: AgentConfigInput) {
   if (!input.name.trim() || input.name.length > 80) throw new AgentLifecycleError("invalid", "Name must be between 1 and 80 characters");
   if (input.title.length > 120 || input.scope.length > 2_000 || input.instructions.length > 50_000) throw new AgentLifecycleError("invalid", "Agent text fields exceed their allowed length");
   if (!Number.isInteger(input.concurrency) || input.concurrency < 1 || input.concurrency > 20) throw new AgentLifecycleError("invalid", "Concurrency must be an integer between 1 and 20");
+  if (input.avatar != null && (typeof input.avatar !== "string" || input.avatar.length > 1_500_000)) throw new AgentLifecycleError("invalid", "Avatar must be an image URL or data URI under ~1MB");
 }
 
 function snapshot(row: typeof agents.$inferSelect): AgentConfigInput {
   return {
-    name: row.name, role: row.role, title: row.title, scope: row.scope, reportsTo: row.reportsTo,
+    name: row.name, role: row.role, title: row.title, avatar: row.avatar ?? null, scope: row.scope, reportsTo: row.reportsTo,
     capabilities: row.capabilities, adapterType: row.adapterType, adapterConfig: row.adapterConfig,
     runtimeConfig: row.runtimeConfig, permissions: row.permissions, instructions: row.instructions,
     projectAccess: row.projectAccess, concurrency: row.concurrency,

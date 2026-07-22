@@ -173,3 +173,18 @@ test("history policy audits every outgoing commit and orphan recovery never dele
     assert.ok(await git(f.repositoryPath, "show-ref", "--verify", `refs/heads/${clean.branch}`), "cleanup retains the recovery branch");
   } finally { await cleanup(f); }
 });
+
+test("provisioning a fresh non-git project directory initialises a repository with its files", async () => {
+  const f = await fixture();
+  try {
+    const fresh = path.join(f.dir, "fresh-project");
+    await mkdir(fresh, { recursive: true });
+    await writeFile(path.join(fresh, "README.md"), "hello\n");
+    const run = await activate(f, "two");
+    const assignment = await f.manager.provision({ projectId: "project", issueId: "issue-two", identifier: "NEXA-2", runId: run, repositoryPath: fresh });
+    // the directory is now a git repo, and the run's worktree is a faithful copy
+    assert.ok(await git(fresh, "rev-parse", "HEAD"), "fresh directory becomes a git repository");
+    assert.equal(await git(assignment.workspacePath, "rev-parse", "--abbrev-ref", "HEAD"), assignment.branch);
+    assert.equal(await readFile(path.join(assignment.workspacePath, "README.md"), "utf8"), "hello\n");
+  } finally { await cleanup(f); }
+});

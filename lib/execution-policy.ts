@@ -71,7 +71,7 @@ export function modeToPolicy(mode: AgentMode): ExecutionPolicy {
  *  it keeps the default autonomous behaviour. */
 export function modeSystemDirective(mode: AgentMode): string {
   if (mode === "plan")
-    return "\n\nPLAN MODE: Investigate the project read-only and produce a clear, numbered implementation plan. File writes and shell commands are disabled — do not attempt to modify anything or you will be denied. Finish with the proposed plan and tell the user to switch to Agent mode to execute it.";
+    return "\n\nPLAN MODE: Investigate the project read-only and produce a clear, numbered implementation plan. File writes and shell commands are disabled — do not attempt to modify anything or you will be denied. Finish with the proposed plan; the user can execute it with one click (Execute plan), so do NOT tell them to switch modes manually.\n\nIf — and only if — some choices genuinely need the user's decision before building, append at the VERY END of your reply a single HTML comment with valid JSON, exactly in this shape:\n<!--decisions [{\"q\":\"Question text?\",\"options\":[\"Option A\",\"Option B\"]}] -->\nInclude 1–4 questions, each with 2–5 short options. Still mention these choices in the prose above. If no decisions are needed, do not add the comment.";
   if (mode === "ask")
     return "\n\nASK MODE: Answer the user's question using read-only inspection only (list_dir, read_file, grep, web_search, web_fetch). File writes and shell commands are disabled — do not modify the project.";
   return "";

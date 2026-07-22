@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { Sparkles, Loader2, ArrowUpRight, History } from "lucide-react";
 import { Composer, type RunMode } from "./Composer";
 import { STATUS_LABEL, statusDot, ago } from "./transcript";
-import { LEAD_PP } from "@/lib/avatars";
+import { agentAvatar } from "@/lib/avatars";
 
 const SUGGESTIONS = [
   "Add a login page with JWT auth",
@@ -35,6 +35,7 @@ export function ControlPanel() {
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<RunMode>("agent");
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [leadAvatar, setLeadAvatar] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const poller = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -42,6 +43,8 @@ export function ControlPanel() {
     try {
       const d = await fetch("/api/issues").then((r) => r.json());
       const issues = (d.issues ?? []) as any[];
+      const lead = ((d.agents ?? []) as any[]).find((a) => a.role === "lead") ?? (d.agents ?? [])[0];
+      setLeadAvatar(lead?.avatar ?? null);
       // single-agent model: every top-level issue is a task
       const rows: Task[] = issues
         .filter((i) => !i.parentId)
@@ -108,7 +111,7 @@ export function ControlPanel() {
             <Loader2 className="size-3.5 animate-spin" /> Active now · {active.length}
           </p>
           <div className="space-y-2">
-            {active.map((t) => <TaskRow key={t.id} task={t} onOpen={() => router.push(`/board/${t.id}`)} active />)}
+            {active.map((t) => <TaskRow key={t.id} task={t} avatar={leadAvatar} onOpen={() => router.push(`/board/${t.id}`)} active />)}
           </div>
         </div>
       )}
@@ -117,7 +120,7 @@ export function ControlPanel() {
         <div className="mt-8 w-full max-w-[560px] text-left">
           <p className="label mb-3 flex items-center gap-1.5"><History className="size-3.5" /> Recent tasks</p>
           <div className="space-y-2">
-            {recent.map((t) => <TaskRow key={t.id} task={t} onOpen={() => router.push(`/board/${t.id}`)} />)}
+            {recent.map((t) => <TaskRow key={t.id} task={t} avatar={leadAvatar} onOpen={() => router.push(`/board/${t.id}`)} />)}
           </div>
         </div>
       )}
@@ -125,13 +128,13 @@ export function ControlPanel() {
   );
 }
 
-function TaskRow({ task, onOpen, active }: { task: Task; onOpen: () => void; active?: boolean }) {
+function TaskRow({ task, avatar, onOpen, active }: { task: Task; avatar: string | null; onOpen: () => void; active?: boolean }) {
   return (
     <button
       onClick={onOpen}
       className={`flex w-full items-center gap-3 rounded-xl border px-3.5 py-3 text-left transition-colors ${active ? "border-electric-indigo/30 bg-electric-indigo/[0.04] hover:border-electric-indigo" : "border-line bg-paper-white hover:border-line-strong"}`}
     >
-      <img src={LEAD_PP} alt="Hutao" className="size-7 shrink-0 rounded-lg object-cover" />
+      <img src={agentAvatar(avatar)} alt="Hutao" className="size-7 shrink-0 rounded-lg object-cover" />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13.5px] font-medium text-charcoal">{task.title}</span>
         <span className="mt-0.5 block font-mono text-[10.5px] text-pebble">{task.ref} · {task.runMode} · {ago(task.updatedAt)}</span>

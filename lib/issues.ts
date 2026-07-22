@@ -6,7 +6,7 @@ import { IssueDomainError, IssueLifecycleService, type IssueActor } from "./issu
 import type { AgentSpec } from "./store";
 
 export type AgentRole = "lead" | "worker";
-export type Agent = { id: string; projectId: string; name: string; role: AgentRole; scope: string; reportsTo: string | null; createdAt: number };
+export type Agent = { id: string; projectId: string; name: string; role: AgentRole; scope: string; avatar: string | null; reportsTo: string | null; createdAt: number };
 export type IssueStatus = "backlog" | "todo" | "in_progress" | "in_review" | "done" | "blocked" | "cancelled";
 export type IssueStage = "plan" | "execute" | "integrate";
 export type RunMode = "agent" | "plan" | "ask";
@@ -16,7 +16,7 @@ export type Issue = {
   priority: string; runMode: RunMode; blockedBy: string[]; runId: string | null; summary: string; createdAt: number; updatedAt: number;
 };
 
-const agentFromRow = (row: typeof agents.$inferSelect): Agent => ({ id: row.id, projectId: row.projectId, name: row.name, role: row.role, scope: row.scope, reportsTo: row.reportsTo, createdAt: row.createdAt });
+const agentFromRow = (row: typeof agents.$inferSelect): Agent => ({ id: row.id, projectId: row.projectId, name: row.name, role: row.role, scope: row.scope, avatar: row.avatar ?? null, reportsTo: row.reportsTo, createdAt: row.createdAt });
 function issueFromRow(row: typeof issues.$inferSelect, blockedBy: string[]): Issue {
   return { id: row.id, projectId: row.projectId, ref: row.identifier, title: row.title, detail: row.description, parentId: row.parentId,
     assigneeAgentId: row.assigneeAgentId, createdByAgentId: row.createdByAgentId, status: row.status as IssueStatus,
@@ -49,8 +49,8 @@ export async function seedAgents(projectId: string, team: AgentSpec[]): Promise<
     const existing = db.select().from(agents).where(eq(agents.projectId, projectId)).orderBy(asc(agents.createdAt)).all();
     if (existing.length) return existing.map(agentFromRow);
     const now = Date.now();
-    const lead: Agent = { id: randomUUID(), projectId, name: "Hutao", role: "lead", scope: "Handles your requests end-to-end — answers, plans, and builds", reportsTo: null, createdAt: now };
-    const workers: Agent[] = (team ?? []).map((spec, index) => ({ id: randomUUID(), projectId, name: spec.name, role: "worker", scope: spec.scope, reportsTo: lead.id, createdAt: now + index + 1 }));
+    const lead: Agent = { id: randomUUID(), projectId, name: "Hutao", role: "lead", scope: "Handles your requests end-to-end — answers, plans, and builds", avatar: null, reportsTo: null, createdAt: now };
+    const workers: Agent[] = (team ?? []).map((spec, index) => ({ id: randomUUID(), projectId, name: spec.name, role: "worker", scope: spec.scope, avatar: null, reportsTo: lead.id, createdAt: now + index + 1 }));
     for (const agent of [lead, ...workers]) db.insert(agents).values({ ...agent, updatedAt: agent.createdAt }).run();
     return [lead, ...workers];
   });

@@ -36,11 +36,21 @@ function numberField(body: Record<string, unknown>, key: string, fallback: numbe
   return parsed;
 }
 
+function avatarField(body: Record<string, unknown>): string | null | undefined {
+  const value = body.avatar;
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  if (typeof value !== "string" || value.length > 1_500_000) throw new HttpError("avatar must be an image URL or data URI under ~1MB");
+  return value;
+}
+
 function configInput(body: Record<string, unknown>, leadId: string | null): AgentConfigInput {
   const role = body.role === "lead" ? "lead" : "worker";
+  const avatar = avatarField(body);
   return {
     name: stringField(body, "name", { required: true, max: 80 })!, role,
     title: stringField(body, "title", { max: 120 }) ?? "Specialist",
+    ...(avatar !== undefined ? { avatar } : {}),
     scope: stringField(body, "scope", { max: 2_000 }) ?? "",
     reportsTo: role === "lead" ? null : stringField(body, "reportsTo", { max: 100 }) ?? leadId,
     capabilities: stringsField(body, "capabilities"), adapterType: stringField(body, "adapterType", { max: 80 }) ?? "nexotao",
@@ -81,7 +91,7 @@ export async function PATCH(req: Request) {
     const service = new AgentLifecycleService(await getDatabase());
     const current = service.get(id);
     const full = configInput({
-      name: current.name, role: current.role, title: current.title, scope: current.scope, reportsTo: current.reportsTo,
+      name: current.name, role: current.role, title: current.title, avatar: current.avatar, scope: current.scope, reportsTo: current.reportsTo,
       capabilities: current.capabilities, adapterType: current.adapterType, adapterConfig: current.adapterConfig,
       runtimeConfig: current.runtimeConfig, permissions: current.permissions, instructions: current.instructions,
       projectAccess: current.projectAccess, concurrency: current.concurrency,

@@ -153,6 +153,12 @@ CREATE UNIQUE INDEX IF NOT EXISTS approvals_run_tool_uq ON approvals(run_id, too
   sql: `
 ALTER TABLE issues ADD COLUMN run_mode TEXT NOT NULL DEFAULT 'agent';
 `,
+}, {
+  version: 8,
+  name: "agent-avatar",
+  sql: `
+ALTER TABLE agents ADD COLUMN avatar TEXT;
+`,
 }];
 
 // Applies pending migrations, each in its own IMMEDIATE transaction so a failing

@@ -7,6 +7,9 @@ import remarkGfm from "remark-gfm";
 /** Renders agent output as pretty markdown (bold, headings, lists, code, tables)
  * styled to the app's design tokens. Safe for streaming/partial markdown. */
 function MarkdownImpl({ children, className = "" }: { children: string; className?: string }) {
+  // Strip HTML comments (e.g. the plan-mode `<!--decisions …-->` block the UI
+  // parses separately) so they never surface as raw text in the transcript.
+  const text = children.replace(/<!--[\s\S]*?-->/g, "");
   return (
     <div className={`nx-md text-[15px] leading-[1.7] text-charcoal ${className}`}>
       <ReactMarkdown
@@ -39,7 +42,7 @@ function MarkdownImpl({ children, className = "" }: { children: string; classNam
           td: ({ children }) => <td className="border-b border-line px-3 py-1.5 text-bark-grey">{children}</td>,
         }}
       >
-        {children}
+        {text}
       </ReactMarkdown>
     </div>
   );

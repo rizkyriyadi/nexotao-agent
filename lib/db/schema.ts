@@ -27,6 +27,7 @@ export const runRecords = sqliteTable("run_records", {
 export const agents = sqliteTable("agents", {
   id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
   name: text("name").notNull(), role: text("role", { enum: ["lead", "worker"] }).notNull(), title: text("title").notNull().default(""),
+  avatar: text("avatar"),
   scope: text("scope").notNull(), reportsTo: text("reports_to"), capabilities: text("capabilities", { mode: "json" }).$type<string[]>().notNull().default([]),
   status: text("status").notNull().default("idle"), adapterType: text("adapter_type").notNull().default("nexotao"),
   adapterConfig: text("adapter_config", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}),

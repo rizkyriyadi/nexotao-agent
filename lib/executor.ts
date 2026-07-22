@@ -171,8 +171,10 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
         run, apiKey, model, root: executionRoot, mode, agentName: agent.name, messages, beforeMutation,
       });
       if (mode === "lead-execute") {
-        const finalized = await workspaceManager.finalizeCommit(issueId, runId, issue.ref);
-        result.text = `${result.text}\n\nCommit: ${finalized.commit}`;
+        // Persist the work to the isolated worktree. The commit is an internal
+        // implementation detail — the user sees the agent's own summary, not a
+        // raw commit hash appended to the answer.
+        await workspaceManager.finalizeCommit(issueId, runId, issue.ref);
       } else if (mode === "lead-plan-doc") {
         // Persist the plan as the issue's `plan` document so it's reviewable and
         // the user can re-run in Agent mode to execute it.
