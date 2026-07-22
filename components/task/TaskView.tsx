@@ -221,8 +221,8 @@ export function TaskView({ id }: { id: string }) {
         </div>
       </div>
 
-      <div className="shrink-0 border-t border-line/70 bg-paper-white/60 px-6 py-4 backdrop-blur">
-        <div className="mx-auto max-w-[760px]">
+      <div className="pointer-events-none shrink-0 bg-gradient-to-t from-warm-bone via-warm-bone/90 to-transparent px-6 pb-5 pt-10">
+        <div className="pointer-events-auto mx-auto max-w-[760px]">
           <Composer
             value={input}
             onChange={setInput}
@@ -231,10 +231,8 @@ export function TaskView({ id }: { id: string }) {
             onSubmit={send}
             disabled={sending}
             placeholder={running ? "Queue a follow-up — Hutao picks it up next…" : "Reply to continue this task…"}
+            hint={running ? "A run is in progress — your message will be queued." : "Sending a message reopens this task and wakes Hutao."}
           />
-          <p className="mt-2 text-center text-[11.5px] text-pebble">
-            {running ? "A run is in progress — your message will be queued." : "Sending a message reopens this task and wakes Hutao."}
-          </p>
         </div>
       </div>
     </div>

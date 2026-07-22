@@ -31,6 +31,7 @@ export function Composer({
   disabled,
   autoFocus,
   placeholder = "Ask, plan, or build anything in this project…",
+  hint,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -40,6 +41,9 @@ export function Composer({
   disabled?: boolean;
   autoFocus?: boolean;
   placeholder?: string;
+  /** Optional low-emphasis note folded into the bottom bar, right of the mode
+   *  selector — keeps helper copy inside the card instead of floating below. */
+  hint?: string;
 }) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -120,7 +124,13 @@ export function Composer({
           )}
         </div>
 
-        <Button size="icon" className="size-9 rounded-xl" disabled={!value.trim() || disabled} onClick={submit} aria-label={`Send in ${active.label} mode`}>
+        {hint && (
+          <span className="hidden min-w-0 flex-1 truncate text-[11.5px] text-pebble sm:block" aria-live="polite">
+            {hint}
+          </span>
+        )}
+
+        <Button size="icon" className="ml-auto size-9 rounded-xl" disabled={!value.trim() || disabled} onClick={submit} aria-label={`Send in ${active.label} mode`}>
           <ArrowUp className="size-4" />
         </Button>
       </div>
