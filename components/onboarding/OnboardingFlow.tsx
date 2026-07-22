@@ -15,7 +15,7 @@ import { cn } from "@/lib/utils";
 
 const STEPS = ["Connect", "Model", "Project"];
 
-type Model = { id: string; name: string; ctx: number | null };
+type Model = { id: string; name: string; ctx: number | null; provider?: "anthropic" | "openai" };
 
 export function OnboardingFlow() {
   const router = useRouter();
@@ -158,7 +158,7 @@ export function OnboardingFlow() {
                 <h2 className="text-[15px] font-medium text-charcoal">Pick a model</h2>
               </div>
               <p className="mb-4 text-[13.5px] leading-relaxed text-bark-grey">
-                Nexotao has 11 live models — Claude is supported for now.
+                Claude and GPT (5.6 series) run on your Nexotao balance — pick your default.
               </p>
               {modelsLoading ? (
                 <div className="flex items-center gap-2 py-6 text-[13px] text-pebble">
@@ -177,7 +177,14 @@ export function OnboardingFlow() {
                     >
                       <Sparkles className="size-4 text-electric-indigo" />
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[14px] font-medium text-charcoal">{m.name}</span>
+                        <span className="flex items-center gap-2">
+                          <span className="text-[14px] font-medium text-charcoal">{m.name}</span>
+                          {m.provider && (
+                            <span className="rounded-md bg-canvas px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-pebble">
+                              {m.provider === "openai" ? "GPT" : "Claude"}
+                            </span>
+                          )}
+                        </span>
                         <span className="block font-mono text-[11px] text-pebble">
                           {m.id}{m.ctx ? ` · ${Math.round(m.ctx / 1000)}k ctx` : ""}
                         </span>

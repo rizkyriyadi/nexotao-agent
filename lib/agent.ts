@@ -1,4 +1,4 @@
-import { nexotao } from "./nexotao";
+import { streamAssistantTurn } from "./turn";
 import { TOOL_DEFS, executeTool } from "./tools";
 import { authorizeTool, modeToPolicy, modeSystemDirective, DEFAULT_MODE, type ExecutionPolicy, type AgentMode } from "./execution-policy";
 import { safeError } from "./redact";
@@ -14,7 +14,7 @@ function baseSystem(root: string) {
 /** Core tool loop for one agent. Returns the final turn's text (its summary). */
 async function toolLoop(opts: {
   run: Run;
-  client: ReturnType<typeof nexotao>;
+  apiKey: string;
   model: string;
   system: string;
   convo: Msg[];
@@ -29,25 +29,25 @@ async function toolLoop(opts: {
   beforeMutation?: (tool: { name: string; input: unknown }) => Promise<void>;
   maxIters?: number;
 }): Promise<string> {
-  const { run, client, model, system, convo, root, thread, approvalPolicy, toolDefs = TOOL_DEFS as any, extraTools = [], onSpawn, handlers = {}, onProgress, beforeMutation, maxIters = 24 } = opts;
+  const { run, apiKey, model, system, convo, root, thread, approvalPolicy, toolDefs = TOOL_DEFS as any, extraTools = [], onSpawn, handlers = {}, onProgress, beforeMutation, maxIters = 24 } = opts;
   let full = "";
 
   for (let iter = 0; iter < maxIters; iter++) {
-    const stream = client.messages.stream({
+    const turn = await streamAssistantTurn({
+      apiKey,
       model,
-      max_tokens: 8192,
       system,
       tools: [...toolDefs, ...extraTools],
-      messages: convo as any,
-    }, { signal: run.signal });
-    stream.on("text", (t: string) => { full += t; run.push({ type: "text", text: t, thread }); onProgress?.(full); });
-    const final = await stream.finalMessage();
+      messages: convo,
+      signal: run.signal,
+      onText: (t: string) => { full += t; run.push({ type: "text", text: t, thread }); onProgress?.(full); },
+    });
     onProgress?.(full);
-    run.push({ type: "usage", inputTokens: final.usage.input_tokens, outputTokens: final.usage.output_tokens, thread });
+    run.push({ type: "usage", inputTokens: turn.usage.input_tokens, outputTokens: turn.usage.output_tokens, thread });
 
-    convo.push({ role: "assistant", content: final.content });
-    const toolUses = (final.content as any[]).filter((b) => b.type === "tool_use");
-    if (final.stop_reason !== "tool_use" || toolUses.length === 0) return full;
+    convo.push({ role: "assistant", content: turn.content });
+    const toolUses = (turn.content as any[]).filter((b) => b.type === "tool_use");
+    if (turn.stop_reason !== "tool_use" || toolUses.length === 0) return full;
 
     const results: any[] = [];
     for (const tu of toolUses) {
@@ -89,7 +89,6 @@ async function toolLoop(opts: {
 /** Single agent. Persists to the session store on the SERVER, so a client
  * refresh/disconnect never loses the prompt or the reply. */
 export async function runAgent(opts: { run: Run; messages: Msg[]; model: string; apiKey: string; root: string; mode?: AgentMode; sessionId?: string }) {
-  const client = nexotao(opts.apiKey);
   const { sessionId, messages } = opts;
   const mode = opts.mode ?? DEFAULT_MODE;
 
@@ -109,7 +108,7 @@ export async function runAgent(opts: { run: Run; messages: Msg[]; model: string;
     if (sessionId) await saveSessionMessages(sessionId, messages as any).catch(() => {});
     const text = await toolLoop({
       run: opts.run,
-      client,
+      apiKey: opts.apiKey,
       model: opts.model,
       system: baseSystem(opts.root) + modeSystemDirective(mode),
       convo: [...messages],
@@ -146,14 +145,13 @@ export async function runIssueAgent(opts: {
   messages: Msg[];
   beforeMutation?: (tool: { name: string; input: unknown }) => Promise<void>;
 }): Promise<{ text: string }> {
-  const client = nexotao(opts.apiKey);
   // The chosen run mode maps to the shared execution policy: agent → auto
   // approve (destructive still gated), plan/ask → deny every mutation.
   const runMode: AgentMode = opts.mode === "lead-ask" ? "ask" : opts.mode === "lead-plan-doc" ? "plan" : "agent";
   const approvalPolicy = modeToPolicy(runMode);
   const system = `${baseSystem(opts.root)} You are ${opts.agentName}, the lead agent handling the user's request directly. Work on it end-to-end and finish with a short summary.${modeSystemDirective(runMode)}`;
   const text = await toolLoop({
-    run: opts.run, client, model: opts.model, system, convo: [...opts.messages], root: opts.root,
+    run: opts.run, apiKey: opts.apiKey, model: opts.model, system, convo: [...opts.messages], root: opts.root,
     thread: "lead", beforeMutation: opts.beforeMutation, approvalPolicy,
   });
   return { text: text || "(done)" };
