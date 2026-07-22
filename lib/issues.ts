@@ -12,14 +12,14 @@ export type IssueStage = "plan" | "execute" | "integrate";
 export type Issue = {
   id: string; projectId: string; ref: string; title: string; detail: string; parentId: string | null;
   assigneeAgentId: string | null; createdByAgentId: string | null; status: IssueStatus; stage: IssueStage;
-  blockedBy: string[]; runId: string | null; summary: string; createdAt: number; updatedAt: number;
+  priority: string; blockedBy: string[]; runId: string | null; summary: string; createdAt: number; updatedAt: number;
 };
 
 const agentFromRow = (row: typeof agents.$inferSelect): Agent => ({ id: row.id, projectId: row.projectId, name: row.name, role: row.role, scope: row.scope, reportsTo: row.reportsTo, createdAt: row.createdAt });
 function issueFromRow(row: typeof issues.$inferSelect, blockedBy: string[]): Issue {
   return { id: row.id, projectId: row.projectId, ref: row.identifier, title: row.title, detail: row.description, parentId: row.parentId,
     assigneeAgentId: row.assigneeAgentId, createdByAgentId: row.createdByAgentId, status: row.status as IssueStatus,
-    stage: row.stage as IssueStage, blockedBy, runId: row.checkoutRunId, summary: row.summary, createdAt: row.createdAt, updatedAt: row.updatedAt };
+    stage: row.stage as IssueStage, priority: row.priority, blockedBy, runId: row.checkoutRunId, summary: row.summary, createdAt: row.createdAt, updatedAt: row.updatedAt };
 }
 async function hydrate(rows: Array<typeof issues.$inferSelect>) {
   const database = await getDatabase();
@@ -71,13 +71,14 @@ export async function childrenOf(parentId: string) {
 export async function createIssue(input: {
   projectId: string; title: string; detail?: string; parentId?: string | null; assigneeAgentId?: string | null;
   createdByAgentId?: string | null; status?: IssueStatus; stage?: IssueStage; blockedBy?: string[];
+  priority?: string;
   idempotencyKey?: string; actor?: IssueActor;
 }): Promise<Issue> {
   const database = await getDatabase();
   const row = await new IssueLifecycleService(database).create({
     projectId: input.projectId, title: input.title, description: input.detail, parentId: input.parentId,
     assigneeAgentId: input.assigneeAgentId, createdByAgentId: input.createdByAgentId, status: input.status,
-    stage: input.stage, blockerIds: input.blockedBy, idempotencyKey: input.idempotencyKey, actor: input.actor,
+    stage: input.stage, priority: input.priority, blockerIds: input.blockedBy, idempotencyKey: input.idempotencyKey, actor: input.actor,
   });
   return (await hydrate([row]))[0];
 }
@@ -97,6 +98,7 @@ export async function updateIssue(
       ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
       ...(patch.createdByAgentId !== undefined ? { createdByAgentId: patch.createdByAgentId } : {}),
       ...(patch.stage !== undefined ? { stage: patch.stage } : {}),
+      ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
       ...(patch.summary !== undefined ? { summary: patch.summary } : {}), updatedAt: Date.now(),
     }).where(eq(issues.id, id)).run();
   });
