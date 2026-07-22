@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { getDatabase } from "./db/database";
-import { agentRuns, projects, runRecords, sessions, tasks } from "./db/schema";
+import { agentRuns, issueDependencies, issues, projects, runRecords, sessions, tasks } from "./db/schema";
 
 export type AgentSpec = { name: string; scope: string };
 export type Project = { id: string; name: string; path: string; mode: "single" | "multi"; agents: AgentSpec[]; createdAt: number };
@@ -104,6 +104,26 @@ export async function getRunRecord(id: string) {
   const row = database.read((db) => db.select().from(runRecords).where(eq(runRecords.id, id)).get());
   return row ? runFromRow(row) : null;
 }
+// Read-only issue views for consumers that need the task tree (parent/child and
+// blocker dependencies) rather than the flat kanban `tasks` — e.g. the
+// work-history graph engine in lib/graphify.ts. Kept behind this store boundary
+// so no module reaches into Drizzle directly.
+export type IssueRow = typeof issues.$inferSelect;
+export type IssueDependencyRow = typeof issueDependencies.$inferSelect;
+export async function listIssues(projectId?: string): Promise<IssueRow[]> {
+  const database = await getDatabase();
+  return database.read((db) => db.select().from(issues).where(projectId ? eq(issues.projectId, projectId) : undefined).orderBy(asc(issues.createdAt)).all());
+}
+export async function listIssueDependencies(projectId?: string): Promise<IssueDependencyRow[]> {
+  const database = await getDatabase();
+  return database.read((db) => {
+    const rows = db.select().from(issueDependencies).all();
+    if (!projectId) return rows;
+    const scoped = new Set(db.select({ id: issues.id }).from(issues).where(eq(issues.projectId, projectId)).all().map((row) => row.id));
+    return rows.filter((row) => scoped.has(row.issueId));
+  });
+}
+
 export async function saveRunRecord(record: RunRecord) {
   const database = await getDatabase();
   await database.write((db) => {
