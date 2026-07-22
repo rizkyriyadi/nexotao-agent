@@ -116,7 +116,10 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     const agent = issue.assigneeAgentId ? await I.getAgent(issue.assigneeAgentId) : null;
     if (!agent) { await I.releaseIssue(issueId, job.wakeup.agentId, runId, "assignee_missing"); return; }
 
-    const { apiKey, model, root } = await ctx(projectId);
+    const { apiKey, model: defaultModel, root } = await ctx(projectId);
+    // Per-role model routing: prefer the agent's recommended model (pinned by a
+    // marketplace blueprint) over the project-wide default.
+    const model = (await I.getAgentModel(agent.id)) ?? defaultModel;
     const database = await getDatabase();
     const repositories = new ControlPlaneRepositories(database);
     const workspaceManager = new GitWorkspaceManager(repositories);

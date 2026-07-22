@@ -39,6 +39,15 @@ export async function getAgent(id: string) {
   return row ? agentFromRow(row) : null;
 }
 export async function leadAgent(projectId: string) { return (await listAgents(projectId)).find((agent) => agent.role === "lead") ?? null; }
+/** The model an agent is routed to (adapterConfig.model), if any. Blueprints
+ *  pin a recommended model per role; the executor prefers it over the global
+ *  default so per-role routing takes effect. */
+export async function getAgentModel(id: string): Promise<string | null> {
+  const database = await getDatabase();
+  const row = database.read((db) => db.select().from(agents).where(eq(agents.id, id)).get());
+  const model = (row?.adapterConfig as { model?: unknown } | undefined)?.model;
+  return typeof model === "string" && model.trim() ? model.trim() : null;
+}
 export async function findAgentByName(projectId: string, name: string) {
   const all = await listAgents(projectId); const normalized = name.trim().toLowerCase();
   return all.find((agent) => agent.name.toLowerCase() === normalized) ?? all.find((agent) => agent.name.toLowerCase().includes(normalized)) ?? null;

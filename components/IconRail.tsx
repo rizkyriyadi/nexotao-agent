@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  Scissors, LayoutGrid, Columns3, Boxes, Bot, Settings, CircleHelp, Inbox as InboxIcon, Share2,
+  Scissors, LayoutGrid, Columns3, Boxes, Bot, Settings, CircleHelp, Inbox as InboxIcon, Share2, Store,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "./ui/tooltip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "./ui/dialog";
@@ -16,6 +16,7 @@ const NAV = [
   { id: "board", href: "/board", label: "Control Panel", icon: Columns3 },
   { id: "inbox", href: "/inbox", label: "Approval Inbox", icon: InboxIcon },
   { id: "agents", href: "/agents", label: "Agents", icon: Bot },
+  { id: "marketplace", href: "/marketplace", label: "Marketplace", icon: Store },
   { id: "graph", href: "/graph", label: "Knowledge Graph", icon: Share2 },
   { id: "projects", href: "/projects", label: "Projects", icon: Boxes },
 ];
