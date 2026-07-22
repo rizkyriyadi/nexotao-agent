@@ -20,13 +20,23 @@ export function DataControls() {
   const [outcome, setOutcome] = useState<OutcomeReport | null>(null);
   const [busy, setBusy] = useState<"prune" | "delete" | null>(null);
   const [hasProject, setHasProject] = useState(true);
+  const [telemetry, setTelemetry] = useState(false);
+  const [savingTelemetry, setSavingTelemetry] = useState(false);
 
   useEffect(() => {
     fetch("/api/config").then((r) => r.json()).then((d) => {
       if (d.retention) setRetention({ runEventDays: d.retention.runEventDays ?? null, auditDays: d.retention.auditDays ?? null });
       setHasProject(!!d.project);
+      setTelemetry(d.telemetry === true);
     }).catch(() => {});
   }, []);
+
+  async function toggleTelemetry(next: boolean) {
+    setTelemetry(next);
+    setSavingTelemetry(true);
+    await fetch("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ telemetry: next }) }).catch(() => setTelemetry(!next));
+    setSavingTelemetry(false);
+  }
 
   async function saveRetention(next: Retention) {
     setSavingRetention(true);
@@ -63,10 +73,10 @@ export function DataControls() {
           <p className="mt-0.5 text-[13px] leading-relaxed text-bark-grey">Days to keep redacted run events and audit activity. Blank = keep forever. Budget markers are always kept.</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <input type="number" min={0} placeholder="events" value={daysValue(retention.runEventDays)}
+          <input type="number" min={0} placeholder="events" aria-label="Run event retention days" value={daysValue(retention.runEventDays)}
             onChange={(e) => setRetention((r) => ({ ...r, runEventDays: e.target.value ? Number(e.target.value) : null }))}
             onBlur={() => saveRetention(retention)} className={numberInput} />
-          <input type="number" min={0} placeholder="audit" value={daysValue(retention.auditDays)}
+          <input type="number" min={0} placeholder="audit" aria-label="Audit retention days" value={daysValue(retention.auditDays)}
             onChange={(e) => setRetention((r) => ({ ...r, auditDays: e.target.value ? Number(e.target.value) : null }))}
             onBlur={() => saveRetention(retention)} className={numberInput} />
           {savingRetention ? <Loader2 className="size-4 animate-spin text-pebble" /> : savedRetention ? <Check className="size-4 text-lichen-green" /> : null}
@@ -77,6 +87,18 @@ export function DataControls() {
         <button onClick={prune} disabled={busy !== null}
           className="flex items-center gap-1.5 rounded-lg border border-line-strong px-2.5 py-1.5 text-[12px] text-charcoal disabled:opacity-40">
           {busy === "prune" ? <Loader2 className="size-3.5 animate-spin" /> : null} Prune now
+        </button>
+      </div>
+
+      <div className="flex items-center justify-between gap-6 border-t border-line pt-4">
+        <div className="min-w-0">
+          <p className="text-[14px] text-charcoal">Crash &amp; performance telemetry</p>
+          <p className="mt-0.5 text-[13px] leading-relaxed text-bark-grey">Off by default. When on, sends only redacted error messages and timing counters — never prompts, code, keys, or file contents. See the telemetry doc.</p>
+        </div>
+        <button role="switch" aria-checked={telemetry} aria-label="Toggle crash and performance telemetry"
+          onClick={() => toggleTelemetry(!telemetry)} disabled={savingTelemetry}
+          className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${telemetry ? "bg-lichen-green" : "bg-line-strong"} disabled:opacity-40`}>
+          <span className={`absolute top-0.5 size-5 rounded-full bg-warm-bone transition-transform ${telemetry ? "translate-x-5" : "translate-x-0.5"}`} />
         </button>
       </div>
 
@@ -97,7 +119,7 @@ export function DataControls() {
           <p className="mt-0.5 text-[13px] leading-relaxed text-bark-grey">Removes the active project and its records. Audit activity is retained. Type DELETE to confirm.</p>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="DELETE"
+          <input value={confirmText} onChange={(e) => setConfirmText(e.target.value)} placeholder="DELETE" aria-label="Type DELETE to confirm"
             className="w-24 rounded-lg border border-line-strong bg-paper-white px-2.5 py-1.5 font-mono text-[12px] text-charcoal outline-none focus:border-charcoal" />
           <button onClick={remove} disabled={confirmText !== "DELETE" || busy !== null || !hasProject}
             className="flex items-center gap-1.5 rounded-lg bg-alarm-red px-2.5 py-1.5 text-[12px] text-warm-bone disabled:opacity-40">

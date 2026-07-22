@@ -13,6 +13,9 @@ export type Config = {
   // Redacted log/event retention windows in days. null / 0 / absent = keep
   // forever. Applied deterministically by lib/governance.applyRetention.
   retention?: { runEventDays?: number | null; auditDays?: number | null };
+  // Opt-in redacted crash/performance telemetry. Absent / false = disabled.
+  // See lib/telemetry.ts and docs/telemetry.md.
+  telemetry?: boolean;
 };
 
 export const DEFAULT_RETENTION = { runEventDays: null as number | null, auditDays: null as number | null };
@@ -51,5 +54,6 @@ export function publicView(c: Config) {
     activeProjectId: c.activeProjectId ?? null,
     hasSearchKey: !!c.searchApiKey,
     retention: { ...DEFAULT_RETENTION, ...(c.retention ?? {}) },
+    telemetry: c.telemetry === true,
   };
 }

@@ -17,6 +17,7 @@ export async function POST(req: Request) {
   if (body.model !== undefined) patch.model = body.model;
   if (body.onboarded !== undefined) patch.onboarded = body.onboarded;
   if (body.searchApiKey !== undefined) patch.searchApiKey = body.searchApiKey;
+  if (body.telemetry !== undefined) patch.telemetry = body.telemetry === true;
   if (body.retention !== undefined && body.retention !== null) {
     const clampDays = (value: unknown): number | null => {
       if (value === null || value === undefined || value === "") return null;
