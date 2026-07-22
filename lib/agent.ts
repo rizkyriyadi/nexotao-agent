@@ -8,7 +8,7 @@ import type { Run } from "./run-manager";
 type Msg = { role: "user" | "assistant"; content: any };
 
 function baseSystem(root: string) {
-  return `You are a coding agent running locally on the user's machine, working inside the project at ${root}. You have tools: list_dir, read_file, write_file, edit_file, bash, grep, web_search, web_fetch. Use web_search for up-to-date info and web_fetch to read a URL (docs, articles, GitHub). Actually make changes — read before you edit. Keep messages short. End with a one or two sentence summary.`;
+  return `You are a coding agent running locally on the user's machine, working inside the project at ${root}. You have tools: list_dir, read_file, write_file, edit_file, bash, grep, web_search, web_fetch, graph_query, graph_path, graph_explain. Use web_search for up-to-date info and web_fetch to read a URL (docs, articles, GitHub). Before reading files or starting work, call graph_query to check what the codebase and past task history already know about this — prefer the graph over blind file reads; use graph_path to see how two things connect and graph_explain to inspect one node. Actually make changes — read before you edit. Keep messages short. End with a one or two sentence summary.`;
 }
 
 /** Core tool loop for one agent. Returns the final turn's text (its summary). */

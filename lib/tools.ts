@@ -6,6 +6,7 @@ import { resolveWithin, rel } from "./paths";
 import { webFetch, webSearch } from "./websearch";
 import { getConfig } from "./config";
 import { extractFileText } from "./extract";
+import { queryGraph, pathGraph, explainNode } from "./graphify";
 
 const SKIP = new Set(["node_modules", ".git", ".next", "dist", "build", ".cache"]);
 const MUTATING = new Set(["write_file", "edit_file", "bash"]);
@@ -86,6 +87,34 @@ export const TOOL_DEFS = [
       type: "object",
       properties: { url: { type: "string", description: "Full URL to fetch" } },
       required: ["url"],
+    },
+  },
+  {
+    name: "graph_query",
+    description:
+      "Query the work-history graph with a plain-language question to see what the codebase and past tasks already know about a topic. Returns a scoped subgraph (matching tasks, runs, symbols, and their connections). Prefer this over blind file reads when starting work.",
+    input_schema: {
+      type: "object",
+      properties: { question: { type: "string", description: "Plain-language question, e.g. 'rate limiting / model routing'" } },
+      required: ["question"],
+    },
+  },
+  {
+    name: "graph_path",
+    description: "Find the shortest path between two nodes in the work-history graph (by id like 'task:NEXA-14' or by label). Reveals how two concepts, tasks, or symbols are connected.",
+    input_schema: {
+      type: "object",
+      properties: { a: { type: "string", description: "Start node id or label" }, b: { type: "string", description: "End node id or label" } },
+      required: ["a", "b"],
+    },
+  },
+  {
+    name: "graph_explain",
+    description: "Explain one node in the work-history graph: its kind, source location, community, degree, and all connections. Accepts a node id or a label.",
+    input_schema: {
+      type: "object",
+      properties: { id: { type: "string", description: "Node id (e.g. 'task:NEXA-26') or label" } },
+      required: ["id"],
     },
   },
 ] as const;
@@ -181,6 +210,18 @@ export async function executeTool(
       case "web_fetch": {
         const r = await webFetch(String(input.url ?? ""));
         return { ok: r.ok, output: r.text, display: r.ok ? "fetched" : "failed" };
+      }
+      case "graph_query": {
+        const r = await queryGraph(String(input.question ?? ""));
+        return { ok: r.ok, output: r.text, display: `${r.nodes.length} nodes` };
+      }
+      case "graph_path": {
+        const r = await pathGraph(String(input.a ?? ""), String(input.b ?? ""));
+        return { ok: r.ok, output: r.text, display: r.path.length ? `${r.edges.length} hops` : "no path" };
+      }
+      case "graph_explain": {
+        const r = await explainNode(String(input.id ?? ""));
+        return { ok: r.ok, output: r.text, display: r.node ? r.node.kind : "not found" };
       }
       default:
         return { ok: false, output: `Unknown tool: ${name}` };
