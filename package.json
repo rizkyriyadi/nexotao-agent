@@ -1,6 +1,6 @@
 {
   "name": "nexotao",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "A local, single-user coding agent with a web UI, powered by your Nexotao API key. Install, run `nexotao`, and start building on your own machine.",
   "keywords": [
     "nexotao",
