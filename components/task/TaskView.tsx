@@ -27,7 +27,10 @@ type TimelineItem =
   | { kind: "user"; text: string; ts: number; key: string }
   | { kind: "run"; runId: string; status: string; ts: number; live: boolean; key: string };
 
-const ACTIVE = new Set(["in_progress", "todo", "blocked", "queued", "running", "waiting"]);
+// Statuses where a run is actually starting or streaming. `blocked` is
+// deliberately excluded: a blocked task is waiting on the user, not executing,
+// so it must not show a spinner or the "a run is in progress" affordance.
+const ACTIVE = new Set(["in_progress", "todo", "queued", "running", "waiting"]);
 
 /** Pull the optional machine-readable decisions block a plan run may append as a
  *  trailing HTML comment. Forgiving: anything malformed yields no chips. */

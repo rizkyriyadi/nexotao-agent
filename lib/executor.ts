@@ -149,11 +149,6 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
 
     let executionRoot = root;
     let beforeMutation: ((tool: { name: string; input: unknown }) => Promise<void>) | undefined;
-    if (writesFiles) {
-      const assignment = await workspaceManager.provision({ projectId, issueId, identifier: issue.ref, runId, repositoryPath: root });
-      executionRoot = assignment.workspacePath;
-      beforeMutation = workspaceManager.mutationGuard(issueId, runId);
-    }
 
     // Build the conversation: the original request, then any follow-up messages
     // (with the previous run's summary as the assistant turn between them) so the
@@ -171,6 +166,15 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
 
     let result: { text: string } = { text: "" };
     try {
+      // Provision the isolated worktree inside the run's try/catch so a
+      // preparation failure (e.g. `git worktree add`) is reported as a failed
+      // run and transitions the issue out of `in_progress`, instead of leaving
+      // it stranded as "running" while the run itself is already failed.
+      if (writesFiles) {
+        const assignment = await workspaceManager.provision({ projectId, issueId, identifier: issue.ref, runId, repositoryPath: root });
+        executionRoot = assignment.workspacePath;
+        beforeMutation = workspaceManager.mutationGuard(issueId, runId);
+      }
       result = await runIssueAgent({
         run, apiKey, model, root: executionRoot, mode, agentName: agent.name, messages, beforeMutation,
       });
