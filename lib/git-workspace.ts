@@ -94,12 +94,21 @@ async function changedPaths(workspacePath: string) {
 
 export async function inspectOutgoingCommits(repositoryPath: string, baseCommit: string, headCommit: string, approved?: GitIdentity) {
   const identity = approved ?? await repositoryIdentity(repositoryPath);
-  const paths = (await git(repositoryPath, "diff", "--name-only", "-z", `${baseCommit}..${headCommit}`)).stdout.split("\0").filter(Boolean);
-  assertAllowedPaths(paths);
-  if (baseCommit === headCommit) return { commits: 0, paths };
+  if (baseCommit === headCommit) return { commits: 0, paths: [] as string[] };
+  // Only vet commits authored locally in this workspace: reachable from head, but
+  // from neither the base nor any remote-tracking branch. History imported by
+  // pulling an upstream repository (e.g. `git reset --hard upstream/main`) lives on
+  // a remote ref, so its third-party commits are exempt from the identity,
+  // attribution, and path policy — those rules gate what an agent introduces, not
+  // what a legitimate upstream already published. Re-auditing foreign history would
+  // fail every pull, since its authors are never the repository-approved identity.
+  const localCommits = (await git(repositoryPath, "rev-list", `${baseCommit}..${headCommit}`, "--not", "--remotes"))
+    .stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!localCommits.length) return { commits: 0, paths: [] as string[] };
   const format = "%H%x00%an%x00%ae%x00%cn%x00%ce%x00%s%x00%b%x1e";
-  const raw = (await git(repositoryPath, "log", `--format=${format}`, `${baseCommit}..${headCommit}`)).stdout;
+  const raw = (await git(repositoryPath, "log", "--no-walk", `--format=${format}`, ...localCommits)).stdout;
   const records = raw.split("\x1e").map((record) => record.trim()).filter(Boolean);
+  const paths = new Set<string>();
   for (const record of records) {
     const [commit, authorName, authorEmail, committerName, committerEmail, subject, body = ""] = record.split("\0");
     if (authorName !== identity.name || authorEmail !== identity.email || committerName !== identity.name || committerEmail !== identity.email) {
@@ -109,8 +118,9 @@ export async function inspectOutgoingCommits(repositoryPath: string, baseCommit:
     const commitPaths = (await git(repositoryPath, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r", "-z", commit))
       .stdout.split("\0").filter(Boolean);
     assertAllowedPaths(commitPaths);
+    for (const commitPath of commitPaths) paths.add(commitPath);
   }
-  return { commits: records.length, paths };
+  return { commits: records.length, paths: [...paths] };
 }
 
 export class GitWorkspaceManager {

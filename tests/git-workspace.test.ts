@@ -174,6 +174,46 @@ test("history policy audits every outgoing commit and orphan recovery never dele
   } finally { await cleanup(f); }
 });
 
+test("pulling an upstream repository is exempt from the outgoing-commit identity policy", async () => {
+  const f = await fixture();
+  try {
+    const base = await git(f.repositoryPath, "rev-parse", "HEAD");
+
+    // Stand up a separate upstream repository with third-party history, authored
+    // by an identity that is not the repository-approved one.
+    const upstreamPath = path.join(f.dir, "upstream");
+    await mkdir(upstreamPath, { recursive: true });
+    await git(upstreamPath, "init", "-b", "main");
+    await git(upstreamPath, "config", "user.name", "Upstream Maintainer");
+    await git(upstreamPath, "config", "user.email", "maintainer@upstream.test");
+    await writeFile(path.join(upstreamPath, "trading.py"), "print('hello')\n");
+    await git(upstreamPath, "add", "trading.py");
+    await git(upstreamPath, "commit", "-m", "docs: streamline onboarding");
+    const upstreamHead = await git(upstreamPath, "rev-parse", "HEAD");
+
+    // Pull it into the project the way the agent flow does: add remote, fetch, reset.
+    await git(f.repositoryPath, "remote", "add", "upstream", upstreamPath);
+    await git(f.repositoryPath, "fetch", "upstream");
+    await git(f.repositoryPath, "reset", "--hard", "upstream/main");
+    assert.equal(await git(f.repositoryPath, "rev-parse", "HEAD"), upstreamHead);
+
+    // Imported foreign history must not trip the identity/attribution guard — this
+    // is the exact "pull repo" failure the policy previously rejected.
+    const imported = await inspectOutgoingCommits(f.repositoryPath, base, upstreamHead, identity);
+    assert.equal(imported.commits, 0, "pulled upstream commits are exempt from the policy");
+
+    // A commit authored locally on top of the pull is still fully policed.
+    await writeFile(path.join(f.repositoryPath, "local.txt"), "agent work\n");
+    await git(f.repositoryPath, "add", "local.txt");
+    await git(f.repositoryPath, "-c", "user.name=Unapproved", "-c", "user.email=unapproved@example.test", "commit", "-m", "chore(repo): add local file");
+    await assert.rejects(
+      inspectOutgoingCommits(f.repositoryPath, base, await git(f.repositoryPath, "rev-parse", "HEAD"), identity),
+      /approved identity/,
+      "commits authored locally above imported history are still policed",
+    );
+  } finally { await cleanup(f); }
+});
+
 test("provisioning a fresh non-git project directory initialises a repository with its files", async () => {
   const f = await fixture();
   try {
