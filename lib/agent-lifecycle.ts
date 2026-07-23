@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./db/database";
 import {
-  activityLog, agentConfigRevisions, agents, heartbeatRuns, issues,
+  activityLog, agentConfigRevisions, agents, costEvents, heartbeatRuns, issues, wakeupRequests,
 } from "./db/schema";
 import { configActivityDiff } from "./governance";
 
@@ -218,6 +218,42 @@ export class AgentLifecycleService {
       throw error;
     }
     return this.get(id);
+  }
+
+  // Hard-delete an agent. Unlike `terminate` (which only flips status to
+  // "terminated" but keeps the row), this removes the agent record entirely,
+  // along with its config revisions, heartbeat runs, wakeup requests, and cost
+  // events, and detaches its issues (assignee/creator → null). Dependent rows
+  // are removed explicitly rather than via FK cascade so the behaviour holds
+  // regardless of the engine's cascade support. The activity log is left intact
+  // — a final `agent.deleted` entry survives as an audit trail. Requires
+  // confirmation; a lead with active specialists must have them reassigned or
+  // deleted first; any in-flight run is cancelled before removal.
+  async delete(id: string, options: { confirmed?: boolean } = {}, actor: AgentActor = { type: "user" }) {
+    const current = this.get(id);
+    if (!options.confirmed) throw new AgentLifecycleError("confirmation_required", "Deleting an agent requires confirmation");
+    if (current.role === "lead") {
+      const reports = this.database.read((db) => db.select().from(agents).where(and(eq(agents.reportsTo, id), inArray(agents.status, ["idle", "queued", "running", "paused", "error"]))).all());
+      if (reports.length) throw new AgentLifecycleError("conflict", "Reassign or delete the reporting specialists before deleting the lead");
+    }
+    const currentRun = this.database.read((db) => db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.agentId, id), inArray(heartbeatRuns.status, activeRunStatuses))).orderBy(desc(heartbeatRuns.startedAt)).get());
+    if (currentRun) await this.effects?.cancel(currentRun.id, "Agent deleted");
+    const now = Date.now();
+    await this.database.write((db) => {
+      // Detach issues so they survive the delete with no dangling assignee.
+      db.update(issues).set({ assigneeAgentId: null }).where(eq(issues.assigneeAgentId, id)).run();
+      db.update(issues).set({ createdByAgentId: null }).where(eq(issues.createdByAgentId, id)).run();
+      // Remove the agent's operational history.
+      db.delete(costEvents).where(eq(costEvents.agentId, id)).run();
+      db.delete(wakeupRequests).where(eq(wakeupRequests.agentId, id)).run();
+      db.delete(heartbeatRuns).where(eq(heartbeatRuns.agentId, id)).run();
+      db.delete(agentConfigRevisions).where(eq(agentConfigRevisions.agentId, id)).run();
+      // Write the audit row before the delete so it captures the final state;
+      // it outlives the agent because activity_log has no FK to agents.
+      auditRow(db, id, "agent.deleted", { name: current.name, role: current.role, status: current.status }, actor, now);
+      db.delete(agents).where(eq(agents.id, id)).run();
+    });
+    return { id, deleted: true as const };
   }
 
   async markError(id: string, reason: string, actor: AgentActor = { type: "agent" }) {

@@ -3,10 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { and, eq } from "drizzle-orm";
 import { AgentLifecycleError, AgentLifecycleService, type AgentConfigInput } from "../lib/agent-lifecycle";
 import { openDatabase } from "../lib/db/database";
 import { ControlPlaneRepositories } from "../lib/db/repositories";
-import { projects } from "../lib/db/schema";
+import { activityLog, agentConfigRevisions, costEvents, heartbeatRuns, issues, projects } from "../lib/db/schema";
 
 const base = (name: string, role: "lead" | "worker", reportsTo: string | null = null): AgentConfigInput => ({
   name, role, reportsTo, title: role === "lead" ? "Team lead" : "Engineer", scope: "Build the product",
@@ -62,6 +63,57 @@ test("agent configuration, hierarchy, revisions, lifecycle, and audit are durabl
 
     detail = service.list("p").find((agent) => agent.id === worker.id)!;
     assert.ok(detail.activity.some((entry) => entry.action === "agent.terminate"));
+  } finally {
+    await database.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("deleting an agent removes the row, cascades its history, detaches issues, and keeps an audit trail", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nexotao-agent-delete-"));
+  const database = await openDatabase(path.join(dir, "db.sqlite"), { migrateJson: false });
+  try {
+    await database.write((db) => db.insert(projects).values({ id: "p", name: "Delete", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+    const cancelled: string[] = [];
+    const service = new AgentLifecycleService(database, {
+      invoke: async () => {}, cancel: async (runId) => { cancelled.push(runId); return true; }, retry: async () => true,
+    });
+    const lead = await service.create("p", base("Lead", "lead"));
+    const worker = await service.create("p", base("Builder", "worker", lead.id));
+
+    // Delete needs confirmation.
+    await assert.rejects(() => service.delete(worker.id), (e: unknown) => e instanceof AgentLifecycleError && e.code === "confirmation_required");
+
+    // A lead with an active specialist cannot be deleted first.
+    await assert.rejects(() => service.delete(lead.id, { confirmed: true }), (e: unknown) => e instanceof AgentLifecycleError && e.code === "conflict");
+
+    // Seed dependent rows: an assigned issue, a running heartbeat, and a cost event.
+    const repositories = new ControlPlaneRepositories(database);
+    await repositories.issues.insert({ id: "i", projectId: "p", identifier: "NX-1", title: "Ship", status: "todo", assigneeAgentId: worker.id, createdAt: 4, updatedAt: 4 });
+    const run = await repositories.createHeartbeat({ agentId: worker.id, issueId: "i", source: "invoke", status: "running", startedAt: 5 });
+    await database.write((db) => db.insert(costEvents).values({ id: "c", runId: run.id, agentId: worker.id, model: "m", inputTokens: 1, outputTokens: 1, cost: 0.01, createdAt: 6 }).run());
+
+    const result = await service.delete(worker.id, { confirmed: true });
+    assert.deepEqual(result, { id: worker.id, deleted: true });
+    assert.deepEqual(cancelled, [run.id], "the in-flight run was cancelled");
+
+    // The agent and all FK-cascaded rows are gone.
+    assert.throws(() => service.get(worker.id), (e: unknown) => e instanceof AgentLifecycleError && e.code === "not_found");
+    assert.equal(database.read((db) => db.select().from(heartbeatRuns).where(eq(heartbeatRuns.agentId, worker.id)).all()).length, 0);
+    assert.equal(database.read((db) => db.select().from(costEvents).where(eq(costEvents.agentId, worker.id)).all()).length, 0);
+    assert.equal(database.read((db) => db.select().from(agentConfigRevisions).where(eq(agentConfigRevisions.agentId, worker.id)).all()).length, 0);
+
+    // The issue is detached rather than deleted.
+    const issue = database.read((db) => db.select().from(issues).where(eq(issues.id, "i")).get());
+    assert.ok(issue && issue.assigneeAgentId === null, "issue survives with assignee cleared");
+
+    // The audit trail survives the delete.
+    const audit = database.read((db) => db.select().from(activityLog).where(and(eq(activityLog.entityId, worker.id), eq(activityLog.action, "agent.deleted"))).all());
+    assert.equal(audit.length, 1, "a final agent.deleted audit entry remains");
+
+    // With the specialist gone, the lead can now be deleted.
+    await service.delete(lead.id, { confirmed: true });
+    assert.throws(() => service.get(lead.id), (e: unknown) => e instanceof AgentLifecycleError && e.code === "not_found");
   } finally {
     await database.close();
     await rm(dir, { recursive: true, force: true });

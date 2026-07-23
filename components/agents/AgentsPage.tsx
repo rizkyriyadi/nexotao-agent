@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { AlertTriangle, Bot, CheckCircle2, Clock, Pause, Play, Plus, RefreshCw, RotateCcw, Settings2, Square, Users, XCircle } from "lucide-react";
+import { AlertTriangle, Bot, CheckCircle2, Clock, Pause, Play, Plus, RefreshCw, RotateCcw, Settings2, Square, Trash2, Users, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { agentAvatar } from "@/lib/avatars";
 import { AvatarPicker } from "./AvatarPicker";
@@ -112,6 +112,22 @@ export function AgentsPage() {
     finally { setBusy(null); }
   }
 
+  // Hard delete: removes the agent entirely (run history, revisions, and cost
+  // events go with it). Distinct from Terminate, which only stops the agent.
+  async function del() {
+    if (!selected) return;
+    if (!window.confirm(`Delete ${selected.name} permanently? This removes the agent and its history and cannot be undone.`)) return;
+    setBusy("delete");
+    try {
+      const response = await fetch(`/api/agents/${selected.id}?confirmed=1`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error ?? "Could not delete agent");
+      toast.success(`${selected.name} deleted`);
+      setSelectedId(null); await load();
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Could not delete agent"); }
+    finally { setBusy(null); }
+  }
+
   return <div className="flex h-full min-w-0 flex-1">
     <aside className="flex w-[360px] shrink-0 flex-col border-r border-line bg-paper-white">
       <header className="flex h-14 items-center gap-2.5 border-b border-line px-5"><Users className="size-4 text-electric-indigo" /><h1 className="text-[15px] font-medium">Agent roster</h1><span className="ml-auto font-mono text-[11px] text-pebble">{agents.length}</span><Button size="icon" variant="ghost" className="size-8" onClick={() => { setForm(blank()); setDialog("create"); }} disabled={!lead}><Plus /></Button></header>
@@ -147,7 +163,8 @@ export function AgentsPage() {
                 {selected.status === "paused" && <Button size="sm" onClick={() => void action("resume")} disabled={busy !== null}><Play /> Resume</Button>}
                 {selected.status === "error" && <><Button size="sm" onClick={() => void action("retry_last_task")} disabled={busy !== null}><RotateCcw /> Retry last task</Button><Button size="sm" variant="outline" onClick={() => void action("clear_error")} disabled={busy !== null}><CheckCircle2 /> Clear error</Button></>}
                 {selected.status !== "terminated" && <Button size="sm" variant="destructive" onClick={() => void action("terminate")} disabled={busy !== null}><Square /> Terminate</Button>}
-              </div></Card>
+                <Button size="sm" variant="outline" className="text-alarm-red hover:text-alarm-red" onClick={() => void del()} disabled={busy !== null}><Trash2 /> Delete</Button>
+              </div><p className="mt-2 text-[11.5px] text-pebble">Terminate stops the agent but keeps its record. Delete removes the agent and its history permanently.</p></Card>
               <Card title="Runtime settings"><Details rows={[["Adapter", selected.adapterType], ["Model", String(selected.adapterConfig.model || "Default")], ["Concurrency", String(selected.concurrency)], ["Current run", selected.currentRun?.id ?? "None"], ["Pause reason", selected.pauseReason ?? "—"]]} /></Card>
               <Card title="Adapter configuration"><JsonBlock value={selected.adapterConfig} /></Card>
             </TabsContent>
