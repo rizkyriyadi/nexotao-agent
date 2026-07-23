@@ -12,7 +12,7 @@ process.env.NEXOTAO_DATA_DIR = dir;
 
 const { getDatabase } = await import("../lib/db/database");
 const schema = await import("../lib/db/schema");
-const { installBlueprint, installRoleTemplate, getTeamBlueprint, ROLE_TEMPLATES, TEAM_BLUEPRINTS, getRoleTemplate } = await import("../lib/blueprints");
+const { installBlueprint, installRoleTemplate, getTeamBlueprint, ROLE_TEMPLATES, TEAM_BLUEPRINTS, getRoleTemplate, MODEL, AVAILABLE_MODEL_IDS } = await import("../lib/blueprints");
 const { listAgents, listIssues, getAgentModel } = await import("../lib/issues");
 const { listIssueDependencies } = await import("../lib/store");
 
@@ -88,6 +88,18 @@ test("installRoleTemplate hires a single specialist with model routing", async (
   // Hiring the same role again picks a non-colliding name rather than failing.
   const second = await installRoleTemplate("bp3", "security-engineer");
   assert.notEqual(second.name, agent.name, "second hire gets a distinct name");
+});
+
+test("every recommended model is one the gateway actually serves", () => {
+  const available = new Set(AVAILABLE_MODEL_IDS);
+  // The tier map and every role must route to an available model, otherwise the
+  // marketplace flags the role as unavailable (the "Sonnet 5 unavail" bug).
+  for (const [tier, id] of Object.entries(MODEL)) {
+    assert.ok(available.has(id), `MODEL.${tier} (${id}) is not in the available catalog`);
+  }
+  for (const role of ROLE_TEMPLATES) {
+    assert.ok(available.has(role.recommendedModel), `role ${role.id} routes to unavailable model ${role.recommendedModel}`);
+  }
 });
 
 test("every blueprint references only known roles and valid dependency indexes", () => {

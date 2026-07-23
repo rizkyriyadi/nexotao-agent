@@ -16,16 +16,27 @@ import { createIssue, listAgents, seedAgents, leadAgent, type Agent } from "./is
 import { getProject } from "./store";
 import { DEFAULT_MODEL } from "./nexotao";
 
-// Recommended model tiers. Ids match the Nexotao catalog (Claude over the
-// Anthropic transport, GPT over the OpenAI-compatible one). Routing is a
-// recommendation stored on each agent's adapterConfig.model; the executor
-// honours it at run time.
+// Recommended model tiers. Every id below MUST exist in the live Nexotao
+// catalog (see AVAILABLE_MODEL_IDS and the guard test in blueprints.test.ts) —
+// otherwise the marketplace flags the role as routed to an unavailable model.
+// Routing is a recommendation stored on each agent's adapterConfig.model; the
+// executor honours it at run time. Claude speaks the Anthropic transport, GPT
+// the OpenAI-compatible one.
 export const MODEL = {
   reasoning: DEFAULT_MODEL, // claude-opus-4-8 — hardest architecture / product calls
-  balanced: "claude-sonnet-5", // strong default for day-to-day build work
-  fast: "claude-haiku-4-5-20251001", // cheap, high-volume drafting / triage
-  gpt: "gpt-5.6", // cross-model option for growth / copy work
+  balanced: "claude-sonnet-4-6", // strong Sonnet default for day-to-day build work
+  fast: "gpt-5.6-luna", // cheapest available tier — high-volume drafting / triage
+  gpt: "gpt-5.6-terra", // cross-model option for growth / copy work
 } as const;
+
+// The model ids the Nexotao gateway currently serves and this app supports
+// (Claude on the Anthropic transport + the GPT 5.6 series). Kept as an explicit
+// allow-list so a stale recommendedModel is caught by tests instead of shipping
+// a template the marketplace flags as unavailable. Must track `fetchModels`.
+export const AVAILABLE_MODEL_IDS: readonly string[] = [
+  "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+  "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna",
+];
 
 export type RoleCategory = "engineering" | "product" | "design" | "growth" | "data" | "operations";
 
