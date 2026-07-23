@@ -36,6 +36,27 @@ test("agent (auto) mode auto-approves edits but still gates destructive actions"
   assert.equal(evaluateExecutionPolicy(modeToPolicy("agent"), destructive), "ask");
 });
 
+test("agent mode runs routine repo commands without a prompt, gates catastrophic ones", () => {
+  const auto = modeToPolicy("agent");
+  // The "pull repo" sync flow from the field report: composed git command that
+  // fast-forwards a checkout to upstream via `git reset --hard`. Routine —
+  // should run without an approval prompt in Agent mode.
+  const pull = describeToolAction("bash", {
+    command: 'git remote add upstream https://github.com/acme/repo.git && git fetch upstream && git reset --hard "upstream/main" && git status --short --branch',
+  });
+  assert.equal(pull.action, "exec");
+  assert.equal(pull.risk, "high"); // still flagged in the audit trail…
+  assert.equal(evaluateExecutionPolicy(auto, pull), "allow"); // …but not gated.
+  assert.equal(evaluateExecutionPolicy(auto, describeToolAction("bash", { command: "git clean -fd" })), "allow");
+
+  // Catastrophic, out-of-tree commands stay gated even in Agent mode.
+  for (const command of ["rm -rf ./build", "sudo shutdown -h now", "mkfs.ext4 /dev/sda1", "dd if=/dev/zero of=/dev/sda"]) {
+    const details = describeToolAction("bash", { command });
+    assert.equal(details.action, "destructive", command);
+    assert.equal(evaluateExecutionPolicy(auto, details), "ask", command);
+  }
+});
+
 test("plan and ask modes deny every mutation while allowing read-only tools", () => {
   const edit = describeToolAction("write_file", { path: "x.ts", content: "y" });
   const read = describeToolAction("read_file", { path: "README.md" });

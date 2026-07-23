@@ -18,7 +18,14 @@ export type PolicyDetails = { action: PolicyAction; target: string; risk: Policy
 
 type ToolRequest = { id: string; name: string; input: unknown; thread: string };
 
-const DESTRUCTIVE_COMMAND = /(?:^|[;&|]\s*)(?:rm\s+(?:-[^\s]*r[^\s]*f|-[^\s]*f[^\s]*r)|git\s+(?:reset\s+--hard|clean\s+-[a-z]*f)|(?:sudo\s+)?(?:shutdown|reboot|mkfs|fdisk)\b|dd\s+if=|kill\s+-9\b)/i;
+// Catastrophic, hard-to-reverse commands with a blast radius beyond the repo
+// working tree (wiping files, formatting disks, halting the machine). These
+// stay gated behind an explicit approval prompt even in autonomous Agent mode.
+const CATASTROPHIC_COMMAND = /(?:^|[;&|]\s*)(?:rm\s+(?:-[^\s]*r[^\s]*f|-[^\s]*f[^\s]*r)|(?:sudo\s+)?(?:shutdown|reboot|mkfs|fdisk)\b|dd\s+if=|kill\s+-9\b)/i;
+// Repo-scoped working-tree resets. Routine steps in ordinary flows (e.g. syncing
+// a checkout to upstream), so they run without a prompt in Agent mode — but are
+// still surfaced as high risk in the audit trail and approval previews.
+const REPO_RESET_COMMAND = /(?:^|[;&|]\s*)git\s+(?:reset\s+--hard|clean\s+-[a-z]*f)/i;
 
 function inputRecord(input: unknown): Record<string, unknown> {
   return input && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : {};
@@ -33,8 +40,11 @@ export function describeToolAction(name: string, input: unknown): PolicyDetails 
   const value = inputRecord(input);
   if (name === "bash") {
     const command = String(value.command ?? "");
-    const destructive = DESTRUCTIVE_COMMAND.test(command);
-    return { action: destructive ? "destructive" : "exec", target: clipped(command, 500), risk: destructive ? "high" : "medium", preview: clipped(command) };
+    if (CATASTROPHIC_COMMAND.test(command))
+      return { action: "destructive", target: clipped(command, 500), risk: "high", preview: clipped(command) };
+    // Repo resets are notable (high risk in the trail) but not gated in Agent mode.
+    const risk: PolicyRisk = REPO_RESET_COMMAND.test(command) ? "high" : "medium";
+    return { action: "exec", target: clipped(command, 500), risk, preview: clipped(command) };
   }
   if (name === "write_file") {
     return { action: "write", target: clipped(value.path, 500), risk: "medium", preview: clipped(value.content) };
@@ -54,8 +64,9 @@ export function describeToolAction(name: string, input: unknown): PolicyDetails 
 
 export function evaluateExecutionPolicy(policy: ExecutionPolicy, details: PolicyDetails): "allow" | "deny" | "ask" {
   if (details.action === "read" || details.action === "control") return "allow";
-  // Auto ("allow") mode still routes genuinely destructive actions (rm -rf,
-  // git reset --hard, mkfs, …) through an explicit approval prompt.
+  // Auto ("allow") mode still routes genuinely catastrophic actions (rm -rf,
+  // mkfs, dd, shutdown, …) through an explicit approval prompt. Routine
+  // repo-scoped commands run without a prompt.
   if (policy === "allow" && details.action === "destructive") return "ask";
   return policy;
 }
