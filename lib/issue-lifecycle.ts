@@ -2,13 +2,14 @@ import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./db/database";
 import { activityLog, agents, heartbeatRuns, issueDependencies, issueMutationRequests, issues, wakeupRequests } from "./db/schema";
+import { isBlockerResolved } from "./blocker-attention";
 
 export const ISSUE_STATUSES = ["backlog", "todo", "in_progress", "in_review", "blocked", "done", "cancelled"] as const;
 export type IssueStatus = (typeof ISSUE_STATUSES)[number];
 export type IssueActor = { type: "agent" | "user" | "system"; id?: string | null; runId?: string | null };
 
 const transitions: Record<IssueStatus, ReadonlySet<IssueStatus>> = {
-  backlog: new Set(["todo", "cancelled"]),
+  backlog: new Set(["todo", "blocked", "cancelled"]),
   todo: new Set(["backlog", "blocked", "cancelled"]),
   in_progress: new Set(["todo", "in_review", "blocked", "done", "cancelled"]),
   in_review: new Set(["todo", "done", "cancelled"]),
@@ -46,8 +47,14 @@ function blockers(db: Db, issueId: string) {
     : [];
 }
 
+/** A blocker stops holding its dependents once it reaches a terminal state.
+ *  `cancelled` counts as resolved as well as `done`: treating it as unmet made a
+ *  cancelled blocker deadlock its dependents forever, because nothing wakes them
+ *  and `blocked → todo` is rejected while blockers are unmet. The dependent is
+ *  freed here and flagged for attention by `computeBlockerAttention`, which is
+ *  where "a cancelled blocker still needs a decision" is surfaced. */
 function hasUnmetBlockers(db: Db, issueId: string) {
-  return blockers(db, issueId).some((blocker) => blocker.status !== "done");
+  return blockers(db, issueId).some((blocker) => !isBlockerResolved(blocker.status));
 }
 
 function enqueue(db: Db, input: { agentId: string; issueId: string; reason: string; key: string; now: number }) {
@@ -156,9 +163,12 @@ export class IssueLifecycleService {
       const next = all.reduce((highest, row) => Math.max(highest, Number(row.identifier.match(/-(\d+)$/)?.[1] ?? 0)), 0) + 1;
       const id = randomUUID();
       validateDependencies(db, { id, projectId: input.projectId }, blockerIds);
-      const unresolved = blockerIds.some((blockerId) => db.select().from(issues).where(eq(issues.id, blockerId)).get()?.status !== "done");
+      const unresolved = blockerIds.some((blockerId) => !isBlockerResolved(db.select().from(issues).where(eq(issues.id, blockerId)).get()?.status ?? ""));
       const requestedStatus = normalized.status;
-      const status = unresolved && requestedStatus === "todo" ? "blocked" : requestedStatus;
+      // Blocked is derived from unmet blockers regardless of the status asked
+      // for, so a task parked in `backlog` with blockers reads as blocked rather
+      // than silently pretending it is merely unscheduled.
+      const status = unresolved && (requestedStatus === "todo" || requestedStatus === "backlog") ? "blocked" : requestedStatus;
       if (status === "in_progress") throw new IssueDomainError("invalid_transition", "Issues enter in_progress only through checkout");
       const row = {
         id, projectId: input.projectId, identifier: `NX-${next}`, parentId: normalized.parentId, title: normalized.title,
@@ -210,7 +220,7 @@ export class IssueLifecycleService {
       const unmet = hasUnmetBlockers(db, issueId);
       let status = issue.status;
       const interruptedRunId = unmet && status === "in_progress" ? issue.checkoutRunId : null;
-      if (unmet && (status === "todo" || status === "in_progress")) status = "blocked";
+      if (unmet && (status === "todo" || status === "backlog" || status === "in_progress")) status = "blocked";
       if (!unmet && status === "blocked") status = "todo";
       db.update(issues).set({
         status, updatedAt: now,
@@ -279,7 +289,10 @@ export class IssueLifecycleService {
       db.update(issues).set(patch).where(eq(issues.id, issue.id)).run();
       audit(db, { actor, action: "issue.transitioned", issueId, summary: { from: current, to: target }, now, runId: issue.checkoutRunId });
       const updated = db.select().from(issues).where(eq(issues.id, issue.id)).get()!;
-      if (target === "done") wakeDependents(db, updated, actor, now);
+      // Cancelling releases dependents just like completing does. Without this a
+      // cancelled blocker leaves every dependent stuck in `blocked` with no path
+      // out, since only this call can demote them back to `todo`.
+      if (isBlockerResolved(target)) wakeDependents(db, updated, actor, now);
       return updated;
     });
   }

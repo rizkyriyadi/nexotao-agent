@@ -16,6 +16,7 @@ import { ControlPlaneRepositories, type ClaimedHeartbeat, type WakeupReason } fr
 import { RunEventDomainError } from "./run-events";
 import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runtime";
 import { GitWorkspaceManager } from "./git-workspace";
+import { isBlockerResolved } from "./blocker-attention";
 
 let runtimePromise: Promise<DurableHeartbeatRuntime> | undefined;
 async function heartbeatRuntime() {
@@ -61,7 +62,9 @@ export async function tick(projectId: string) {
   for (const it of issues) {
     if (!it.assigneeAgentId) continue;
     if (it.status !== "todo" && it.status !== "blocked") continue;
-    const unmet = it.blockedBy.filter((bid) => byId.get(bid)?.status !== "done");
+    // Must match the lifecycle's own rule (done *or* cancelled resolves a
+    // blocker); disagreeing here would re-block work the lifecycle just freed.
+    const unmet = it.blockedBy.filter((bid) => !isBlockerResolved(byId.get(bid)?.status ?? ""));
     if (unmet.length) {
       if (it.status !== "blocked") I.updateIssue(it.id, { status: "blocked" }).catch(() => {});
       continue;
