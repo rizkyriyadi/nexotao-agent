@@ -60,6 +60,37 @@ test("installBlueprint hires each role with its recommended model and wires the 
   assert.equal(qaDeps.length, (qaSpec.blockedBy ?? []).length, "QA issue blocked by its declared predecessors");
 });
 
+test("an installed blueprint is runnable: unblocked work is todo, the rest is blocked, none is parked in backlog", async () => {
+  await makeProject("bp-runnable");
+  const blueprint = getTeamBlueprint("ship-a-saas")!;
+  await installBlueprint("bp-runnable", "ship-a-saas");
+  const issues = await listIssues("bp-runnable");
+
+  // Nothing may land in "backlog": the executor only considers todo/blocked and
+  // wakeDependents only promotes blocked, so a backlog issue has no path to
+  // ever start. That combination deadlocked the whole wired backlog.
+  assert.equal(issues.filter((i) => i.status === "backlog").length, 0, "no issue parked in backlog");
+
+  // The head of the chain (declared with no blockers) must be immediately runnable.
+  const headSpecs = blueprint.issues.filter((s) => !(s.blockedBy ?? []).length);
+  assert.ok(headSpecs.length > 0, "blueprint has at least one unblocked starter issue");
+  for (const spec of headSpecs) {
+    const issue = issues.find((i) => i.title === spec.title);
+    assert.ok(issue, `${spec.title} exists`);
+    assert.equal(issue!.status, "todo", `${spec.title} is runnable`);
+    assert.ok(issue!.assigneeAgentId, `${spec.title} has an assignee to run it`);
+  }
+
+  // Everything with a declared predecessor is blocked, not queued — so the
+  // Team Room reports it as blocked rather than a permanently "Queued" agent.
+  for (const spec of blueprint.issues.filter((s) => (s.blockedBy ?? []).length)) {
+    const issue = issues.find((i) => i.title === spec.title);
+    assert.ok(issue, `${spec.title} exists`);
+    assert.equal(issue!.status, "blocked", `${spec.title} is blocked by its predecessors`);
+    assert.ok(issue!.blockedBy.length > 0, `${spec.title} has first-class blocker edges`);
+  }
+});
+
 test("re-installing a blueprint reuses existing agents instead of duplicating", async () => {
   await makeProject("bp2");
   const first = await installBlueprint("bp2", "launch-mvp");

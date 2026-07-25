@@ -347,9 +347,14 @@ export async function installBlueprint(projectId: string, blueprintId: string): 
     const blockedBy = (spec.blockedBy ?? [])
       .map((idx) => idByIndex[idx])
       .filter((id): id is string => Boolean(id));
+    // Request "todo", never "backlog": the lifecycle derives "blocked" for any
+    // issue with unresolved blockers and enqueues a wakeup for the rest. A
+    // blueprint installed straight into "backlog" is inert — the executor only
+    // considers todo/blocked, and wakeDependents only promotes blocked — so the
+    // whole wired backlog would sit there with no path to ever start.
     const issue = await createIssue({
       projectId, title: spec.title, detail: spec.detail, assigneeAgentId,
-      status: "backlog", priority: spec.priority ?? "medium", blockedBy,
+      status: "todo", priority: spec.priority ?? "medium", blockedBy,
       actor: { type: "user" },
       idempotencyKey: `blueprint:${blueprintId}:issue:${i}`,
     });

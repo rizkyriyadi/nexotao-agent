@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveProject } from "@/lib/store";
 import { installBlueprint, installRoleTemplate } from "@/lib/blueprints";
+import { tick } from "@/lib/executor";
 import { AgentLifecycleError } from "@/lib/agent-lifecycle";
 import { HttpError, jsonError, readJsonObject, stringField } from "@/lib/http";
 
@@ -25,6 +26,9 @@ export async function POST(req: Request) {
     const blueprintId = stringField(body, "blueprintId", { max: 120 });
     if (blueprintId) {
       const result = await installBlueprint(project.id, blueprintId);
+      // Start the head of the dependency chain now rather than waiting for an
+      // unrelated mutation to trigger the next scheduler pass.
+      await tick(project.id).catch(() => {});
       return NextResponse.json({ result }, { status: 201 });
     }
     const roleTemplateId = stringField(body, "roleTemplateId", { max: 120 });
