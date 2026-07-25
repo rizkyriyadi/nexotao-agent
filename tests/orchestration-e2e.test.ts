@@ -38,7 +38,7 @@ async function cleanup(dir: string, database: AppDatabase) {
 function loadAgents(database: AppDatabase): Agent[] {
   return database.read((db) => db.select().from(agents).where(eq(agents.projectId, "project")).all()).map((row) => ({
     id: row.id, projectId: row.projectId, name: row.name, role: row.role as "lead" | "worker",
-    scope: row.scope ?? "", avatar: null, reportsTo: null, createdAt: row.createdAt,
+    scope: row.scope ?? "", avatar: null, reportsTo: null, status: row.status, createdAt: row.createdAt,
   }));
 }
 

@@ -10,6 +10,7 @@ import {
 } from "@/lib/db/schema";
 import { createIssue, getIssue, listAgents, listIssues } from "@/lib/issues";
 import { getActiveProject } from "@/lib/store";
+import { readPendingWakeups, resolveBlockedAttention } from "@/lib/blocker-attention-source";
 
 export const runtime = "nodejs";
 
@@ -38,11 +39,18 @@ export async function GET(_request: Request, context: Context) {
     .then((head) => head.trim().replace(/^ref: refs\/heads\//, ""))
     .catch(() => null);
 
+  // Whether this task's blocked-ness is healthy, and if not, who moves it next.
+  // Computed server-side so every surface tells the same story.
+  const blockedAttention = resolveBlockedAttention(
+    id, allIssues, agents, readPendingWakeups(database, allIssues.map((candidate) => candidate.id)),
+  );
+
   return NextResponse.json({
     issue,
     project: { id: project.id, name: project.name, path: project.path, branch },
     agents,
     issues: allIssues,
+    blockedAttention,
     children: allIssues.filter((candidate) => candidate.parentId === id),
     blockedBy: allIssues.filter((candidate) => issue.blockedBy.includes(candidate.id)),
     blocking: allIssues.filter((candidate) => candidate.blockedBy.includes(id)),

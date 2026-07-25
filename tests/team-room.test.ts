@@ -6,7 +6,7 @@ import type { Agent, Issue } from "../lib/issues";
 const NOW = 1_000_000;
 
 function agent(id: string, name: string, role: "lead" | "worker", reportsTo: string | null = null): Agent {
-  return { id, projectId: "p", name, role, scope: "", avatar: null, reportsTo, createdAt: 1 };
+  return { id, projectId: "p", name, role, scope: "", avatar: null, reportsTo, status: "idle", createdAt: 1 };
 }
 
 function issue(over: Partial<Issue> & Pick<Issue, "id">): Issue {

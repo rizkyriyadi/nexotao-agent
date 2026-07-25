@@ -10,6 +10,8 @@ import {
   computeBlockerAttention, describeBlockedAttention, isBlockerResolved,
   type AttentionIssue, type BlockerAttentionSnapshot,
 } from "../lib/blocker-attention";
+import { attentionQueue } from "../lib/blocker-attention-source";
+import type { Agent, Issue } from "../lib/issues";
 
 // ---------------------------------------------------------------------------
 // Layer 1/2: pure attention model
@@ -171,6 +173,53 @@ test("a task parked in backlog with unmet blockers is derived as blocked", async
     });
     assert.equal(parked.status, "blocked");
   } finally { await cleanup(dir, database); }
+});
+
+// --- Board adapter: the model wired to the store's own types -----------------
+
+function boardAgent(id: string, status: string): Agent {
+  return {
+    id, projectId: "p", name: `Agent ${id}`, role: "worker",
+    scope: "", avatar: null, reportsTo: null, status, createdAt: 1,
+  };
+}
+
+function boardIssue(partial: Partial<Issue> & Pick<Issue, "id">): Issue {
+  return {
+    projectId: "p", ref: `NX-${partial.id}`, title: partial.id, detail: "", parentId: null,
+    assigneeAgentId: "a", createdByAgentId: null, status: "todo", stage: "execute",
+    priority: "medium", runMode: "agent", blockedBy: [], runId: null, summary: "",
+    createdAt: 1, updatedAt: 1, ...partial,
+  };
+}
+
+test("the attention queue surfaces stuck work and stays silent about healthy work", () => {
+  const roster = [boardAgent("a", "idle"), boardAgent("p", "paused")];
+  const board = [
+    // Healthy: waiting on live work. Must NOT appear in the queue.
+    boardIssue({ id: "covered", status: "blocked", blockedBy: ["running"] }),
+    boardIssue({ id: "running", status: "in_progress" }),
+    // Stuck: the only blocker is owned by a paused agent.
+    boardIssue({ id: "stuck", status: "blocked", blockedBy: ["parked"] }),
+    boardIssue({ id: "parked", status: "todo", assigneeAgentId: "p" }),
+    // Finished work is never surfaced.
+    boardIssue({ id: "shipped", status: "done" }),
+  ];
+
+  const ids = attentionQueue(board, roster).map((entry) => entry.issue.id);
+  assert.deepEqual(ids, ["stuck"]);
+});
+
+test("a queued wakeup read from the store keeps a task out of the attention queue", () => {
+  const roster = [boardAgent("p", "paused")];
+  const board = [
+    boardIssue({ id: "waiting", status: "blocked", blockedBy: ["parked"] }),
+    boardIssue({ id: "parked", status: "todo", assigneeAgentId: "p" }),
+  ];
+  assert.deepEqual(attentionQueue(board, roster).map((e) => e.issue.id), ["waiting"]);
+  // A durable wakeup means someone will be woken, so it is no longer stuck.
+  const withWake = attentionQueue(board, roster, [{ issueId: "parked", status: "queued" }]);
+  assert.deepEqual(withWake.map((e) => e.issue.id), []);
 });
 
 test("a done blocker and a cancelled blocker both count as resolved", () => {
