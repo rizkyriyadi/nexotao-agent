@@ -13,6 +13,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { runCommand } from "./tools";
+import { writeFileAtomic } from "./atomic-write";
 import { codeGraphPath, type GraphNode, type GraphEdge, type WorkGraph } from "./graphify";
 
 /** PyPI package that provides the `graphify` CLI (design §1). */
@@ -149,12 +150,9 @@ export async function refreshCodeGraph(projectId: string, root: string, opts?: B
   const g = await buildCodeGraph(root, opts);
   if (!g) return 0;
   const out = codeGraphPath(projectId);
-  await fs.mkdir(path.dirname(out), { recursive: true, mode: 0o700 });
-  // Atomic write (tmp + rename), mirroring persistGraph in lib/graphify.ts, so a
-  // concurrent reader never sees a half-written code graph.
-  const temp = `${out}.tmp`;
+  // Atomic write, mirroring persistGraph in lib/graphify.ts, so a concurrent
+  // reader never sees a half-written code graph.
   const persisted = { ...g, generatedAt: Date.now() };
-  await fs.writeFile(temp, JSON.stringify(persisted), { encoding: "utf8", mode: 0o600 });
-  await fs.rename(temp, out);
+  await writeFileAtomic(out, JSON.stringify(persisted), { mode: 0o600 });
   return g.nodes.length;
 }

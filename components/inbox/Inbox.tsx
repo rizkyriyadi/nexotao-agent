@@ -38,7 +38,7 @@ export function InboxPage() {
         </article>)}
       </Section>
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
-        <Section title="Tasks" count={data.issues.length} icon={<AlertTriangle className="size-4" />}>{data.issues.map((item) => <Row key={item.id} href={item.href} title={`${item.identifier} · ${item.title}`} meta={`${item.status.replace("_", " ")} · ${item.priority}`} />)}</Section>
+        <Section title="Tasks" count={data.issues.length} icon={<AlertTriangle className="size-4" />}>{data.issues.map((item) => <Row key={item.id} href={item.href} title={`${item.identifier} · ${item.title}`} meta={`${item.status.replace("_", " ")} · ${item.priority}`} capitalizeMeta />)}</Section>
         <Section title="Failed or stale runs" count={data.runs.length} icon={<Clock3 className="size-4" />}>{data.runs.map((item) => <Row key={item.id} href={item.href} title={item.status} meta={item.error || item.id.slice(0, 8)} />)}</Section>
       </div>
     </div>
@@ -48,5 +48,10 @@ export function InboxPage() {
 function Section({ title, count, icon, children }: { title: string; count: number; icon: React.ReactNode; children: React.ReactNode }) {
   return <section><div className="mb-3 flex items-center gap-2 text-sm font-semibold text-charcoal">{icon}<span>{title}</span><span className="rounded-full bg-black/[.05] px-2 py-0.5 text-[11px] text-pebble">{count}</span></div><div className="space-y-3">{children}{!count && <p className="rounded-xl border border-dashed border-line p-4 text-xs text-pebble">Nothing needs attention.</p>}</div></section>;
 }
-function Row({ href, title, meta }: { href: string; title: string; meta: string }) { return <Link href={href} className="block rounded-xl border border-line bg-white/60 p-3 hover:border-line-strong"><p className="truncate text-xs font-medium text-charcoal">{title}</p><p className="mt-1 truncate text-[11px] capitalize text-pebble">{meta}</p></Link>; }
+// `capitalize` is opt-in: it title-cases *every* word, which is right for enum
+// metadata ("in review · medium") but mangles free text — an error string like
+// `EPERM: operation not permitted, rename 'C:\...\nexotao.sqlite.tmp'` renders
+// as `EPERM: Operation Not Permitted, Rename 'C:\...\Nexotao.Sqlite.Tmp'`,
+// corrupting the very path the user needs to read.
+function Row({ href, title, meta, capitalizeMeta = false }: { href: string; title: string; meta: string; capitalizeMeta?: boolean }) { return <Link href={href} className="block rounded-xl border border-line bg-white/60 p-3 hover:border-line-strong"><p className="truncate text-xs font-medium text-charcoal">{title}</p><p className={`mt-1 truncate text-[11px] text-pebble${capitalizeMeta ? " capitalize" : ""}`} title={meta}>{meta}</p></Link>; }
 function Risk({ value }: { value: string | null }) { const tone = value === "high" ? "bg-alarm-red/10 text-alarm-red" : "bg-amber-500/10 text-amber-700"; return <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${tone}`}>{value || "medium"}</span>; }

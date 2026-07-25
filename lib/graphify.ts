@@ -13,6 +13,7 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { DIR } from "./config";
+import { writeFileAtomic } from "./atomic-write";
 import { listAgentRuns, listIssueDependencies, listIssues, listRunRecords, listSessions, listTasks } from "./store";
 
 export type EdgeConf = "EXTRACTED" | "INFERRED";
@@ -359,14 +360,10 @@ async function appendRunNow(
   return { appended, file };
 }
 
-// Atomic, owner-only write (mirrors the SQLite persist path): tmp file + rename
-// so a reader never sees a half-written graph.
+// Atomic, owner-only write (mirrors the SQLite persist path) so a reader never
+// sees a half-written graph. See lib/atomic-write for the Windows rename retry.
 async function persistGraph(file: string, graph: PersistedWorkGraph): Promise<void> {
-  await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-  const temp = `${file}.tmp`;
-  await fs.writeFile(temp, JSON.stringify(graph, null, 2), { encoding: "utf8", mode: 0o600 });
-  await fs.chmod(temp, 0o600);
-  await fs.rename(temp, file);
+  await writeFileAtomic(file, JSON.stringify(graph, null, 2), { mode: 0o600 });
 }
 
 async function readGraphFile(file: string): Promise<WorkGraph | null> {

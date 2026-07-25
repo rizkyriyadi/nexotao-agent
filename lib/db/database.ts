@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Database } from "sql.js";
 import { drizzle, type SQLJsDatabase } from "drizzle-orm/sql-js";
 import { DIR, ensureDir } from "../config";
+import { writeFileAtomic } from "../atomic-write";
 import { schema } from "./schema";
 import initSqlJs from "sql.js/dist/sql-asm.js";
 
@@ -209,10 +210,7 @@ export class AppDatabase {
 }
 
 async function persist(db: Database, file: string) {
-  const temp = file + ".tmp";
-  await fs.writeFile(temp, Buffer.from(db.export()), { mode: 0o600 });
-  await fs.chmod(temp, 0o600);
-  await fs.rename(temp, file);
+  await writeFileAtomic(file, Buffer.from(db.export()), { mode: 0o600 });
 }
 
 async function readLegacy<T>(dir: string, file: string, key: string): Promise<T[]> {
