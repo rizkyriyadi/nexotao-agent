@@ -209,8 +209,15 @@ export class AppDatabase {
   async close() { await this.queue; await persist(this.raw, this.file); this.raw.close(); }
 }
 
+/* `export()` serialises by closing and reopening the underlying handle, which
+   resets every connection pragma — including `foreign_keys`. Since we persist
+   after each write, foreign keys were on for the very first transaction and off
+   for all the rest, so cascades quietly stopped firing. Re-arm it here rather
+   than at each call site: this is the only place the handle is recycled. */
 async function persist(db: Database, file: string) {
-  await writeFileAtomic(file, Buffer.from(db.export()), { mode: 0o600 });
+  const bytes = db.export();
+  db.run("PRAGMA foreign_keys = ON");
+  await writeFileAtomic(file, Buffer.from(bytes), { mode: 0o600 });
 }
 
 async function readLegacy<T>(dir: string, file: string, key: string): Promise<T[]> {
