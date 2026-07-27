@@ -12,6 +12,40 @@ const LEGACY_FILES = ["projects.json", "sessions.json", "tasks.json", "agent-run
 
 export type Migration = { version: number; name: string; sql: string };
 
+/* Every project gets the five default board columns, and every existing issue is
+   placed in the column matching its current status. Declared before `migrations`
+   because the v9 SQL is built from it at module load.
+
+   `blocked` and `cancelled` have no column of their own: blocked work still belongs
+   under Todo (it is waiting, not elsewhere) and cancelled work under Done (it is
+   finished, just not successfully). Their `status` is untouched — only the column
+   they render in is decided here. */
+export const DEFAULT_WORKFLOW_STATES = [
+  { key: "backlog", name: "Backlog", group: "backlog", color: "#94a3b8", position: 1 },
+  { key: "todo", name: "Todo", group: "todo", color: "#6366f1", position: 2 },
+  { key: "in_progress", name: "In Progress", group: "in_progress", color: "#f59e0b", position: 3 },
+  { key: "in_review", name: "In Review", group: "in_review", color: "#8b5cf6", position: 4 },
+  { key: "done", name: "Done", group: "done", color: "#10b981", position: 5 },
+] as const;
+
+/** Which default column an existing status renders in. */
+export const STATUS_TO_DEFAULT_STATE: Record<string, string> = {
+  backlog: "backlog", todo: "todo", blocked: "todo", in_progress: "in_progress",
+  in_review: "in_review", done: "done", cancelled: "done",
+};
+
+/** Deterministic id so the seed is idempotent across re-runs and re-installs. */
+export const defaultStateId = (projectId: string, key: string) => `${projectId}:state:${key}`;
+
+function seedDefaultStatesSql(): string {
+  const states = DEFAULT_WORKFLOW_STATES.map((state) => `
+INSERT OR IGNORE INTO workflow_states (id, project_id, name, status_group, color, position, is_default, created_at, updated_at)
+SELECT p.id || ':state:${state.key}', p.id, '${state.name}', '${state.group}', '${state.color}', ${state.position}, 1, p.created_at, p.created_at FROM projects p;`).join("");
+  const backfill = Object.entries(STATUS_TO_DEFAULT_STATE).map(([status, key]) => `
+UPDATE issues SET state_id = project_id || ':state:${key}' WHERE status = '${status}' AND state_id IS NULL;`).join("");
+  return `${states}${backfill}`;
+}
+
 export const migrations: Migration[] = [{
   version: 1,
   name: "control-plane-foundation",
@@ -159,6 +193,116 @@ ALTER TABLE issues ADD COLUMN run_mode TEXT NOT NULL DEFAULT 'agent';
   name: "agent-avatar",
   sql: `
 ALTER TABLE agents ADD COLUMN avatar TEXT;
+`,
+}, {
+  version: 9,
+  name: "plane-work-model",
+  sql: `
+CREATE TABLE IF NOT EXISTS workflow_states (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  status_group TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#6b7280',
+  position REAL NOT NULL,
+  is_default INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(project_id, name)
+);
+CREATE INDEX IF NOT EXISTS workflow_states_project_position_idx ON workflow_states(project_id, position);
+CREATE TABLE IF NOT EXISTS labels (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  color TEXT NOT NULL DEFAULT '#6b7280',
+  created_at INTEGER NOT NULL,
+  UNIQUE(project_id, name)
+);
+CREATE TABLE IF NOT EXISTS issue_labels (
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  label_id TEXT NOT NULL REFERENCES labels(id) ON DELETE CASCADE,
+  PRIMARY KEY(issue_id, label_id)
+);
+CREATE INDEX IF NOT EXISTS issue_labels_label_idx ON issue_labels(label_id);
+CREATE TABLE IF NOT EXISTS cycles (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  start_date INTEGER,
+  end_date INTEGER,
+  completed_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cycles_project_start_idx ON cycles(project_id, start_date);
+CREATE TABLE IF NOT EXISTS modules (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  lead_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  target_date INTEGER,
+  status TEXT NOT NULL DEFAULT 'planned',
+  completed_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS modules_project_idx ON modules(project_id);
+CREATE TABLE IF NOT EXISTS module_issues (
+  module_id TEXT NOT NULL REFERENCES modules(id) ON DELETE CASCADE,
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  PRIMARY KEY(module_id, issue_id)
+);
+CREATE INDEX IF NOT EXISTS module_issues_issue_idx ON module_issues(issue_id);
+CREATE TABLE IF NOT EXISTS issue_relations (
+  issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  related_issue_id TEXT NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  relation_type TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY(issue_id, related_issue_id, relation_type),
+  CHECK(issue_id <> related_issue_id)
+);
+CREATE INDEX IF NOT EXISTS issue_relations_related_idx ON issue_relations(related_issue_id);
+CREATE TABLE IF NOT EXISTS saved_views (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  config TEXT NOT NULL DEFAULT '{}',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(project_id, name)
+);
+CREATE TABLE IF NOT EXISTS pages (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  document_id TEXT NOT NULL UNIQUE REFERENCES documents(id) ON DELETE CASCADE,
+  archived_at INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pages_project_updated_idx ON pages(project_id, updated_at);
+CREATE TABLE IF NOT EXISTS cycle_snapshots (
+  cycle_id TEXT NOT NULL REFERENCES cycles(id) ON DELETE CASCADE,
+  day INTEGER NOT NULL,
+  total INTEGER NOT NULL,
+  completed INTEGER NOT NULL,
+  pending INTEGER NOT NULL,
+  PRIMARY KEY(cycle_id, day)
+);
+ALTER TABLE issues ADD COLUMN state_id TEXT REFERENCES workflow_states(id) ON DELETE SET NULL;
+ALTER TABLE issues ADD COLUMN cycle_id TEXT REFERENCES cycles(id) ON DELETE SET NULL;
+ALTER TABLE issues ADD COLUMN estimate_point INTEGER;
+ALTER TABLE issues ADD COLUMN intake_status TEXT;
+ALTER TABLE issues ADD COLUMN intake_source TEXT;
+ALTER TABLE issues ADD COLUMN start_date INTEGER;
+ALTER TABLE issues ADD COLUMN target_date INTEGER;
+ALTER TABLE issues ADD COLUMN sequence REAL;
+CREATE INDEX IF NOT EXISTS issues_state_idx ON issues(state_id);
+CREATE INDEX IF NOT EXISTS issues_cycle_idx ON issues(cycle_id);
+${seedDefaultStatesSql()}
 `,
 }];
 

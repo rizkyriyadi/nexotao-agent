@@ -19,7 +19,7 @@ const transitions: Record<IssueStatus, ReadonlySet<IssueStatus>> = {
 };
 
 export class IssueDomainError extends Error {
-  constructor(readonly code: "not_found" | "conflict" | "invalid_transition" | "forbidden" | "invalid_dependency", message: string) {
+  constructor(readonly code: "not_found" | "conflict" | "invalid_transition" | "forbidden" | "invalid_dependency" | "validation", message: string) {
     super(message);
     this.name = "IssueDomainError";
   }

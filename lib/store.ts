@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asc, desc, eq, inArray } from "drizzle-orm";
-import { getDatabase } from "./db/database";
-import { agentRuns, issueDependencies, issues, projects, runRecords, sessions, tasks } from "./db/schema";
+import { getDatabase, DEFAULT_WORKFLOW_STATES, defaultStateId } from "./db/database";
+import { agentRuns, issueDependencies, issues, projects, runRecords, sessions, tasks, workflowStates } from "./db/schema";
 
 export type AgentSpec = { name: string; scope: string };
 export type Project = { id: string; name: string; path: string; mode: "single" | "multi"; agents: AgentSpec[]; createdAt: number };
@@ -24,7 +24,18 @@ export async function getProject(id: string) { return (await listProjects()).fin
 export async function addProject(input: Omit<Project, "id" | "createdAt">): Promise<Project> {
   const database = await getDatabase();
   const project: Project = { ...input, id: randomUUID(), createdAt: Date.now() };
-  await database.write((db) => db.insert(projects).values({ id: project.id, name: project.name, path: project.path, mode: project.mode, agentSpecs: project.agents, createdAt: project.createdAt }).run());
+  await database.write((db) => {
+    db.insert(projects).values({ id: project.id, name: project.name, path: project.path, mode: project.mode, agentSpecs: project.agents, createdAt: project.createdAt }).run();
+    // Seed the board columns in the same transaction as the project. The v9
+    // migration only reached projects that existed when it ran; a project created
+    // afterwards would otherwise open on an empty board.
+    for (const state of DEFAULT_WORKFLOW_STATES) {
+      db.insert(workflowStates).values({
+        id: defaultStateId(project.id, state.key), projectId: project.id, name: state.name, statusGroup: state.group,
+        color: state.color, position: state.position, isDefault: true, createdAt: project.createdAt, updatedAt: project.createdAt,
+      }).run();
+    }
+  });
   return project;
 }
 export async function getActiveProject(): Promise<Project | null> {

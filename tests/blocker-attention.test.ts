@@ -189,7 +189,10 @@ function boardIssue(partial: Partial<Issue> & Pick<Issue, "id">): Issue {
     projectId: "p", ref: `NX-${partial.id}`, title: partial.id, detail: "", parentId: null,
     assigneeAgentId: "a", createdByAgentId: null, status: "todo", stage: "execute",
     priority: "medium", runMode: "agent", blockedBy: [], runId: null, summary: "",
-    createdAt: 1, updatedAt: 1, ...partial,
+    createdAt: 1, updatedAt: 1,
+    stateId: null, cycleId: null, moduleIds: [], labelIds: [], estimatePoint: null,
+    startDate: null, targetDate: null, sequence: null, intakeStatus: null, intakeSource: null,
+    ...partial,
   };
 }
 
