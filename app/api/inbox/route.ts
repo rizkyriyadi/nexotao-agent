@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { getDatabase } from "@/lib/db/database";
 import { expireInvalidExecutionApprovals } from "@/lib/execution-policy";
+import { selectAttentionRuns } from "@/lib/inbox-signal";
 import { agents, approvals, heartbeatRuns, issues, runRecords } from "@/lib/db/schema";
 import { getActiveProject } from "@/lib/store";
 
@@ -35,17 +36,7 @@ export async function GET() {
         id: issue.id, identifier: issue.identifier, title: issue.title, status: issue.status, priority: issue.priority,
         updatedAt: issue.updatedAt, href: `/board/${issue.id}`,
       })),
-      runs: [
-        ...relevantRuns.filter((run) => run.status === "failed" || (run.updatedAt ?? run.startedAt) < now - 10 * 60_000).map((run) => ({
-          id: run.id, status: run.status === "failed" ? "failed" : "stale", error: run.error,
-          issueId: run.issueId, startedAt: run.startedAt,
-          href: run.issueId ? `/board/${run.issueId}` : "/board",
-        })),
-        ...legacyRuns.filter((run) => run.status === "error" || (run.status === "running" && run.updatedAt < now - 10 * 60_000)).map((run) => ({
-          id: run.id, status: run.status === "error" ? "failed" : "stale", error: null, issueId: null, startedAt: run.createdAt,
-          href: "/board",
-        })),
-      ],
+      runs: selectAttentionRuns({ now, heartbeats: relevantRuns, records: legacyRuns }),
     };
   });
   return NextResponse.json(data);

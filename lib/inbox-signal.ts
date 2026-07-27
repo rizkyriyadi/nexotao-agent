@@ -18,6 +18,45 @@ const LABELS: Record<InboxItemKind, [string, string]> = {
   run: ["run needs attention", "runs need attention"],
 };
 
+export type AttentionRun = {
+  id: string; status: "failed" | "stale"; error: string | null;
+  issueId: string | null; startedAt: number; href: string;
+};
+
+const STALE_AFTER_MS = 10 * 60_000;
+
+/* Select the runs that need attention from the two tables that record a run.
+   A durable run writes a `heartbeat_runs` row *and* a `run_records` row under
+   the same id, so listing both surfaces one failure twice — as "failed" from
+   the heartbeat and again as "stale" from the record, whose status stays
+   `running` because the heartbeat is what gets finalized. The heartbeat is
+   authoritative (it alone carries the error text), so records it already
+   covers are dropped and only genuinely legacy rows survive. */
+export function selectAttentionRuns(input: {
+  now: number;
+  heartbeats: Array<{ id: string; status: string; error: string | null; issueId: string | null; startedAt: number; updatedAt?: number | null }>;
+  records: Array<{ id: string; status: string; createdAt: number; updatedAt: number }>;
+}): AttentionRun[] {
+  const stale = input.now - STALE_AFTER_MS;
+  const covered = new Set(input.heartbeats.map((run) => run.id));
+  return [
+    ...input.heartbeats
+      .filter((run) => run.status === "failed" || (run.updatedAt ?? run.startedAt) < stale)
+      .map((run) => ({
+        id: run.id, status: (run.status === "failed" ? "failed" : "stale") as AttentionRun["status"],
+        error: run.error, issueId: run.issueId, startedAt: run.startedAt,
+        href: run.issueId ? `/board/${run.issueId}` : "/board",
+      })),
+    ...input.records
+      .filter((run) => !covered.has(run.id))
+      .filter((run) => run.status === "error" || (run.status === "running" && run.updatedAt < stale))
+      .map((run) => ({
+        id: run.id, status: (run.status === "error" ? "failed" : "stale") as AttentionRun["status"],
+        error: null, issueId: null, startedAt: run.createdAt, href: "/board",
+      })),
+  ];
+}
+
 /* Namespaced ids so the same underlying id in two sections can't collide. */
 export function inboxItemIds(data: InboxSnapshot): string[] {
   return [
