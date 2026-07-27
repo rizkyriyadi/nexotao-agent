@@ -57,7 +57,7 @@ export function describeToolAction(name: string, input: unknown): PolicyDetails 
   }
   if (name === "web_search") return { action: "network", target: clipped(value.query, 500), risk: "medium", preview: clipped(value.query) };
   if (name === "web_fetch") return { action: "network", target: clipped(value.url, 500), risk: "medium", preview: clipped(value.url) };
-  if (["spawn_agents", "delegate"].includes(name)) return { action: "control", target: name, risk: "low", preview: clipped(input) };
+  if (name === "delegate") return { action: "control", target: name, risk: "low", preview: clipped(input) };
   if (["list_dir", "read_file", "grep"].includes(name)) return { action: "read", target: clipped(value.path ?? name, 500), risk: "low", preview: clipped(input) };
   return { action: "exec", target: name, risk: "high", preview: clipped(input) };
 }

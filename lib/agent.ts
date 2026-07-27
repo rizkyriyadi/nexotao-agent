@@ -23,13 +23,12 @@ async function toolLoop(opts: {
   approvalPolicy: ExecutionPolicy;
   toolDefs?: any[];
   extraTools?: any[];
-  onSpawn?: (input: any) => Promise<{ output: string }>;
   handlers?: Record<string, (input: any) => Promise<{ output: string }>>;
   onProgress?: (text: string) => void;
   beforeMutation?: (tool: { name: string; input: unknown }) => Promise<void>;
   maxIters?: number;
 }): Promise<string> {
-  const { run, apiKey, model, system, convo, root, thread, approvalPolicy, toolDefs = TOOL_DEFS as any, extraTools = [], onSpawn, handlers = {}, onProgress, beforeMutation, maxIters = 24 } = opts;
+  const { run, apiKey, model, system, convo, root, thread, approvalPolicy, toolDefs = TOOL_DEFS as any, extraTools = [], handlers = {}, onProgress, beforeMutation, maxIters = 24 } = opts;
   let full = "";
 
   for (let iter = 0; iter < maxIters; iter++) {
@@ -57,9 +56,6 @@ async function toolLoop(opts: {
       const allowed = await authorizeTool(run, approvalPolicy, { id: tu.id, name: tu.name, input: tu.input, thread });
       if (!allowed) {
         out = { ok: false, output: "The user denied this action." };
-      } else if (tu.name === "spawn_agents" && onSpawn) {
-        const r = await onSpawn(tu.input);
-        out = { ok: true, output: r.output };
       } else if (handlers[tu.name]) {
         const r = await handlers[tu.name](tu.input);
         out = { ok: true, output: r.output };
