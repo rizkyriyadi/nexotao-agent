@@ -10,6 +10,7 @@ import { ControlPlaneRepositories } from "../lib/db/repositories";
 import { agents, issues, projects } from "../lib/db/schema";
 import {
   assertProfessionalCommit,
+  failureMessage,
   GitWorkspaceManager,
   inspectOutgoingCommits,
   isProhibitedAgentMarkdown,
@@ -211,6 +212,37 @@ test("pulling an upstream repository is exempt from the outgoing-commit identity
       /approved identity/,
       "commits authored locally above imported history are still policed",
     );
+  } finally { await cleanup(f); }
+});
+
+test("a failed command reports the cause, not git's progress narration", () => {
+  const stderr = "Preparing worktree (new branch 'nexotao/nx-22/a9f67ea3')\nfatal: a branch named 'nexotao/nx-22/a9f67ea3' already exists";
+  const message = failureMessage(stderr, "", "git exited with 128");
+  assert.match(message.split("\n")[0], /^fatal: a branch named/, "the fatal line leads so a one-line UI shows the cause");
+  assert.match(message, /Preparing worktree/, "the narration is kept as trailing detail");
+  assert.equal(failureMessage("", "", "git exited with 128"), "git exited with 128", "falls back when the command said nothing");
+  assert.equal(failureMessage("just noise", "", "fallback"), "just noise", "output without a fatal line is passed through");
+});
+
+test("a failed workspace record rolls back the worktree so the same run can retry", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "one");
+    const input = { projectId: "project", issueId: "issue-one", identifier: "NEXA-1", runId: run, repositoryPath: f.repositoryPath };
+    // Persistence can fail transiently (see the atomic-write retry work); the
+    // worktree must not outlive the failed record, or the branch — named after
+    // the run id — permanently blocks every retry of this run.
+    const assign = f.repositories.assignWorkspace.bind(f.repositories);
+    f.repositories.assignWorkspace = async () => { throw new Error("database is locked"); };
+    await assert.rejects(f.manager.provision(input), /database is locked/, "the original cause is reported");
+
+    assert.equal(await git(f.repositoryPath, "branch", "--list", "nexotao/*"), "", "the orphaned branch is deleted");
+    assert.equal((await git(f.repositoryPath, "worktree", "list")).split("\n").length, 1, "only the main worktree remains");
+
+    f.repositories.assignWorkspace = assign;
+    const assignment = await f.manager.provision(input);
+    assert.equal(assignment.runId, run, "the same run id provisions cleanly on retry");
+    assert.equal(await git(assignment.workspacePath, "rev-parse", "--abbrev-ref", "HEAD"), assignment.branch);
   } finally { await cleanup(f); }
 });
 

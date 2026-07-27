@@ -24,6 +24,20 @@ function within(parent: string, child: string) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/** Lead with the line that says *why* the command failed. Git narrates progress
+ *  on stderr ("Preparing worktree (new branch 'nexotao/nx-22/…')") before the
+ *  `fatal:` line that actually explains the failure, so using stderr verbatim
+ *  buries the cause behind noise — and any caller that truncates to one line
+ *  (the inbox does) shows only the narration. Diagnostic lines are kept after
+ *  the cause so nothing is lost. */
+export function failureMessage(stderr: string, stdout: string, fallback: string) {
+  const lines = `${stderr}\n${stdout}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return fallback;
+  const causeIndex = lines.findIndex((line) => /^(?:fatal|error):/i.test(line));
+  if (causeIndex === -1) return lines.join("\n");
+  return [lines[causeIndex], ...lines.slice(0, causeIndex), ...lines.slice(causeIndex + 1)].join("\n");
+}
+
 function command(commandName: string, args: string[], cwd: string, options: { shell?: boolean; timeoutMs?: number } = {}) {
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(commandName, args, {
@@ -44,7 +58,7 @@ function command(commandName: string, args: string[], cwd: string, options: { sh
     child.once("close", (code) => {
       clearTimeout(timer);
       if (code === 0) resolve({ stdout: stdout.trim(), stderr: stderr.trim() });
-      else reject(new Error((stderr || stdout || `${commandName} exited with ${code}`).trim()));
+      else reject(new Error(failureMessage(stderr, stdout, `${commandName} exited with ${code}`)));
     });
   });
 }
@@ -130,6 +144,16 @@ export class GitWorkspaceManager {
     this.managedRoot = path.resolve(managedRoot);
   }
 
+  /** The managed root with symlinks resolved. Containment checks compare against
+   *  a `realpath`-ed workspace, so the root must be resolved the same way or the
+   *  two are not comparable: on macOS a root under `/var/...` is really
+   *  `/private/var/...`, and every workspace inside it would be judged to be
+   *  outside. Resolved on demand because the directory may not exist yet at
+   *  construction time. */
+  private async realManagedRoot() {
+    return fs.realpath(this.managedRoot).catch(() => this.managedRoot);
+  }
+
   async provision(input: { projectId: string; issueId: string; identifier: string; runId: string; repositoryPath: string }) {
     const existing = this.repositories.getWorkspace(input.runId);
     if (existing) {
@@ -200,7 +224,29 @@ export class GitWorkspaceManager {
         repositoryPath, workspacePath, branch, targetBranch, baseCommit,
       });
     } catch (error) {
-      throw new Error(`Worktree was preserved for recovery at ${workspacePath}: ${error instanceof Error ? error.message : String(error)}`);
+      // The worktree and branch exist but nothing recorded them, so no recovery
+      // flow can ever reach them. Worse, both are named after the run id, so a
+      // retry — which reuses that id — would hit "a branch named … already
+      // exists" forever. The tree is untouched by the agent at this point (the
+      // run has not started), so removing it loses no work and makes the retry
+      // a clean first attempt. A failed rollback is reported alongside the
+      // original cause rather than replacing it.
+      const rollback = await this.discardWorkspace(repositoryPath, workspacePath, branch);
+      const cause = error instanceof Error ? error.message : String(error);
+      throw new Error(rollback ? `${cause} (worktree preserved at ${workspacePath}: ${rollback})` : cause);
+    }
+  }
+
+  /** Remove a just-created worktree and its branch. Returns null on success, or
+   *  the reason it could not be undone so the caller can report it. */
+  private async discardWorkspace(repositoryPath: string, workspacePath: string, branch: string) {
+    try {
+      await git(repositoryPath, "worktree", "remove", "--force", workspacePath);
+      await git(repositoryPath, "worktree", "prune");
+      await git(repositoryPath, "branch", "-D", branch);
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
     }
   }
 
@@ -218,7 +264,7 @@ export class GitWorkspaceManager {
     if (!["running", "waiting"].includes(heartbeat.status)) throw new Error("Heartbeat is not active; workspace writes are rejected");
     if (!MANAGED_STATES.has(assignment.state)) throw new Error(`Workspace state ${assignment.state} does not allow writes`);
     const realWorkspace = await fs.realpath(assignment.workspacePath);
-    if (!within(this.managedRoot, realWorkspace)) throw new Error("Workspace is outside the managed worktree root");
+    if (!within(await this.realManagedRoot(), realWorkspace)) throw new Error("Workspace is outside the managed worktree root");
     const [topLevel, branch] = await Promise.all([
       git(realWorkspace, "rev-parse", "--show-toplevel"),
       git(realWorkspace, "symbolic-ref", "--short", "HEAD"),
