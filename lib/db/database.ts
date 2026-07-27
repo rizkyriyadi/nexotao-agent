@@ -5,6 +5,7 @@ import { drizzle, type SQLJsDatabase } from "drizzle-orm/sql-js";
 import { DIR, ensureDir } from "../config";
 import { writeFileAtomic } from "../atomic-write";
 import { schema } from "./schema";
+import { DEFAULT_WORKFLOW_STATES, STATUS_TO_DEFAULT_STATE } from "../work-view";
 import initSqlJs from "sql.js/dist/sql-asm.js";
 
 const DATABASE_NAME = "nexotao.sqlite";
@@ -12,31 +13,14 @@ const LEGACY_FILES = ["projects.json", "sessions.json", "tasks.json", "agent-run
 
 export type Migration = { version: number; name: string; sql: string };
 
-/* Every project gets the five default board columns, and every existing issue is
-   placed in the column matching its current status. Declared before `migrations`
-   because the v9 SQL is built from it at module load.
+/* The board columns and the status they map onto live in lib/work-view.ts, which
+   imports nothing — the client layouts need them too, and re-exporting from here
+   would pull sql.js into the browser bundle. Re-exported for the existing
+   callers that reach for them through the database module. */
+export { DEFAULT_WORKFLOW_STATES, STATUS_TO_DEFAULT_STATE, defaultStateId } from "../work-view";
 
-   `blocked` and `cancelled` have no column of their own: blocked work still belongs
-   under Todo (it is waiting, not elsewhere) and cancelled work under Done (it is
-   finished, just not successfully). Their `status` is untouched — only the column
-   they render in is decided here. */
-export const DEFAULT_WORKFLOW_STATES = [
-  { key: "backlog", name: "Backlog", group: "backlog", color: "#94a3b8", position: 1 },
-  { key: "todo", name: "Todo", group: "todo", color: "#6366f1", position: 2 },
-  { key: "in_progress", name: "In Progress", group: "in_progress", color: "#f59e0b", position: 3 },
-  { key: "in_review", name: "In Review", group: "in_review", color: "#8b5cf6", position: 4 },
-  { key: "done", name: "Done", group: "done", color: "#10b981", position: 5 },
-] as const;
-
-/** Which default column an existing status renders in. */
-export const STATUS_TO_DEFAULT_STATE: Record<string, string> = {
-  backlog: "backlog", todo: "todo", blocked: "todo", in_progress: "in_progress",
-  in_review: "in_review", done: "done", cancelled: "done",
-};
-
-/** Deterministic id so the seed is idempotent across re-runs and re-installs. */
-export const defaultStateId = (projectId: string, key: string) => `${projectId}:state:${key}`;
-
+/* Built from the same table at module load, so a column added to the default set
+   is seeded and backfilled without a second edit here. */
 function seedDefaultStatesSql(): string {
   const states = DEFAULT_WORKFLOW_STATES.map((state) => `
 INSERT OR IGNORE INTO workflow_states (id, project_id, name, status_group, color, position, is_default, created_at, updated_at)

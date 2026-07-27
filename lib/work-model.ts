@@ -12,7 +12,8 @@
 
 import { randomUUID } from "node:crypto";
 import { and, asc, eq, inArray } from "drizzle-orm";
-import { getDatabase, DEFAULT_WORKFLOW_STATES, STATUS_TO_DEFAULT_STATE, defaultStateId } from "./db/database";
+import { getDatabase } from "./db/database";
+import { DEFAULT_WORKFLOW_STATES, STATUS_TO_DEFAULT_STATE, defaultStateId } from "./work-view";
 import {
   cycles, issueLabels, issueRelations, issues, labels, moduleIssues, modules,
   pages, savedViews, workflowStates, documents, documentRevisions,
@@ -37,24 +38,10 @@ const stateFromRow = (row: typeof workflowStates.$inferSelect): WorkflowState =>
   color: row.color, position: row.position, isDefault: row.isDefault,
 });
 
-/** Which column an issue actually belongs in.
- *
- *  The lifecycle changes `status` on its own — checkout moves work to
- *  `in_progress`, `wakeDependents` promotes `blocked → todo`, a run finishes into
- *  `done` — and none of those paths know about board columns. Reconciling here
- *  instead of writing `stateId` from inside the lifecycle keeps the engine free of
- *  presentation concerns and means the board can never show a column that
- *  contradicts the status: a stored column is honoured only while its group still
- *  matches, so a user's custom "Code Review" column survives, but a stale one is
- *  replaced by the default column for the current status. */
-export function resolveStateId(issue: { status: string; stateId: string | null; projectId: string }, states: WorkflowState[]): string | null {
-  const stored = issue.stateId ? states.find((state) => state.id === issue.stateId) : undefined;
-  if (stored && stored.statusGroup === issue.status) return stored.id;
-  const key = STATUS_TO_DEFAULT_STATE[issue.status];
-  const fallback = states.find((state) => state.id === defaultStateId(issue.projectId, key))
-    ?? states.find((state) => state.statusGroup === issue.status);
-  return fallback?.id ?? stored?.id ?? null;
-}
+/* Reconciling a card's column against its status is pure and the client layouts
+   need it too, so it lives in lib/work-view.ts. Re-exported here because this is
+   where callers of the work model look for it. */
+export { resolveStateId } from "./work-view";
 
 /* ---------- workflow states ---------- */
 
