@@ -41,11 +41,11 @@ async function fixture() {
   const database = await openDatabase(path.join(dir, "nexotao.sqlite"), { migrateJson: false });
   await database.write((db) => {
     db.insert(projects).values({ id: "project", name: "Project", path: repositoryPath, mode: "multi", agentSpecs: [], createdAt: 1 }).run();
-    db.insert(agents).values(["one", "two", "worker", "lead-bad", "lead-good", "clean"].map((id, index) => ({
+    db.insert(agents).values(["one", "two", "worker", "lead-bad", "lead-good", "clean", "ship", "moved", "idle", "held", "rewound", "clash"].map((id, index) => ({
       id: `agent-${id}`, projectId: "project", name: id, role: id.startsWith("lead") ? "lead" as const : "worker" as const,
       scope: id, createdAt: index + 2, updatedAt: index + 2,
     }))).run();
-    db.insert(issues).values(["one", "two", "worker", "lead-bad", "lead-good", "clean"].map((id, index) => ({
+    db.insert(issues).values(["one", "two", "worker", "lead-bad", "lead-good", "clean", "ship", "moved", "idle", "held", "rewound", "clash"].map((id, index) => ({
       id: `issue-${id}`, projectId: "project", identifier: `NEXA-${index + 1}`, title: id, status: "todo",
       assigneeAgentId: `agent-${id}`, createdAt: index + 20, updatedAt: index + 20,
     }))).run();
@@ -258,5 +258,219 @@ test("provisioning a fresh non-git project directory initialises a repository wi
     assert.ok(await git(fresh, "rev-parse", "HEAD"), "fresh directory becomes a git repository");
     assert.equal(await git(assignment.workspacePath, "rev-parse", "--abbrev-ref", "HEAD"), assignment.branch);
     assert.equal(await readFile(path.join(assignment.workspacePath, "README.md"), "utf8"), "hello\n");
+  } finally { await cleanup(f); }
+});
+
+/* A submodule whose *contents* changed is reported by `git diff` as a changed
+ * path, but `git add --all` stages nothing for it — the superproject's gitlink
+ * still points at the same commit. Committing then failed with "no changes added
+ * to commit", so every run in a repository with a dirty submodule was reported
+ * as failed no matter what the agent had done. */
+test("a dirty submodule does not fail the run's commit", async () => {
+  const f = await fixture();
+  try {
+    const inner = path.join(f.dir, "inner");
+    await mkdir(inner, { recursive: true });
+    await git(inner, "init", "-b", "main");
+    await git(inner, "config", "user.name", identity.name);
+    await git(inner, "config", "user.email", identity.email);
+    await writeFile(path.join(inner, "lib.txt"), "one\n");
+    await git(inner, "add", "lib.txt");
+    await git(inner, "commit", "-m", "chore(inner): initialize");
+
+    await git(f.repositoryPath, "-c", "protocol.file.allow=always", "submodule", "add", inner, "vendor");
+    await git(f.repositoryPath, "commit", "-m", "chore(repo): vendor the inner repository");
+
+    const run = await activate(f, "one");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-one", identifier: "NEXA-1", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await git(assignment.workspacePath, "-c", "protocol.file.allow=always", "submodule", "update", "--init");
+    // Exactly the state the user hit: modified content plus an untracked file,
+    // inside the submodule and nowhere else.
+    await writeFile(path.join(assignment.workspacePath, "vendor", "lib.txt"), "one\ntwo\n");
+    await writeFile(path.join(assignment.workspacePath, "vendor", "scratch.txt"), "untracked\n");
+
+    const finalized = await f.manager.finalizeCommit("issue-one", run, "NEXA-1");
+    assert.equal(finalized.commit, assignment.baseCommit, "nothing was committable, so HEAD did not move");
+    assert.equal(f.repositories.issues.get("issue-one")?.verificationStatus, "committed");
+  } finally { await cleanup(f); }
+});
+
+test("a real file change still commits when a submodule is also dirty", async () => {
+  const f = await fixture();
+  try {
+    const inner = path.join(f.dir, "inner2");
+    await mkdir(inner, { recursive: true });
+    await git(inner, "init", "-b", "main");
+    await git(inner, "config", "user.name", identity.name);
+    await git(inner, "config", "user.email", identity.email);
+    await writeFile(path.join(inner, "lib.txt"), "one\n");
+    await git(inner, "add", "lib.txt");
+    await git(inner, "commit", "-m", "chore(inner): initialize");
+    await git(f.repositoryPath, "-c", "protocol.file.allow=always", "submodule", "add", inner, "vendor");
+    await git(f.repositoryPath, "commit", "-m", "chore(repo): vendor the inner repository");
+
+    const run = await activate(f, "two");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-two", identifier: "NEXA-2", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await git(assignment.workspacePath, "-c", "protocol.file.allow=always", "submodule", "update", "--init");
+    await writeFile(path.join(assignment.workspacePath, "vendor", "lib.txt"), "one\ntwo\n");
+    await writeFile(path.join(assignment.workspacePath, "feature.txt"), "the agent's actual work\n");
+
+    const finalized = await f.manager.finalizeCommit("issue-two", run, "NEXA-2");
+    assert.notEqual(finalized.commit, assignment.baseCommit, "the agent's work is committed");
+    assert.equal(await git(assignment.workspacePath, "show", "--name-only", "--format=", "HEAD"), "feature.txt");
+  } finally { await cleanup(f); }
+});
+
+// The isolation is only half the contract. Committing the agent's work to
+// `nexotao/nx-N/<runId>` and stopping there leaves the folder the user is
+// looking at untouched while the task reports done — the work exists only on a
+// branch no screen in the app mentions. Integration is what closes that gap,
+// and it must fast-forward or refuse, never rewrite.
+test("a finished run lands in the user's own branch", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "ship");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-ship", identifier: "NEXA-7", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(assignment.workspacePath, "README.md"), "# Shipped\n");
+    await f.manager.finalizeCommit("issue-ship", run, "NEXA-7");
+
+    const outcome = await f.manager.integrate(run);
+    assert.equal(outcome.integrated, true);
+    assert.equal(outcome.reason, undefined);
+    assert.equal(await readFile(path.join(f.repositoryPath, "README.md"), "utf8"), "# Shipped\n");
+    assert.equal(await git(f.repositoryPath, "rev-parse", "HEAD"), outcome.commit);
+    assert.equal(f.repositories.getWorkspace(run)?.state, "verified");
+  } finally { await cleanup(f); }
+});
+
+test("work still lands when the branch moved forward under it", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "moved");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-moved", identifier: "NEXA-8", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(assignment.workspacePath, "agent.txt"), "agent work\n");
+    await f.manager.finalizeCommit("issue-moved", run, "NEXA-8");
+
+    // Something lands on the branch while the agent is working — the user
+    // committing, or (far more often) a teammate's sub-task finishing first.
+    // Every teammate branches from the same base, so all but the first would be
+    // stranded if this were refused: the user delegates three files and finds one.
+    await writeFile(path.join(f.repositoryPath, "mine.txt"), "my work\n");
+    await git(f.repositoryPath, "add", "mine.txt");
+    await git(f.repositoryPath, "commit", "-m", "feat(app): my own work");
+    const theirs = await git(f.repositoryPath, "rev-parse", "HEAD");
+
+    const outcome = await f.manager.integrate(run);
+    assert.equal(outcome.integrated, true);
+    assert.equal(outcome.reason, undefined);
+    // Both survive: the replay adds to the branch rather than replacing it.
+    assert.equal(await readFile(path.join(f.repositoryPath, "agent.txt"), "utf8"), "agent work\n");
+    assert.equal(await readFile(path.join(f.repositoryPath, "mine.txt"), "utf8"), "my work\n");
+    assert.equal(
+      await git(f.repositoryPath, "merge-base", "--is-ancestor", theirs, "HEAD").then(() => true).catch(() => false),
+      true, "the commit that was already there is still in the history",
+    );
+  } finally { await cleanup(f); }
+});
+
+test("integration refuses when the branch diverged rather than advanced", async () => {
+  const f = await fixture();
+  try {
+    // The user rewound their branch mid-run. Replaying onto that would quietly
+    // discard whatever they dropped, so this is the case that must still refuse.
+    await writeFile(path.join(f.repositoryPath, "history.txt"), "keeping\n");
+    await git(f.repositoryPath, "add", "history.txt");
+    await git(f.repositoryPath, "commit", "-m", "feat(app): a commit to rewind past");
+
+    const run = await activate(f, "rewound");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-rewound", identifier: "NEXA-11", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(assignment.workspacePath, "agent.txt"), "agent work\n");
+    await f.manager.finalizeCommit("issue-rewound", run, "NEXA-11");
+
+    await git(f.repositoryPath, "reset", "--hard", "HEAD~1");
+    const userHead = await git(f.repositoryPath, "rev-parse", "HEAD");
+
+    const outcome = await f.manager.integrate(run);
+    assert.equal(outcome.integrated, false);
+    assert.match(outcome.reason ?? "", /diverged/);
+    assert.match(outcome.reason ?? "", new RegExp(assignment.branch), "the refusal says where the work is");
+    assert.equal(await git(f.repositoryPath, "rev-parse", "HEAD"), userHead, "the user's branch is left exactly where they put it");
+    await assert.rejects(access(path.join(f.repositoryPath, "agent.txt")));
+    // The work is not lost — it is on its branch, ready to merge by hand.
+    assert.equal(await git(f.repositoryPath, "show", `${assignment.branch}:agent.txt`), "agent work");
+  } finally { await cleanup(f); }
+});
+
+test("a replay that would conflict is refused, not resolved", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "clash");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-clash", identifier: "NEXA-12", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(assignment.workspacePath, "same.txt"), "the agent's version\n");
+    await f.manager.finalizeCommit("issue-clash", run, "NEXA-12");
+
+    // The same file, different content, landed on the branch meanwhile.
+    await writeFile(path.join(f.repositoryPath, "same.txt"), "the human's version\n");
+    await git(f.repositoryPath, "add", "same.txt");
+    await git(f.repositoryPath, "commit", "-m", "feat(app): my version of the file");
+    const userHead = await git(f.repositoryPath, "rev-parse", "HEAD");
+
+    const outcome = await f.manager.integrate(run);
+    assert.equal(outcome.integrated, false);
+    assert.match(outcome.reason ?? "", /conflict/);
+    // Nothing half-applied: the user's file and branch are exactly as they were,
+    // and their checkout is not sitting mid-rebase.
+    assert.equal(await readFile(path.join(f.repositoryPath, "same.txt"), "utf8"), "the human's version\n");
+    assert.equal(await git(f.repositoryPath, "rev-parse", "HEAD"), userHead);
+    assert.equal(await git(f.repositoryPath, "status", "--porcelain"), "");
+  } finally { await cleanup(f); }
+});
+
+test("a run that touched nothing has nothing to integrate", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "idle");
+    await f.manager.provision({ projectId: "project", issueId: "issue-idle", identifier: "NEXA-9", runId: run, repositoryPath: f.repositoryPath });
+    // An agent that answered without touching a file leaves the branch at base.
+    await f.manager.finalizeCommit("issue-idle", run, "NEXA-9");
+    const outcome = await f.manager.integrate(run);
+    assert.equal(outcome.integrated, false);
+    assert.match(outcome.reason ?? "", /no changes/);
+    // And no commit to point at. `finalizeCommit` records HEAD regardless, so
+    // reporting that as the run's commit is what told a user whose folder was
+    // genuinely untouched to `git merge` a branch holding nothing.
+    assert.equal(outcome.commit, null);
+  } finally { await cleanup(f); }
+});
+
+test("integration refuses to merge into a working tree the user is mid-edit on", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "held");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-held", identifier: "NEXA-10", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(assignment.workspacePath, "later.txt"), "agent work\n");
+    await f.manager.finalizeCommit("issue-held", run, "NEXA-10");
+
+    // Merging into a dirty tree can overwrite what the user was editing.
+    await writeFile(path.join(f.repositoryPath, "shared.txt"), "edited by hand\n");
+    const outcome = await f.manager.integrate(run);
+    assert.equal(outcome.integrated, false);
+    assert.match(outcome.reason ?? "", /uncommitted changes/);
+    assert.equal(await readFile(path.join(f.repositoryPath, "shared.txt"), "utf8"), "edited by hand\n");
+    await assert.rejects(access(path.join(f.repositoryPath, "later.txt")));
   } finally { await cleanup(f); }
 });

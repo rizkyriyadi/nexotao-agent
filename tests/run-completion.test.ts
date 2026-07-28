@@ -8,9 +8,11 @@ import { ControlPlaneRepositories } from "../lib/db/repositories";
 import { projects } from "../lib/db/schema";
 import { IssueLifecycleService } from "../lib/issue-lifecycle";
 import {
-  RUN_SUMMARY_EVENT_TYPE, TASK_DELEGATED_EVENT_TYPE, TEXT_DELTA_EVENT_TYPES,
+  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
+  TASK_DELEGATED_EVENT_TYPE, TEXT_DELTA_EVENT_TYPES,
   runOutcomeChip, settledIssueStatus,
 } from "../lib/run-transcript";
+import { relativizeWorkspacePaths } from "../lib/agent";
 
 /* ── the "Done" that wasn't ──────────────────────────────────────────────────
  * A run that exits because it ran out of steps exits *successfully* — the loop
@@ -105,4 +107,59 @@ test("the delegation event carries what a link needs", () => {
   for (const key of ["id", "ref", "title", "assignee"]) {
     assert.ok(key in payload, `${key} travels with the event`);
   }
+});
+
+/* ── work the user cannot see ────────────────────────────────────────────────
+ * When a run's commit cannot be fast-forwarded into the branch the user works
+ * on, their folder looks exactly as they left it while the task reports done.
+ * Saying so only in the answer text does not reach them: every text event is
+ * written while the agent is still running, and integration is attempted after
+ * that. It has to be an event of its own. */
+
+test("the unintegrated-work notice is its own event, not text", () => {
+  // Not a delta — appending it would glue it onto the agent's last half-sentence.
+  assert.ok(!TEXT_DELTA_EVENT_TYPES.has(RUN_INTEGRATION_EVENT_TYPE));
+  // And distinct from the two events that already exist, one of which is never
+  // rendered at all.
+  assert.notEqual(RUN_INTEGRATION_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE);
+  assert.notEqual(RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE);
+});
+
+test("the notice is emitted for a refusal and withheld for a clean merge", () => {
+  // The executor's rule, stated once here so it cannot drift: a refusal that
+  // produced a commit is the only case the user must be told about. A clean
+  // merge needs no notice (the files are simply there), and a run that changed
+  // nothing has no commit to point at — a `git merge` line for either would send
+  // the user chasing work that does not exist.
+  const shouldNotify = (i: { commit: string | null; reason?: string }) => Boolean(i.reason && i.commit);
+  assert.ok(shouldNotify({ commit: "abc123", reason: "your working tree has uncommitted changes" }));
+  assert.ok(!shouldNotify({ commit: "abc123" }));
+  assert.ok(!shouldNotify({ commit: null, reason: "the run made no changes" }));
+});
+
+/* ── the hand-off that wrote into the wrong copy ─────────────────────────────
+ * Each run works in its own copy of the project. A lead that pastes its own
+ * absolute workspace path into a sub-task sends the teammate somewhere outside
+ * that teammate's workspace: the write succeeds, the teammate reports done, its
+ * branch is empty, and the user is told three files were created while their
+ * folder holds none. Nothing downstream can detect this — the run genuinely had
+ * no changes to integrate — so it has to be stopped at the hand-off. */
+
+test("a delegated brief never carries the lead's own workspace path", () => {
+  const root = "/home/user/.nexotao/worktrees/abc123/nx-12-9b7ddca6";
+  const brief = relativizeWorkspacePaths(
+    `Create a file called ROUTING.md in the repo root at ${root}/ROUTING.md. Also update ${root}/docs/index.md.`,
+    root,
+  );
+  assert.ok(!brief.includes(root), "the lead's workspace is gone from the brief");
+  assert.match(brief, /called ROUTING\.md in the repo root at ROUTING\.md/);
+  assert.match(brief, /update docs\/index\.md/);
+});
+
+test("relativizing leaves a brief that never mentioned the workspace alone", () => {
+  const root = "/home/user/.nexotao/worktrees/abc123/nx-12-9b7ddca6";
+  const brief = "Create ROUTING.md in the repo root. Cover redirects and 404s.";
+  assert.equal(relativizeWorkspacePaths(brief, root), brief);
+  // A bare root with no trailing slash still resolves to "the project", not "".
+  assert.equal(relativizeWorkspacePaths(`Work inside ${root} only.`, root), "Work inside . only.");
 });

@@ -303,10 +303,19 @@ export class GitWorkspaceManager {
     const identity = await repositoryIdentity(assignment.repositoryPath);
     const paths = await changedPaths(assignment.workspacePath);
     assertAllowedPaths(paths);
+    let staged: string[] = [];
     if (paths.length) {
       await git(assignment.workspacePath, "add", "--all");
-      const staged = (await git(assignment.workspacePath, "diff", "--cached", "--name-only", "-z")).stdout.split("\0").filter(Boolean);
+      staged = (await git(assignment.workspacePath, "diff", "--cached", "--name-only", "-z")).stdout.split("\0").filter(Boolean);
       assertAllowedPaths(staged);
+    }
+    // `git diff` reports a submodule whose *contents* changed as a changed path,
+    // but `git add --all` stages nothing for it: from the superproject's view the
+    // gitlink still points at the same commit. Committing then fails with "no
+    // changes added to commit" and the run is reported as failed even though the
+    // agent did its work. Staging emptiness — not path emptiness — is what
+    // decides whether there is a commit to make.
+    if (staged.length) {
       const message = `feat(workspace): complete ${identifier} changes`;
       assertProfessionalCommit(message);
       await git(assignment.workspacePath, "-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`, "commit", "-m", message);
@@ -315,6 +324,78 @@ export class GitWorkspaceManager {
     await inspectOutgoingCommits(assignment.workspacePath, assignment.baseCommit, head, identity);
     await this.repositories.recordWorkspaceCommit(runId, head, "committed");
     return { commit: head, changedPaths: paths };
+  }
+
+  /** Fast-forward the branch the user actually works on so the run's commit lands
+   *  in their project folder.
+   *
+   *  Without this the isolation is a trap door: the agent commits to
+   *  `nexotao/nx-N/<runId>`, the task reports done, and the folder the user is
+   *  looking at is unchanged — the work exists only on a branch nothing in the UI
+   *  mentions. Isolation is meant to keep a *running* agent out of the user's
+   *  tree, not to keep the finished result away from them.
+   *
+   *  Nothing here may rewrite or discard existing history. Where the target only
+   *  moved *forward* — the common case with teammates finishing in parallel, each
+   *  landing on the branch the next one branched from — the run's own commits are
+   *  replayed on top and the result still fast-forwards. Anything else (the user
+   *  mid-edit, the branch switched, a genuine divergence, a conflicting replay) is
+   *  refused and reported, not thrown: the run succeeded, and its commit stays on
+   *  its branch for recovery. */
+  async integrate(runId: string): Promise<{ integrated: boolean; commit: string | null; branch: string; reason?: string }> {
+    const assignment = this.repositories.getWorkspace(runId);
+    if (!assignment) throw new Error("No persisted workspace assignment for this run");
+    // `commit` means the run's *own* commit, so it is null when the run added
+    // nothing. `finalizeCommit` records HEAD either way — it has to, since HEAD
+    // is what a later cherry-pick reads — so a caller that took commitSha at face
+    // value would see the base commit and conclude there was work to merge. That
+    // is what told a user with an unchanged folder to run `git merge` on a branch
+    // holding nothing.
+    const own = assignment.commitSha && assignment.commitSha !== assignment.baseCommit ? assignment.commitSha : null;
+    const result = (integrated: boolean, reason?: string) =>
+      ({ integrated, commit: own, branch: assignment.branch, ...(reason ? { reason } : {}) });
+    if (!own) return result(false, "the run made no changes");
+
+    const status = (await git(assignment.repositoryPath, "status", "--porcelain")).stdout;
+    if (status) return result(false, `your working tree has uncommitted changes, so the work was left on ${assignment.branch}`);
+    const [branch, head] = await Promise.all([
+      git(assignment.repositoryPath, "symbolic-ref", "--short", "HEAD").then((r) => r.stdout).catch(() => ""),
+      git(assignment.repositoryPath, "rev-parse", "HEAD").then((r) => r.stdout),
+    ]);
+    if (branch !== assignment.targetBranch) {
+      return result(false, `you are on ${branch || "a different branch"} rather than ${assignment.targetBranch}, so the work was left on ${assignment.branch}`);
+    }
+    let source = assignment.branch;
+    if (head !== assignment.baseCommit) {
+      // Two teammates working at once both branch from the same base, and the
+      // first to finish moves it. Refusing here would strand every sub-task but
+      // one on a branch of its own — which is exactly what a user delegating work
+      // would experience as "only one of the three files showed up".
+      //
+      // Replaying is only safe if the target is strictly ahead of the base: then
+      // no existing commit is being rewritten, only the run's own work is moved.
+      // A rebase onto anything else could silently drop the user's commits.
+      const ahead = await git(assignment.repositoryPath, "merge-base", "--is-ancestor", assignment.baseCommit, head)
+        .then(() => true).catch(() => false);
+      if (!ahead) return result(false, `${assignment.targetBranch} diverged while the agent worked, so the work was left on ${assignment.branch}`);
+      // Rebase in the worktree, never in the user's repository: a conflict there
+      // would leave their checkout mid-rebase.
+      try {
+        await git(assignment.workspacePath, "rebase", "--onto", head, assignment.baseCommit, assignment.branch);
+      } catch {
+        await git(assignment.workspacePath, "rebase", "--abort").catch(() => {});
+        return result(false, `this run's changes conflict with work that landed on ${assignment.targetBranch} while it ran, so they were left on ${assignment.branch}`);
+      }
+      source = (await git(assignment.workspacePath, "rev-parse", "HEAD")).stdout;
+    }
+    try {
+      await git(assignment.repositoryPath, "merge", "--ff-only", source);
+    } catch (error) {
+      return result(false, `${error instanceof Error ? error.message : String(error)} — the work is on ${assignment.branch}`);
+    }
+    const landed = (await git(assignment.repositoryPath, "rev-parse", "HEAD")).stdout;
+    await this.repositories.recordWorkspaceCommit(runId, landed, "verified");
+    return { integrated: true, commit: landed, branch: assignment.branch };
   }
 
   async cherryPickChildren(issueId: string, runId: string, children: Array<{ identifier: string; workspaceCommit?: string | null; workspaceBaseCommit?: string | null; verificationStatus?: string | null }>) {

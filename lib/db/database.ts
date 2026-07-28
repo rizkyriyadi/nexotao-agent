@@ -288,6 +288,12 @@ CREATE INDEX IF NOT EXISTS issues_state_idx ON issues(state_id);
 CREATE INDEX IF NOT EXISTS issues_cycle_idx ON issues(cycle_id);
 ${seedDefaultStatesSql()}
 `,
+}, {
+  version: 10,
+  name: "issue-model",
+  sql: `
+ALTER TABLE issues ADD COLUMN model TEXT;
+`,
 }];
 
 // Applies pending migrations, each in its own IMMEDIATE transaction so a failing

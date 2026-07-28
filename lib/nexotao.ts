@@ -56,6 +56,36 @@ export async function fetchModels(): Promise<NexotaoModel[]> {
     });
 }
 
+// The catalog is a remote call, but every run and every model-change request
+// needs to know whether an id is real. Cached briefly so a burst of requests
+// costs one round-trip, and short enough that a newly-added model appears
+// without a restart.
+const CATALOG_TTL_MS = 5 * 60_000;
+let catalogCache: { at: number; models: NexotaoModel[] } | undefined;
+
+/** The catalog, cached. Falls back to the last good copy if the gateway is
+ *  unreachable, so a transient outage cannot make every model look invalid. */
+export async function cachedModels(): Promise<NexotaoModel[]> {
+  if (catalogCache && Date.now() - catalogCache.at < CATALOG_TTL_MS) return catalogCache.models;
+  try {
+    const models = await fetchModels();
+    catalogCache = { at: Date.now(), models };
+    return models;
+  } catch (error) {
+    if (catalogCache) return catalogCache.models;
+    throw error;
+  }
+}
+
+/** Resolve a user-supplied model id to a real catalog entry, or null. Returning
+ *  null rather than throwing lets a caller fall back to the default instead of
+ *  failing the request outright. */
+export async function resolveModel(id: unknown): Promise<string | null> {
+  if (typeof id !== "string" || !id.trim()) return null;
+  const wanted = id.trim();
+  return (await cachedModels().catch(() => [])).find((m) => m.id === wanted)?.id ?? null;
+}
+
 /** @deprecated Use {@link fetchModels}. Retained for callers that only want the
  * Claude subset. */
 export async function fetchClaudeModels(): Promise<NexotaoModel[]> {

@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import type { LogItem } from "./transcript";
 import {
-  RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, TASK_DELEGATED_EVENT_TYPE, TEXT_DELTA_EVENT_TYPES,
-  runOutcomeChip,
+  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, TASK_DELEGATED_EVENT_TYPE,
+  TEXT_DELTA_EVENT_TYPES, runOutcomeChip,
 } from "@/lib/run-transcript";
 
 export type Approval = { runId: string; id: string; name: string; input: any } | null;
@@ -76,6 +76,14 @@ export function useRunStream(runId: string | null | undefined, opts?: { live?: b
         if (e.completion === "truncated") truncated = true;
         const text = String(e.summary ?? "").trim();
         if (text) setLog((prev) => prev.some((i) => i.kind === "summary") ? prev : [...prev, { kind: "summary", text }]);
+      }
+      // Written after the agent stopped, so it lands below the closing report —
+      // which is exactly where it belongs: "here is what I did" then "and here is
+      // why you can't see it in your folder yet".
+      else if (type === RUN_INTEGRATION_EVENT_TYPE) {
+        const branch = String(e.branch ?? "").trim();
+        const reason = String(e.reason ?? "").trim();
+        if (branch && reason) setLog((prev) => prev.some((i) => i.kind === "integration") ? prev : [...prev, { kind: "integration", branch, reason }]);
       }
       else if (type === TASK_DELEGATED_EVENT_TYPE)
         setLog((prev) => prev.some((i) => i.kind === "task" && i.id === e.id) ? prev : [...prev, {

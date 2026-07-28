@@ -15,7 +15,8 @@ import { getDatabase } from "./db/database";
 import { ControlPlaneRepositories, type ClaimedHeartbeat, type WakeupReason } from "./db/repositories";
 import { RunEventDomainError } from "./run-events";
 import {
-  RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, TASK_DELEGATED_EVENT_TYPE, settledIssueStatus,
+  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, TASK_DELEGATED_EVENT_TYPE,
+  settledIssueStatus,
 } from "./run-transcript";
 import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runtime";
 import { GitWorkspaceManager } from "./git-workspace";
@@ -42,7 +43,7 @@ async function ctx(projectId: string) {
 /** Create the root issue for a goal and start the run. The run mode (chosen in
  *  the control panel) decides how the lead handles it: `agent` builds directly,
  *  `plan` writes a plan, `ask` just answers. */
-export async function submitGoal(projectId: string, text: string, mode: I.RunMode = "agent", idempotencyKey?: string): Promise<I.Issue> {
+export async function submitGoal(projectId: string, text: string, mode: I.RunMode = "agent", idempotencyKey?: string, model?: string | null): Promise<I.Issue> {
   let lead = await I.leadAgent(projectId);
   if (!lead) {
     const project = await getProject(projectId);
@@ -52,7 +53,7 @@ export async function submitGoal(projectId: string, text: string, mode: I.RunMod
   const root = await I.createIssue({
     projectId, title: text, detail: text,
     assigneeAgentId: lead?.id ?? null, createdByAgentId: null,
-    status: lead ? "todo" : "backlog", stage: "execute", runMode: mode, idempotencyKey,
+    status: lead ? "todo" : "backlog", stage: "execute", runMode: mode, model: model ?? null, idempotencyKey,
   });
   tick(projectId);
   return root;
@@ -141,9 +142,10 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     if (!agent) { await I.releaseIssue(issueId, job.wakeup.agentId, runId, "assignee_missing"); return; }
 
     const { apiKey, model: defaultModel, root } = await ctx(projectId);
-    // Per-role model routing: prefer the agent's recommended model (pinned by a
-    // marketplace blueprint) over the project-wide default.
-    const model = (await I.getAgentModel(agent.id)) ?? defaultModel;
+    // Model routing, most specific first: the model chosen for this conversation,
+    // then the agent's recommended model (pinned by a marketplace blueprint),
+    // then the project-wide default.
+    const model = issue.model ?? (await I.getAgentModel(agent.id)) ?? defaultModel;
     const database = await getDatabase();
     const repositories = new ControlPlaneRepositories(database);
     const workspaceManager = new GitWorkspaceManager(repositories);
@@ -234,10 +236,28 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
         teammates: roster.map((a) => a.name), delegate,
       });
       if (mode === "lead-execute") {
-        // Persist the work to the isolated worktree. The commit is an internal
-        // implementation detail — the user sees the agent's own summary, not a
-        // raw commit hash appended to the answer.
+        // Persist the work to the isolated worktree, then fast-forward it into the
+        // user's own branch. The commit is an internal implementation detail — the
+        // user sees the agent's own summary, not a raw commit hash — but the files
+        // are not: a run that reports "done" while the project folder is untouched
+        // is indistinguishable from one that did nothing.
         await workspaceManager.finalizeCommit(issueId, runId, issue.ref);
+        const integration = await workspaceManager.integrate(runId);
+        // A refusal is not a failed run: the work is committed and recoverable, so
+        // the only thing at stake is that the user knows where it is. Three places
+        // need telling, because each is read by a different surface and none of
+        // them can be reached from the others at this point: the transcript reads
+        // durable events (and every event the agent wrote was written before
+        // integration was even attempted), the board reads the issue summary, and
+        // the answer text is what a follow-up run sees as the prior turn.
+        if (integration.reason && integration.commit) {
+          await heartbeat.emit(RUN_INTEGRATION_EVENT_TYPE, {
+            branch: integration.branch, reason: integration.reason, thread: "lead",
+          });
+          const notice = `\n\n> Your project folder was left as it is — ${integration.reason}. Merge it with \`git merge ${integration.branch}\`.`;
+          result.text += notice;
+          if (result.summary) result.summary += notice;
+        }
       } else if (mode === "lead-plan-doc") {
         // Persist the plan as the issue's `plan` document so it's reviewable and
         // the user can re-run in Agent mode to execute it.

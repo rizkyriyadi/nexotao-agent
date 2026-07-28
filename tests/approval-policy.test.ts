@@ -69,6 +69,43 @@ test("plan and ask modes deny every mutation while allowing read-only tools", ()
   assert.equal(modeSystemDirective("agent"), "");
 });
 
+/* ── read-only means every read-only tool ───────────────────────────────────
+ * Plan and Ask deny mutations by denying everything that is not classified as a
+ * read. Two families of tool that change nothing were missing that
+ * classification, so the run was denied the tools its own system prompt had just
+ * told it to use — which the user saw as a red "Denied" chip on the first line
+ * of a run that had not done anything wrong. */
+
+test("the graph tools are reads, so a plan run may consult the graph", () => {
+  // baseSystem tells every agent to call graph_query *before* reading files.
+  for (const name of ["graph_query", "graph_path", "graph_explain"]) {
+    const details = describeToolAction(name, { question: "how does billing work" });
+    assert.equal(details.action, "read", name);
+    assert.equal(details.risk, "low", name);
+    for (const mode of ["plan", "ask"] as const) {
+      assert.equal(evaluateExecutionPolicy(modeToPolicy(mode), details), "allow", `${name} in ${mode}`);
+    }
+  }
+  // An unknown tool still falls through to the guarded default — the check above
+  // must not have opened a hole for anything that merely looks read-ish.
+  assert.equal(describeToolAction("graphify_delete_everything".replace("graph", "xgraph"), {}).action, "exec");
+});
+
+test("looking something up is allowed in ask mode, which promises it", () => {
+  // ASK MODE's directive names web_search and web_fetch outright.
+  assert.match(modeSystemDirective("ask"), /web_search/);
+  for (const name of ["web_search", "web_fetch"]) {
+    const details = describeToolAction(name, { query: "q", url: "https://example.test" });
+    assert.equal(details.action, "network", name);
+    assert.equal(evaluateExecutionPolicy(modeToPolicy("ask"), details), "allow", name);
+  }
+  // Reaching the network still changes nothing on disk, so the mutation ban is
+  // untouched: a write in the same mode is still refused.
+  assert.equal(evaluateExecutionPolicy(modeToPolicy("ask"), describeToolAction("write_file", { path: "x", content: "y" })), "deny");
+  // And "ask" the *policy* (approve-each-call) still prompts rather than allows.
+  assert.equal(evaluateExecutionPolicy("ask", describeToolAction("web_fetch", { url: "https://example.test" })), "ask");
+});
+
 test("approval previews redact secrets", () => {
   const secret = "sk-verysecretvalue123";
   const details = describeToolAction("bash", { command: `curl -H 'Authorization: Bearer ${secret}' https://example.test` });

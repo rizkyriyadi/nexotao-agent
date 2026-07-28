@@ -59,11 +59,23 @@ export function describeToolAction(name: string, input: unknown): PolicyDetails 
   if (name === "web_fetch") return { action: "network", target: clipped(value.url, 500), risk: "medium", preview: clipped(value.url) };
   if (name === "delegate") return { action: "control", target: name, risk: "low", preview: clipped(input) };
   if (["list_dir", "read_file", "grep"].includes(name)) return { action: "read", target: clipped(value.path ?? name, 500), risk: "low", preview: clipped(input) };
+  // The graph tools only query an index built from the project's own history —
+  // they touch neither the working tree nor the network. Classifying them by the
+  // catch-all below made them "exec", so Plan and Ask denied the very first call
+  // the system prompt instructs every agent to make ("call graph_query before
+  // reading files"): the user watched a read-only run open with a red Denied.
+  if (name.startsWith("graph_")) return { action: "read", target: clipped(value.question ?? value.id ?? name, 500), risk: "low", preview: clipped(input) };
   return { action: "exec", target: name, risk: "high", preview: clipped(input) };
 }
 
 export function evaluateExecutionPolicy(policy: ExecutionPolicy, details: PolicyDetails): "allow" | "deny" | "ask" {
   if (details.action === "read" || details.action === "control") return "allow";
+  // Looking something up changes nothing in the user's project, and Ask mode's
+  // own directive names web_search and web_fetch as tools the agent may use — so
+  // denying them contradicted the instructions the same run was given. A policy
+  // of "ask" still prompts: that mode is about the user vetting each call, not
+  // about what the run promised.
+  if (policy === "deny" && details.action === "network") return "allow";
   // Auto ("allow") mode still routes genuinely catastrophic actions (rm -rf,
   // mkfs, dd, shutdown, …) through an explicit approval prompt. Routine
   // repo-scoped commands run without a prompt.

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { asc, desc, eq, inArray } from "drizzle-orm";
 import { getDatabase, DEFAULT_WORKFLOW_STATES, defaultStateId } from "./db/database";
 import { agentRuns, issueDependencies, issues, projects, runRecords, sessions, tasks, workflowStates } from "./db/schema";
+import { expandHome } from "./paths";
 
 export type AgentSpec = { name: string; scope: string };
 export type Project = { id: string; name: string; path: string; mode: "single" | "multi"; agents: AgentSpec[]; createdAt: number };
@@ -23,6 +24,11 @@ export async function listProjects() {
 export async function getProject(id: string) { return (await listProjects()).find((project) => project.id === id) ?? null; }
 export async function addProject(input: Omit<Project, "id" | "createdAt">): Promise<Project> {
   const database = await getDatabase();
+  // A project *is* its folder: two rows on the same path would show as two cards
+  // with the same name, each holding half the history, while the agent works in
+  // one tree. Re-adding a folder therefore re-opens the project already on it.
+  const existing = (await listProjects()).find((candidate) => expandHome(candidate.path) === expandHome(input.path));
+  if (existing) return existing;
   const project: Project = { ...input, id: randomUUID(), createdAt: Date.now() };
   await database.write((db) => {
     db.insert(projects).values({ id: project.id, name: project.name, path: project.path, mode: project.mode, agentSpecs: project.agents, createdAt: project.createdAt }).run();

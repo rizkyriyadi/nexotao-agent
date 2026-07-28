@@ -14,6 +14,7 @@ type Issue = {
   id: string; ref: string; title: string; detail: string; status: string;
   runMode: RunMode; summary: string; createdAt: number; updatedAt: number;
   assigneeAgentId: string | null;
+  model: string | null;
 };
 type Comment = { id: string; authorType: string; body: string; createdAt: number };
 type Run = { id: string; status: string; startedAt: number | null; queuedAt: number | null; finishedAt: number | null };
@@ -69,6 +70,7 @@ export function TaskView({ id }: { id: string }) {
   const [notFound, setNotFound] = useState(false);
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<RunMode>("agent");
+  const [model, setModel] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [cancelling, setCancelling] = useState(false);
   const [answers, setAnswers] = useState<Record<number, string>>({});
@@ -76,6 +78,7 @@ export function TaskView({ id }: { id: string }) {
   const poller = useRef<ReturnType<typeof setInterval> | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const modeTouched = useRef(false);
+  const modelTouched = useRef(false);
 
   const load = useCallback(async () => {
     try {
@@ -85,6 +88,9 @@ export function TaskView({ id }: { id: string }) {
       if (d?.issue) {
         setDetail({ issue: d.issue, comments: d.comments ?? [], runs: d.runs ?? [], agents: d.agents ?? [], documents: d.documents ?? [], children: d.children ?? [] });
         if (!modeTouched.current) setMode((d.issue.runMode as RunMode) ?? "agent");
+        // Poll-driven, so a stale response must never overwrite a choice the
+        // user just made — the same guard the mode selector uses.
+        if (!modelTouched.current) setModel((d.issue.model as string | null) ?? null);
       }
     } catch { /* keep last */ }
   }, [id]);
@@ -111,10 +117,10 @@ export function TaskView({ id }: { id: string }) {
   }, [detail, streaming]);
 
   const postMessage = useCallback(async (text: string, m: RunMode) => {
-    const r = await fetch(`/api/issues/${id}/message`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: text, mode: m }) });
+    const r = await fetch(`/api/issues/${id}/message`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: text, mode: m, model }) });
     if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || "Couldn't send"); }
     await load();
-  }, [id, load]);
+  }, [id, load, model]);
 
   const send = useCallback(async (m: RunMode) => {
     const text = input.trim();
@@ -279,6 +285,8 @@ export function TaskView({ id }: { id: string }) {
             onChange={setInput}
             mode={mode}
             onModeChange={(m) => { modeTouched.current = true; setMode(m); }}
+            model={model}
+            onModelChange={(next) => { modelTouched.current = true; setModel(next); }}
             onSubmit={send}
             disabled={sending}
             placeholder={occupied ? "Queue a follow-up — Hutao picks it up next…" : "Reply to continue this task…"}

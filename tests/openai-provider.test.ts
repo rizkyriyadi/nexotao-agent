@@ -107,6 +107,75 @@ test("streamOpenAITurn maps an Anthropic transcript with tool results to OpenAI 
   }
 });
 
+/* Each case below was rejected by the live gateway with 400
+ * `upstream.invalid_request` ("request is invalid for this model") before the
+ * translation was repaired. They are the shapes a long run produces — a denied
+ * tool call, a message that interleaves text with tool results, an assistant
+ * turn that said nothing — which is why short chats never reproduced it. */
+async function sentMessages(messages: any[]) {
+  const { fn, calls } = sseFetch([
+    JSON.stringify({ choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] }),
+    "[DONE]",
+  ]);
+  const original = globalThis.fetch;
+  globalThis.fetch = fn as any;
+  try {
+    await streamOpenAITurn({ apiKey: "k", model: "gpt-5.6-sol", messages });
+    return calls[0].body.messages as any[];
+  } finally {
+    globalThis.fetch = original;
+  }
+}
+
+test("an assistant turn that said nothing is dropped rather than sent as a null turn", async () => {
+  const msgs = await sentMessages([
+    { role: "user", content: "hi" },
+    { role: "assistant", content: [] },
+    { role: "user", content: "still there?" },
+  ]);
+  assert.equal(msgs.filter((m) => m.role === "assistant").length, 0);
+  assert.deepEqual(msgs.map((m) => m.role), ["user", "user"]);
+});
+
+test("tool results stay adjacent to the call, with accompanying user text after", async () => {
+  const msgs = await sentMessages([
+    { role: "user", content: "read it" },
+    { role: "assistant", content: [{ type: "tool_use", id: "c1", name: "read_file", input: {} }] },
+    // One Anthropic turn carrying both a result and new user text: emitting the
+    // text first put a user message between the call and its answer.
+    { role: "user", content: [
+      { type: "tool_result", tool_use_id: "c1", content: "body" },
+      { type: "text", text: "also check the tests" },
+    ] },
+  ]);
+  const roles = msgs.map((m) => m.role);
+  assert.deepEqual(roles, ["user", "assistant", "tool", "user"]);
+  assert.equal(msgs[2].tool_call_id, "c1");
+});
+
+test("a tool call left unanswered is given an explicit outcome", async () => {
+  // What a denied or cancelled tool call leaves behind: two calls, one result.
+  const msgs = await sentMessages([
+    { role: "user", content: "go" },
+    { role: "assistant", content: [
+      { type: "tool_use", id: "c1", name: "read_file", input: {} },
+      { type: "tool_use", id: "c2", name: "bash", input: {} },
+    ] },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "c1", content: "body" }] },
+  ]);
+  const answers = msgs.filter((m) => m.role === "tool");
+  assert.deepEqual(answers.map((m) => m.tool_call_id).sort(), ["c1", "c2"]);
+  assert.match(answers.find((m) => m.tool_call_id === "c2").content, /not completed/);
+});
+
+test("a tool result whose call is absent is dropped", async () => {
+  const msgs = await sentMessages([
+    { role: "user", content: "go" },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "gone", content: "body" }] },
+  ]);
+  assert.equal(msgs.filter((m) => m.role === "tool").length, 0);
+});
+
 test("fetchModels includes the GPT 5.6 series alongside Claude", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = (async () => ({

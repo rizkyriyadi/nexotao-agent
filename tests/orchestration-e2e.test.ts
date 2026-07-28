@@ -52,6 +52,7 @@ function loadIssues(database: AppDatabase): Issue[] {
     runMode: (row.runMode as Issue["runMode"]) ?? "agent",
     blockedBy: deps.filter((d) => d.issueId === row.id).map((d) => d.blockerIssueId),
     runId: row.checkoutRunId, summary: row.summary, createdAt: row.createdAt, updatedAt: row.updatedAt,
+    model: row.model ?? null,
     stateId: row.stateId ?? null, cycleId: row.cycleId ?? null, moduleIds: [], labelIds: [],
     estimatePoint: row.estimatePoint ?? null, startDate: row.startDate ?? null, targetDate: row.targetDate ?? null,
     sequence: row.sequence ?? null, intakeStatus: row.intakeStatus ?? null, intakeSource: row.intakeSource ?? null,

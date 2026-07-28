@@ -23,6 +23,18 @@ export const RUN_SUMMARY_EVENT_TYPE = "summary";
  * assignee }`. */
 export const TASK_DELEGATED_EVENT_TYPE = "task_delegated";
 
+/** What happened to the run's commit when we tried to fast-forward it into the
+ * branch the user works on. Emitted only when integration was *refused*, which
+ * is the case the user has to act on: the work is real, committed, and sitting
+ * on a branch nothing else in the app mentions.
+ *
+ * It has to be its own event rather than a line appended to the answer. The
+ * answer is streamed as `reasoning_summary` deltas and the closing report is
+ * emitted as `summary`, both while the agent is still running — integration is
+ * attempted after that, so text added to either afterwards reaches the database
+ * but never the transcript the user is reading. Payload: `{ branch, reason }`. */
+export const RUN_INTEGRATION_EVENT_TYPE = "integration";
+
 /** How a run's agent loop ended. `complete` — the agent stopped on its own;
  * `truncated` — it was still working when it hit the step ceiling. The
  * difference decides whether the task may be called done. */

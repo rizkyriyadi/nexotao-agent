@@ -201,18 +201,37 @@ export type DelegatedTask = { id: string; ref: string; title: string; assignee: 
 export type DelegateFn = (input: { title: string; detail?: string; assignee?: string })
   => Promise<{ ok: true; task: DelegatedTask } | { ok: false; error: string }>;
 
+/** Rewrite any absolute path into the *lead's* workspace as a project-relative
+ *  one, for text about to be handed to a teammate.
+ *
+ *  Every run gets its own copy of the project, so the lead's root does not exist
+ *  for anyone else. A lead that writes "create /…/worktrees/nx-12-<runId>/API.md"
+ *  into a sub-task sends the teammate to a directory outside its own workspace:
+ *  the file gets written, the teammate reports success, and the teammate's branch
+ *  is empty — so nothing integrates and the user is told three files were created
+ *  while their folder holds none. Asking the model nicely is not enough when the
+ *  failure is this quiet, so the path is rewritten on the way out. */
+export function relativizeWorkspacePaths(detail: string, root: string): string {
+  const trimmed = root.replace(/\/+$/, "");
+  if (!trimmed) return detail;
+  // Longest-first so a trailing-slash form is consumed before the bare root.
+  return detail
+    .split(`${trimmed}/`).join("")
+    .split(trimmed).join(".");
+}
+
 /** Tool definition for handing work to a teammate. Only offered when the project
  *  actually has teammates to hand it to — a lone agent seeing this tool would
  *  delegate to itself and deadlock. */
 const DELEGATE_TOOL = {
   name: "delegate",
   description:
-    "Hand one self-contained piece of this task to a teammate as its own tracked sub-task. Use it when work splits cleanly and can proceed independently. Each call creates one sub-task the user can open and follow. Tell the user which sub-tasks you created and what each covers.",
+    "Hand one self-contained piece of this task to a teammate as its own tracked sub-task. Use it when work splits cleanly and can proceed independently. Each call creates one sub-task the user can open and follow. Tell the user which sub-tasks you created and what each covers. Your teammate works in its own separate copy of the project, so describe every file by its path relative to the project root — an absolute path from your copy does not exist in theirs.",
   input_schema: {
     type: "object",
     properties: {
       title: { type: "string", description: "Short imperative title, e.g. 'Build the billing page'" },
-      detail: { type: "string", description: "Everything the teammate needs to do it without asking you" },
+      detail: { type: "string", description: "Everything the teammate needs to do it without asking you. Use project-relative paths only (e.g. 'docs/api.md', never '/home/…/docs/api.md')." },
       assignee: { type: "string", description: "Teammate name. Omit to let the control plane pick." },
     },
     required: ["title", "detail"],
@@ -248,7 +267,7 @@ export async function runIssueAgent(opts: {
     handlers.delegate = async (input: any) => {
       const result = await opts.delegate!({
         title: String(input?.title ?? "").trim(),
-        detail: typeof input?.detail === "string" ? input.detail : undefined,
+        detail: typeof input?.detail === "string" ? relativizeWorkspacePaths(input.detail, opts.root) : undefined,
         assignee: typeof input?.assignee === "string" ? input.assignee : undefined,
       });
       if (!result.ok) return { output: `Could not delegate: ${result.error}` };

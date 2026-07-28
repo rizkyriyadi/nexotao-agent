@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { getDatabase } from "@/lib/db/database";
 import { ControlPlaneRepositories } from "@/lib/db/repositories";
-import { getIssue, reopenIssue, type RunMode } from "@/lib/issues";
+import { getIssue, reopenIssue, updateIssue, type RunMode } from "@/lib/issues";
+import { resolveModel } from "@/lib/nexotao";
 import { tick } from "@/lib/executor";
 import { IssueDomainError } from "@/lib/issue-lifecycle";
 
@@ -19,16 +20,24 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   const issue = await getIssue(id);
   if (!issue) return NextResponse.json({ error: "Issue not found" }, { status: 404 });
 
-  const body = await request.json().catch(() => null) as { body?: unknown; mode?: unknown } | null;
+  const body = await request.json().catch(() => null) as { body?: unknown; mode?: unknown; model?: unknown } | null;
   const text = typeof body?.body === "string" ? body.body.trim() : "";
   if (!text) return NextResponse.json({ error: "Message body is required" }, { status: 400 });
   const mode: RunMode | undefined = body?.mode === "agent" || body?.mode === "plan" || body?.mode === "ask" ? body.mode : undefined;
+  // Switching model mid-conversation applies from the next run onward. An
+  // unknown id is ignored so the conversation keeps the model it already had,
+  // but an explicit null is honoured: that is the user picking "Default model",
+  // and treating it as "no change" would make the choice impossible to undo.
+  const clearModel = body?.model === null;
+  const model = await resolveModel(body?.model);
 
   const database = await getDatabase();
   const repositories = new ControlPlaneRepositories(database);
 
   try {
     const comment = await repositories.addComment({ issueId: id, authorType: "user", body: text });
+    const nextModel = clearModel ? null : model;
+    if ((clearModel || model) && nextModel !== issue.model) await updateIssue(id, { model: nextModel }, { type: "user" });
     // Reopen the task (a finished one goes back to todo) and let tick wake the
     // lead. A task that's still running keeps its run; the executor re-queues it
     // afterwards because this new comment is newer than that run's start.

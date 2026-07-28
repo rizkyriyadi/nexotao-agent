@@ -49,6 +49,9 @@ export const issues = sqliteTable("issues", {
   identifier: text("identifier").notNull(), parentId: text("parent_id"), title: text("title").notNull(), description: text("description").notNull().default(""),
   status: text("status").notNull(), stage: text("stage").notNull().default("execute"), priority: text("priority").notNull().default("medium"),
   runMode: text("run_mode").notNull().default("agent"),
+  // Per-conversation model override. Null means "whatever the project/agent is
+  // configured for", so an issue created before the picker existed keeps working.
+  model: text("model"),
   assigneeAgentId: text("assignee_agent_id").references(() => agents.id, { onDelete: "set null" }),
   createdByAgentId: text("created_by_agent_id").references(() => agents.id, { onDelete: "set null" }), checkoutRunId: text("checkout_run_id"),
   executionLockedAt: integer("execution_locked_at"), summary: text("summary").notNull().default(""), startedAt: integer("started_at"),

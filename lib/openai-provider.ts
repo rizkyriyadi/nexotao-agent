@@ -37,6 +37,20 @@ function toolResultText(content: unknown): string {
  * `role:"tool"` message keyed by the originating call id; assistant tool_use
  * blocks become `tool_calls`. Ordering is preserved so every tool message
  * follows the assistant turn that requested it. */
+/** The gateway rejects the whole request (400 `upstream.invalid_request`) for
+ *  three transcript shapes the naive translation can produce, so each is
+ *  repaired here rather than sent and retried:
+ *
+ *   - an assistant turn with `content: null` and no `tool_calls` (an empty turn),
+ *   - a `role:"tool"` message not immediately preceded by the assistant turn
+ *     that called it — a user text block emitted before the tool results of the
+ *     same Anthropic turn is enough to break the adjacency,
+ *   - an assistant turn whose `tool_calls` are not each answered by a tool
+ *     message, which happens whenever a call is denied or a run is cancelled
+ *     mid-flight.
+ *
+ *  Long runs hit all three; short chats hit none, which is why only sustained
+ *  sessions were failing. */
 function toOpenAIMessages(system: string | undefined, convo: Msg[]) {
   const out: any[] = [];
   if (system) out.push({ role: "system", content: system });
@@ -46,13 +60,15 @@ function toOpenAIMessages(system: string | undefined, convo: Msg[]) {
         out.push({ role: "user", content: m.content });
         continue;
       }
-      const texts = m.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
-      if (texts) out.push({ role: "user", content: texts });
+      // Tool results first: they must sit directly behind the assistant turn
+      // that requested them, so any accompanying user text follows after.
       for (const b of m.content) {
         if (b.type === "tool_result") {
           out.push({ role: "tool", tool_call_id: b.tool_use_id, content: toolResultText(b.content) });
         }
       }
+      const texts = m.content.filter((b) => b.type === "text").map((b) => b.text).join("\n");
+      if (texts) out.push({ role: "user", content: texts });
     } else {
       if (typeof m.content === "string") {
         out.push({ role: "assistant", content: m.content });
@@ -60,6 +76,9 @@ function toOpenAIMessages(system: string | undefined, convo: Msg[]) {
       }
       const text = m.content.filter((b) => b.type === "text").map((b) => b.text).join("");
       const toolUses = m.content.filter((b) => b.type === "tool_use");
+      // An assistant turn carrying neither text nor a tool call is not a turn
+      // the API accepts; dropping it loses nothing, since it said nothing.
+      if (!text && !toolUses.length) continue;
       const msg: any = { role: "assistant", content: text || null };
       if (toolUses.length) {
         msg.tool_calls = toolUses.map((tu) => ({
@@ -69,6 +88,32 @@ function toOpenAIMessages(system: string | undefined, convo: Msg[]) {
         }));
       }
       out.push(msg);
+    }
+  }
+  return answerDanglingToolCalls(out);
+}
+
+/** Give every `tool_calls` entry a matching tool message, and drop tool messages
+ *  whose call is absent. The synthetic answer is explicit about what happened so
+ *  the model reads it as a real outcome rather than silently missing context. */
+function answerDanglingToolCalls(messages: any[]) {
+  const answered = new Set(
+    messages.filter((m) => m.role === "tool" && m.tool_call_id).map((m) => m.tool_call_id),
+  );
+  const called = new Set(
+    messages.flatMap((m) => (m.role === "assistant" ? (m.tool_calls ?? []) : [])).map((c: any) => c.id),
+  );
+  const out: any[] = [];
+  for (const message of messages) {
+    // A tool result whose call never made it into the transcript has nothing to
+    // attach to and would be rejected on its own.
+    if (message.role === "tool" && !called.has(message.tool_call_id)) continue;
+    out.push(message);
+    if (message.role !== "assistant" || !message.tool_calls?.length) continue;
+    for (const call of message.tool_calls) {
+      if (answered.has(call.id)) continue;
+      answered.add(call.id);
+      out.push({ role: "tool", tool_call_id: call.id, content: "This tool call was not completed." });
     }
   }
   return out;

@@ -16,12 +16,16 @@ export type LogItem =
   | { kind: "event"; tone: "neutral" | "success" | "error"; label: string; detail?: string }
   // The agent's closing report — the one block that tells the user what happened.
   | { kind: "summary"; text: string }
+  // The run's commit could not be fast-forwarded into the user's branch, so the
+  // work is sitting somewhere they have to be told about.
+  | { kind: "integration"; branch: string; reason: string }
   // A sub-task the lead handed to a teammate, rendered as a link to follow.
   | { kind: "task"; id: string; ref: string; title: string; assignee: string };
 
 export type ToolItem = Extract<LogItem, { kind: "tool" }>;
 type EventItem = Extract<LogItem, { kind: "event" }>;
 type SummaryItem = Extract<LogItem, { kind: "summary" }>;
+type IntegrationItem = Extract<LogItem, { kind: "integration" }>;
 export type TaskItem = Extract<LogItem, { kind: "task" }>;
 
 /** How the surrounding run is doing — drives which of the three end-of-run
@@ -63,7 +67,8 @@ type Block =
   | { kind: "tools"; items: ToolItem[] }
   | { kind: "tasks"; items: TaskItem[] }
   | EventItem
-  | SummaryItem;
+  | SummaryItem
+  | IntegrationItem;
 /** Inside a tool block, consecutive calls to the SAME tool collapse together. */
 type Run = { name: string; items: ToolItem[] };
 
@@ -71,7 +76,7 @@ function toBlocks(log: LogItem[]): Block[] {
   const blocks: Block[] = [];
   for (const it of log) {
     if (it.kind === "text") { blocks.push({ kind: "text", text: it.text }); continue; }
-    if (it.kind === "event" || it.kind === "summary") { blocks.push(it); continue; }
+    if (it.kind === "event" || it.kind === "summary" || it.kind === "integration") { blocks.push(it); continue; }
     const last = blocks[blocks.length - 1];
     // Tasks delegated back to back read as one hand-off, so they group like tools.
     if (it.kind === "task") {
@@ -171,6 +176,28 @@ function SummaryBlock({ text }: { text: string }) {
         <Flag className="size-3" /> Result
       </p>
       <div className="text-[13.5px] leading-relaxed text-charcoal"><Markdown>{text}</Markdown></div>
+    </div>
+  );
+}
+
+/* ── unintegrated work ───────────────────────────────────────── */
+
+/** The agent finished, but its commit could not be fast-forwarded into the
+ *  branch the user works on — their folder looks untouched. Without this block
+ *  the run reads as "done" and the work is invisible: it lives on a branch no
+ *  other screen in the app names. Deliberately not styled as an error; nothing
+ *  broke, and refusing to merge is what kept the user's own edits safe. */
+function IntegrationBlock({ item }: { item: IntegrationItem }) {
+  return (
+    <div className="rounded-xl border border-amber/40 bg-amber/[0.07] px-3.5 py-3">
+      <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-bark-grey">
+        <GitBranch className="size-3" /> Your project folder was left as it is
+      </p>
+      <p className="text-[13px] leading-relaxed text-charcoal">{item.reason}.</p>
+      <p className="mt-2 text-[12.5px] text-bark-grey">Bring the work in with:</p>
+      <code className="mt-1 block overflow-x-auto rounded-lg bg-black/[0.05] px-2 py-1.5 font-mono text-[11.5px] text-charcoal">
+        git merge {item.branch}
+      </code>
     </div>
   );
 }
@@ -299,6 +326,7 @@ export function Transcript({
         if (block.kind === "tools") return <ToolBlock key={index} items={block.items} />;
         if (block.kind === "tasks") return <TaskBlock key={index} items={block.items} />;
         if (block.kind === "summary") return <SummaryBlock key={index} text={block.text} />;
+        if (block.kind === "integration") return <IntegrationBlock key={index} item={block} />;
         return TERMINAL_LABELS.has(block.label)
           ? <TerminalChip key={index} event={block} />
           : <EventNote key={index} event={block} />;

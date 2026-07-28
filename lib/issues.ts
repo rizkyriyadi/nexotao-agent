@@ -18,6 +18,8 @@ export type Issue = {
   id: string; projectId: string; ref: string; title: string; detail: string; parentId: string | null;
   assigneeAgentId: string | null; createdByAgentId: string | null; status: IssueStatusValue; stage: IssueStage;
   priority: string; runMode: RunMode; blockedBy: string[]; runId: string | null; summary: string; createdAt: number; updatedAt: number;
+  // Per-conversation model. Null means the project/agent default applies.
+  model: string | null;
   // Work-management fields. `stateId` is the board column; `status` above stays
   // the engine's truth. Empty arrays rather than undefined so every consumer can
   // map over them without a guard.
@@ -35,6 +37,7 @@ function issueFromRow(row: typeof issues.$inferSelect, links: { blockedBy: strin
     assigneeAgentId: row.assigneeAgentId, createdByAgentId: row.createdByAgentId, status: row.status as IssueStatusValue,
     stage: row.stage as IssueStage, priority: row.priority, runMode: (row.runMode as RunMode) ?? "agent", blockedBy: links.blockedBy,
     runId: row.checkoutRunId, summary: row.summary, createdAt: row.createdAt, updatedAt: row.updatedAt,
+    model: row.model ?? null,
     stateId: row.stateId ?? null, cycleId: row.cycleId ?? null, moduleIds: links.moduleIds, labelIds: links.labelIds,
     estimatePoint: row.estimatePoint ?? null, startDate: row.startDate ?? null, targetDate: row.targetDate ?? null,
     sequence: row.sequence ?? null, intakeStatus: row.intakeStatus ?? null, intakeSource: row.intakeSource ?? null };
@@ -107,7 +110,7 @@ export async function childrenOf(parentId: string) {
 export async function createIssue(input: {
   projectId: string; title: string; detail?: string; parentId?: string | null; assigneeAgentId?: string | null;
   createdByAgentId?: string | null; status?: IssueStatusValue; stage?: IssueStage; blockedBy?: string[];
-  priority?: string; runMode?: RunMode;
+  priority?: string; runMode?: RunMode; model?: string | null;
   stateId?: string | null; cycleId?: string | null; estimatePoint?: number | null;
   startDate?: number | null; targetDate?: number | null; sequence?: number | null;
   intakeStatus?: string | null; intakeSource?: string | null;
@@ -133,6 +136,7 @@ export async function createIssue(input: {
   await database.write((db) => {
     db.update(issues).set({
       stateId,
+      ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.cycleId !== undefined ? { cycleId: input.cycleId } : {}),
       ...(input.estimatePoint !== undefined ? { estimatePoint: input.estimatePoint } : {}),
       ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
@@ -161,6 +165,7 @@ export async function updateIssue(
       ...(patch.createdByAgentId !== undefined ? { createdByAgentId: patch.createdByAgentId } : {}),
       ...(patch.stage !== undefined ? { stage: patch.stage } : {}),
       ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
       ...(patch.summary !== undefined ? { summary: patch.summary } : {}), updatedAt: Date.now(),
     }).where(eq(issues.id, id)).run();
   });

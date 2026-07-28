@@ -34,6 +34,9 @@ export function ControlPanel() {
   const router = useRouter();
   const [input, setInput] = useState("");
   const [mode, setMode] = useState<RunMode>("agent");
+  // Null = the project default. The choice rides along with the goal so the very
+  // first run already uses it, rather than only follow-ups.
+  const [model, setModel] = useState<string | null>(null);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [leadAvatar, setLeadAvatar] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -65,7 +68,7 @@ export function ControlPanel() {
     if (!goal || submitting) return;
     setSubmitting(true);
     try {
-      const r = await fetch("/api/issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal, mode: m }) });
+      const r = await fetch("/api/issues", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ goal, mode: m, model }) });
       if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.error || "Request failed"); }
       const { root } = await r.json();
       router.push(`/board/${root.id}`);
@@ -74,7 +77,7 @@ export function ControlPanel() {
       toast.error(msg.includes("onboarding") ? "Finish onboarding to connect Nexotao." : msg);
       setSubmitting(false);
     }
-  }, [submitting, router]);
+  }, [submitting, router, model]);
 
   const active = tasks.filter((t) => ACTIVE.has(t.status));
   const recent = tasks.filter((t) => !ACTIVE.has(t.status));
@@ -93,6 +96,8 @@ export function ControlPanel() {
             onChange={setInput}
             mode={mode}
             onModeChange={setMode}
+            model={model}
+            onModelChange={setModel}
             onSubmit={(m) => start(input, m)}
             disabled={submitting}
             autoFocus

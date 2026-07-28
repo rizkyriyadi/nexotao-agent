@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getActiveProject } from "@/lib/store";
 import { getConfig } from "@/lib/config";
+import { resolveModel } from "@/lib/nexotao";
 import { createIssue, listIssues, listAgents, updateIssue, seedAgents, type IssueStatus } from "@/lib/issues";
 import { submitGoal, tick, triggerHeartbeat } from "@/lib/executor";
 import { IssueDomainError } from "@/lib/issue-lifecycle";
@@ -26,7 +27,7 @@ function domainErrorResponse(error: unknown) {
 
 /** Submit a goal — creates the root issue for the lead and starts the run. */
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => null) as { goal?: unknown; mode?: unknown; title?: unknown; assigneeAgentId?: string | null; priority?: string } | null;
+  const body = await req.json().catch(() => null) as { goal?: unknown; mode?: unknown; model?: unknown; title?: unknown; assigneeAgentId?: string | null; priority?: string } | null;
   if (body && typeof body.title === "string" && body.title.trim()) {
     const project = await getActiveProject();
     if (!project) return NextResponse.json({ error: "No active project." }, { status: 400 });
@@ -47,8 +48,11 @@ export async function POST(req: Request) {
   const project = await getActiveProject();
   if (!project) return NextResponse.json({ error: "No active project." }, { status: 400 });
   await seedAgents(project.id, project.agents ?? []);
+  // An unknown id resolves to null rather than erroring, so the run falls back
+  // to the configured default instead of failing on a stale picker selection.
+  const model = await resolveModel(body.model);
   try {
-    const root = await submitGoal(project.id, goal, mode, req.headers.get("idempotency-key") ?? undefined);
+    const root = await submitGoal(project.id, goal, mode, req.headers.get("idempotency-key") ?? undefined, model);
     return NextResponse.json({ root });
   } catch (error) {
     return domainErrorResponse(error);
