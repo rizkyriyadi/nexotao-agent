@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getActiveProject } from "@/lib/store";
 import { readProjectGraph } from "@/lib/graph-data";
 import { buildWorkGraph } from "@/lib/graphify";
-import { detectCodeMemory, indexProject } from "@/lib/code-memory";
+import { codeIndexStatus, detectCodeMemory, indexProject } from "@/lib/code-memory";
 
 export const runtime = "nodejs";
 
@@ -15,6 +15,12 @@ export async function GET() {
     return NextResponse.json({ project: null, projectId: null, empty: true, nodes: [], edges: [], generatedAt: null });
   }
   const graph = await readProjectGraph(project.id);
+  // Read the code layer's counts rather than making the page remember what its
+  // last build reported: a reload would otherwise drop back to "installed, size
+  // unknown". This is a status read, not an index — it costs about 30ms and
+  // never writes.
+  const available = await detectCodeMemory();
+  const status = available ? await codeIndexStatus(project.id) : null;
   return NextResponse.json({
     project: { id: project.id, name: project.name },
     projectId: project.id,
@@ -22,6 +28,13 @@ export async function GET() {
     nodes: graph.nodes,
     edges: graph.edges,
     generatedAt: graph.generatedAt ?? null,
+    code: {
+      available,
+      project: status?.project ?? null,
+      nodes: status?.nodes ?? 0,
+      edges: status?.edges ?? 0,
+      indexedAt: status?.indexedAt ?? null,
+    },
   });
 }
 

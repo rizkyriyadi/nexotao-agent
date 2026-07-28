@@ -10,7 +10,7 @@ const dir = await mkdtemp(path.join(tmpdir(), "nexotao-codemem-"));
 process.env.NEXOTAO_DATA_DIR = dir;
 
 const {
-  parseCliOutput, codeIndexName, indexProject, refreshCodeIndex, resetCodeIndexCaches,
+  parseCliOutput, codeIndexName, indexProject, codeIndexStatus, refreshCodeIndex, resetCodeIndexCaches,
   searchCode, traceCode, explainCode, dropCodeIndex, detectCodeMemory, sweepCodeIndexCache,
   canonicalRoot, codeIndexCacheDir, installCodeMemory, resetInstallState,
   INDEX_PREFIX, CLI_PACKAGE, INSTALL_COMMAND, TOOLS_DIR,
@@ -93,6 +93,25 @@ test("a project that was never indexed reads as an empty code layer, not a failu
   assert.match(String(parsed.error), /not indexed/);
   // And the public surface turns that into "no code layer", not a throw.
   assert.equal(await searchCode("p", "q", 5, { exec: exec as any }), null);
+});
+
+/* ── the counts survive a page reload ────────────────────────────────────────
+ * The /graph banner is the one surface that tells a user how much of their code
+ * the agent can see. It used to know only what the last build returned, so a
+ * refresh dropped it back to "installed, size unknown". Reading the index's own
+ * status is a header read, not a tree walk, so the page can just ask. */
+
+test("an existing index reports its size without re-indexing anything", async () => {
+  const rec = recorder(() => envelope({ project: codeIndexName("p9"), nodes: 1867, edges: 5093, status: "ready" }));
+  const status = await codeIndexStatus("p9", { exec: rec.exec });
+  assert.equal(status?.nodes, 1867);
+  assert.equal(status?.edges, 5093);
+  assert.equal(status?.project, `${INDEX_PREFIX}p9`);
+  // Asked the read-only tool, under our own name — never index_repository.
+  assert.equal(rec.calls[0].args[rec.calls[0].args.length - 1], "index_status");
+  assert.equal(JSON.parse(rec.calls[0].stdin).project, `${INDEX_PREFIX}p9`);
+  // A project with no index is an absent code layer, not an error.
+  assert.equal(await codeIndexStatus("p9", { exec: absent as any }), null);
 });
 
 /* ── one index per project, whatever tree the run is in ──────────────────────

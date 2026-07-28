@@ -22,8 +22,9 @@ type GraphResponse = {
   nodes: Node[];
   edges: Edge[];
   generatedAt: number | null;
+  code?: CodeIndex;
 };
-// Mirror of POST /api/graph (build knowledge graph).
+// The code layer, reported by both GET and POST /api/graph.
 type CodeIndex = { available: boolean; project: string | null; nodes: number; edges: number; indexedAt: number | null };
 type BuildResponse =
   | { ok: true; work: { nodes: number; edges: number }; code: CodeIndex }
@@ -173,22 +174,28 @@ export function GraphView() {
     setLoading(true);
     fetch("/api/graph")
       .then((r) => r.json())
-      .then((d: GraphResponse) => { setData(d); setError(null); })
+      .then((d: GraphResponse) => {
+        setData(d);
+        setError(null);
+        // The code layer's counts ride along with every load, so a reload keeps
+        // reading "1867 symbols" rather than falling back to "installed".
+        if (d.code) {
+          setCodeAvailable(d.code.available);
+          setCode(d.code.available && d.code.nodes > 0 ? d.code : null);
+        }
+      })
       .catch(() => setError("Could not load the graph."))
       .finally(() => setLoading(false));
   };
   useEffect(load, []);
 
-  // Whether the optional code index is installed. Checked once on mount so the
-  // banner can offer the install without this page ever installing anything.
+  // The install command, for the "or run it yourself" fallback. Availability
+  // itself comes from /api/graph above; this probe only supplies the text.
   useEffect(() => {
     fetch("/api/code-index/install")
       .then((r) => r.json())
-      .then((r: InstallResponse) => {
-        setCodeAvailable(r.available === true);
-        setInstallCommand(r.command ?? null);
-      })
-      .catch(() => setCodeAvailable(false));
+      .then((r: InstallResponse) => { setInstallCommand(r.command ?? null); })
+      .catch(() => { /* the button still works; only the fallback text is lost */ });
   }, []);
 
   // Build the knowledge graph on demand: full rebuild of the work-history graph

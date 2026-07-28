@@ -296,6 +296,25 @@ export async function indexProject(
   };
 }
 
+/**
+ * Read a project's existing index without touching it. Cheap (~30 ms — it reads
+ * the SQLite header, it does not walk the tree), so a page load can ask for the
+ * counts rather than having to remember what the last build reported.
+ * `null` means "no index for this project", which is also what an unindexed
+ * project's `isError` response comes back as.
+ */
+export async function codeIndexStatus(projectId: string, deps?: CliDeps): Promise<CodeIndexStatus | null> {
+  const name = codeIndexName(projectId);
+  const data = await callCli("index_status", { project: name }, TIMEOUT.query, deps) as any;
+  if (!data || typeof data !== "object" || typeof data.nodes !== "number") return null;
+  return {
+    project: String(data.project ?? name),
+    nodes: Number(data.nodes ?? 0),
+    edges: Number(data.edges ?? 0),
+    indexedAt: 0, // the CLI reports no timestamp; the caller knows when it asked
+  };
+}
+
 // Two indexers writing one SQLite file is how a `.db.corrupt` appears in the
 // cache. Concurrent callers share a single spawn, and a call arriving just after
 // one finished is a no-op — the triggers deliberately overlap (run start fires
