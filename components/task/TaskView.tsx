@@ -3,10 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Ban, Loader2, Play, Plus, Sparkles } from "lucide-react";
+import { ArrowLeft, Ban, GitBranch, Loader2, Play, Plus, Sparkles } from "lucide-react";
 import { Button } from "../ui/button";
 import { Composer, type RunMode } from "./Composer";
-import { Transcript, STATUS_LABEL, statusDot, TOOL_LABEL } from "./transcript";
+import { Transcript, STATUS_LABEL, statusDot, TOOL_LABEL, type RunPhase } from "./transcript";
 import { useRunStream } from "./use-run-stream";
 import { agentAvatar } from "@/lib/avatars";
 
@@ -19,18 +19,32 @@ type Comment = { id: string; authorType: string; body: string; createdAt: number
 type Run = { id: string; status: string; startedAt: number | null; queuedAt: number | null; finishedAt: number | null };
 type AgentLite = { id: string; name: string; avatar?: string | null };
 type DocLite = { key: string; body?: string | null };
-type Detail = { issue: Issue; comments: Comment[]; runs: Run[]; agents: AgentLite[]; documents: DocLite[] };
+type ChildLite = { id: string; ref: string; title: string; status: string; assigneeAgentId: string | null };
+type Detail = { issue: Issue; comments: Comment[]; runs: Run[]; agents: AgentLite[]; documents: DocLite[]; children: ChildLite[] };
 
 type Decision = { q: string; options: string[] };
 
 type TimelineItem =
   | { kind: "user"; text: string; ts: number; key: string }
-  | { kind: "run"; runId: string; status: string; ts: number; live: boolean; key: string };
+  | { kind: "run"; runId: string; status: string; phase: RunPhase; ts: number; startedAt: number | null; live: boolean; key: string };
 
-// Statuses where a run is actually starting or streaming. `blocked` is
-// deliberately excluded: a blocked task is waiting on the user, not executing,
-// so it must not show a spinner or the "a run is in progress" affordance.
-const ACTIVE = new Set(["in_progress", "todo", "queued", "running", "waiting"]);
+// Statuses where a run is genuinely executing — the only ones that earn a
+// spinner, an elapsed clock, or a Cancel button. `blocked` is excluded (waiting
+// on the user, not working) and so is `todo`: a merely queued task is not
+// running, and dressing it up as one was the core of the "confusing" complaint.
+const STREAMING = new Set(["in_progress", "running"]);
+
+// Accepted but not yet executing. Occupies the same slot in the timeline as a
+// streaming run, but presents as a quiet "queued" line with no interrupt.
+const PENDING = new Set(["todo", "queued", "waiting"]);
+
+// Anything not settled — used only to decide whether the composer should say
+// "your message will be queued".
+const OCCUPIED = new Set([...STREAMING, ...PENDING]);
+
+// Ledger statuses (HeartbeatStatus) that mean a run has an outcome on record.
+// Anything else — queued, running, waiting — is still owed one.
+const SETTLED_RUN_STATUS = new Set(["succeeded", "failed", "cancelled", "done", "error"]);
 
 /** Pull the optional machine-readable decisions block a plan run may append as a
  *  trailing HTML comment. Forgiving: anything malformed yields no chips. */
@@ -69,7 +83,7 @@ export function TaskView({ id }: { id: string }) {
       if (r.status === 404) { setNotFound(true); return; }
       const d = await r.json();
       if (d?.issue) {
-        setDetail({ issue: d.issue, comments: d.comments ?? [], runs: d.runs ?? [], agents: d.agents ?? [], documents: d.documents ?? [] });
+        setDetail({ issue: d.issue, comments: d.comments ?? [], runs: d.runs ?? [], agents: d.agents ?? [], documents: d.documents ?? [], children: d.children ?? [] });
         if (!modeTouched.current) setMode((d.issue.runMode as RunMode) ?? "agent");
       }
     } catch { /* keep last */ }
@@ -82,7 +96,9 @@ export function TaskView({ id }: { id: string }) {
   }, [load]);
 
   const issue = detail?.issue;
-  const running = issue ? ACTIVE.has(issue.status) : false;
+  const streaming = issue ? STREAMING.has(issue.status) : false;
+  const pending = issue ? PENDING.has(issue.status) : false;
+  const occupied = issue ? OCCUPIED.has(issue.status) : false;
 
   const avatar = useMemo(() => {
     const assignee = detail?.agents.find((a) => a.id === issue?.assigneeAgentId);
@@ -91,8 +107,8 @@ export function TaskView({ id }: { id: string }) {
 
   // keep the view pinned to the latest activity while a run streams
   useEffect(() => {
-    if (running && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
-  }, [detail, running]);
+    if (streaming && scroller.current) scroller.current.scrollTop = scroller.current.scrollHeight;
+  }, [detail, streaming]);
 
   const postMessage = useCallback(async (text: string, m: RunMode) => {
     const r = await fetch(`/api/issues/${id}/message`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body: text, mode: m }) });
@@ -145,21 +161,36 @@ export function TaskView({ id }: { id: string }) {
   // build the conversation timeline: initial prompt, follow-up messages, and runs
   const runs = [...detail!.runs].sort((a, b) => (a.startedAt ?? a.queuedAt ?? 0) - (b.startedAt ?? b.queuedAt ?? 0));
   const newestRunId = runs.length ? runs[runs.length - 1].id : null;
-  const liveRunId = running ? newestRunId : null;
+  // Only a streaming run is cancellable. A queued one has nothing to interrupt.
+  const liveRunId = streaming ? newestRunId : null;
   const items: TimelineItem[] = [
     { kind: "user" as const, text: issue.detail || issue.title, ts: issue.createdAt, key: "goal" },
     ...detail!.comments.filter((c) => c.authorType === "user").map((c) => ({ kind: "user" as const, text: c.body, ts: c.createdAt, key: `c-${c.id}` })),
-    ...runs.map((run) => ({
-      kind: "run" as const, runId: run.id, status: run.status,
-      ts: run.startedAt ?? run.queuedAt ?? 0, live: run.id === newestRunId && running, key: `r-${run.id}`,
-    })),
+    ...runs.map((run) => {
+      const newest = run.id === newestRunId;
+      // A run row is only unsettled while its own status is still `running` AND
+      // it is the newest row AND the issue agrees work is outstanding. Anything
+      // else — a finished run, a superseded one, a cancelled issue — settles at
+      // once, so no spinner can outlive the work it describes.
+      // A run is unsettled while the ledger has not recorded an outcome for it
+      // AND it is the newest row. Checking for `running` alone was wrong: a
+      // queued/waiting run has no outcome yet either, and settling it made a
+      // task that had not started announce that it had "Ended".
+      const open = !SETTLED_RUN_STATUS.has(run.status) && newest;
+      const phase: RunPhase = open && streaming ? "running" : open ? "queued" : "settled";
+      return {
+        kind: "run" as const, runId: run.id, status: run.status, phase,
+        ts: run.startedAt ?? run.queuedAt ?? 0, startedAt: run.startedAt,
+        live: newest && streaming, key: `r-${run.id}`,
+      };
+    }),
   ].sort((a, b) => a.ts - b.ts);
 
   const planDoc = detail!.documents.find((d) => d.key === "plan");
   const decisions = parseDecisions(planDoc?.body);
   // Offer plan execution while the task is still in Plan mode and idle. Executing
   // reopens it in Agent mode, which flips runMode and hides this panel.
-  const showPlanActions = Boolean(planDoc) && issue.runMode === "plan" && !running;
+  const showPlanActions = Boolean(planDoc) && issue.runMode === "plan" && !occupied;
 
   const executePlan = async () => {
     const lines = decisions
@@ -192,7 +223,8 @@ export function TaskView({ id }: { id: string }) {
           <p className="font-mono text-[10.5px] text-pebble">{issue.ref} · {issue.runMode}</p>
         </div>
         <span className="flex shrink-0 items-center gap-1.5 font-mono text-[12px] text-bark-grey">
-          {running && <Loader2 className="size-3.5 animate-spin text-electric-indigo" />}
+          {/* Only a genuinely streaming run spins. Queued shows a still dot. */}
+          {streaming && <Loader2 className="size-3.5 animate-spin text-electric-indigo" />}
           <span className={`size-[6px] rounded-full ${statusDot(issue.status)}`} /> {STATUS_LABEL[issue.status] ?? issue.status}
         </span>
         {liveRunId && (
@@ -207,7 +239,23 @@ export function TaskView({ id }: { id: string }) {
         <div className="mx-auto max-w-[760px] space-y-6 px-6 py-8">
           {items.map((item) => item.kind === "user"
             ? <UserBubble key={item.key} text={item.text} />
-            : <RunSection key={item.key} runId={item.runId} status={item.status} live={item.live} avatar={avatar} />)}
+            : (
+              <RunSection
+                key={item.key}
+                runId={item.runId}
+                status={item.status}
+                phase={item.phase}
+                startedAt={item.startedAt}
+                live={item.live}
+                avatar={avatar}
+                onStop={item.live ? () => cancel(item.runId) : undefined}
+                stopping={cancelling}
+              />
+            ))}
+
+          {detail!.children.length > 0 && (
+            <SubTasks tasks={detail!.children} agents={detail!.agents} onOpen={(childId) => router.push(`/board/${childId}`)} />
+          )}
 
           {showPlanActions && (
             <PlanActions
@@ -233,8 +281,10 @@ export function TaskView({ id }: { id: string }) {
             onModeChange={(m) => { modeTouched.current = true; setMode(m); }}
             onSubmit={send}
             disabled={sending}
-            placeholder={running ? "Queue a follow-up — Hutao picks it up next…" : "Reply to continue this task…"}
-            hint={running ? "A run is in progress — your message will be queued." : "Sending a message reopens this task and wakes Hutao."}
+            placeholder={occupied ? "Queue a follow-up — Hutao picks it up next…" : "Reply to continue this task…"}
+            hint={streaming ? "A run is in progress — your message will be queued."
+              : pending ? "This task is queued — your message will be picked up with it."
+              : "Sending a message reopens this task and wakes Hutao."}
           />
         </div>
       </div>
@@ -252,14 +302,21 @@ function UserBubble({ text }: { text: string }) {
   );
 }
 
-function RunSection({ runId, status, live, avatar }: { runId: string; status: string; live: boolean; avatar: string }) {
+function RunSection({
+  runId, status, phase, startedAt, live, avatar, onStop, stopping,
+}: {
+  runId: string; status: string; phase: RunPhase; startedAt: number | null;
+  live: boolean; avatar: string; onStop?: () => void; stopping?: boolean;
+}) {
   const { log, approval, terminal } = useRunStream(runId, { live });
   const approve = useCallback(async (decision: "allow" | "deny") => {
     if (!approval) return;
     await fetch("/api/approve", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runId: approval.runId, id: approval.id, decision }) }).catch(() => {});
   }, [approval]);
 
-  const waiting = status === "queued" || status === "todo" ? "Queued — Hutao will start shortly…" : "Working…";
+  // The stream's own terminal frame settles the section immediately, without
+  // waiting for the next poll of the issue status — a cancel must land at once.
+  const effectivePhase: RunPhase = terminal ? "settled" : phase;
 
   return (
     <div className="flex gap-3">
@@ -275,7 +332,56 @@ function RunSection({ runId, status, live, avatar }: { runId: string; status: st
             </div>
           </div>
         )}
-        <Transcript log={log} waiting={waiting} />
+        <Transcript
+          log={log}
+          phase={effectivePhase}
+          status={status}
+          startedAt={startedAt}
+          onStop={effectivePhase === "running" ? onStop : undefined}
+          stopping={stopping}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** Every sub-task this one was split into, with live status. Answers "what am I
+ *  actually waiting for?" — before this, delegated work was invisible here and
+ *  the parent just sat there looking stalled. */
+function SubTasks({
+  tasks, agents, onOpen,
+}: {
+  tasks: ChildLite[]; agents: AgentLite[]; onOpen: (id: string) => void;
+}) {
+  const nameFor = (agentId: string | null) => agents.find((a) => a.id === agentId)?.name ?? null;
+  const outstanding = tasks.filter((c) => !["done", "cancelled"].includes(c.status)).length;
+  return (
+    <div className="ml-11 rounded-3xl border border-line bg-paper-white/80 p-4 shadow-sm">
+      <div className="flex items-center gap-2">
+        <GitBranch className="size-4 text-bark-grey" />
+        <p className="text-[13px] font-medium text-charcoal">Sub-tasks</p>
+        <span className="rounded-md bg-black/[0.05] px-1.5 py-px font-mono text-[10.5px] text-bark-grey">
+          {outstanding > 0 ? `${outstanding} of ${tasks.length} open` : `${tasks.length} done`}
+        </span>
+      </div>
+      <div className="mt-2 space-y-0.5">
+        {tasks.map((child) => {
+          const who = nameFor(child.assigneeAgentId);
+          return (
+            <button
+              key={child.id}
+              type="button"
+              onClick={() => onOpen(child.id)}
+              className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-black/[0.035]"
+            >
+              <span className={`size-[6px] shrink-0 rounded-full ${statusDot(child.status)}`} />
+              <span className="shrink-0 font-mono text-[11px] text-electric-indigo">{child.ref}</span>
+              <span className="min-w-0 flex-1 truncate text-[12.5px] text-charcoal" title={child.title}>{child.title}</span>
+              {who && <span className="shrink-0 text-[11px] text-pebble">{who}</span>}
+              <span className="shrink-0 font-mono text-[10.5px] text-bark-grey">{STATUS_LABEL[child.status] ?? child.status}</span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );

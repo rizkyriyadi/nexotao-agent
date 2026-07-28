@@ -70,7 +70,13 @@ export function ActiveRunIndicator() {
         ))}
 
       <div className="flex max-w-[360px] items-center gap-2.5 rounded-2xl border border-electric-indigo/30 bg-paper-white py-2 pl-3.5 pr-2 shadow-float">
-        <Loader2 className="size-3.5 shrink-0 animate-spin text-electric-indigo" />
+        {/* Spin only for work that is genuinely executing. A run whose nodes are
+            merely queued or blocked gets the same still dot as the collapsed
+            rows below — a spinner over the words "1 task queued" is the same
+            "is it actually running?" confusion the task view had. */}
+        {top.runningCount > 0
+          ? <Loader2 className="size-3.5 shrink-0 animate-spin text-electric-indigo" />
+          : <span className="size-[7px] shrink-0 rounded-full bg-electric-indigo nx-pulse" />}
         <button onClick={() => jump(top)} className="flex min-w-0 flex-1 items-center gap-2 text-left" title="Jump to live transcript">
           <span className="min-w-0 flex-1 truncate text-[12.5px] font-medium text-charcoal">{top.title}</span>
           <span className="shrink-0 font-mono text-[10.5px] text-pebble">{label(top)}</span>

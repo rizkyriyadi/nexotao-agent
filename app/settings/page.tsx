@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { Switch } from "@/components/ui/switch";
-import { IconKeyStub } from "@/components/settings-icons";
 import { SearchKeyRow } from "@/components/settings/SearchKeyRow";
+import { ModelRow } from "@/components/settings/ModelRow";
+import { ApiKeyRow } from "@/components/settings/ApiKeyRow";
 import { DataControls } from "@/components/settings/DataControls";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -37,24 +38,13 @@ export default function Settings() {
 
           <Section title="Model">
             <Row label="Model" hint="Default for new sessions.">
-              <span className="font-mono text-[13px] text-charcoal">Opus 4.8</span>
-            </Row>
-            <Row label="Effort" hint="Higher = deeper reasoning. xhigh is best for coding.">
-              <div className="flex gap-1">
-                {["low", "medium", "high", "xhigh", "max"].map((e) => (
-                  <span key={e} className={`rounded-md px-2 py-1 font-mono text-[11px] ${e === "xhigh" ? "bg-charcoal text-warm-bone" : "text-pebble"}`}>
-                    {e}
-                  </span>
-                ))}
-              </div>
+              <ModelRow />
             </Row>
           </Section>
 
-          <Section title="Anthropic key">
-            <Row label="API key" hint="Read from ANTHROPIC_API_KEY or your ant auth profile.">
-              <span className="inline-flex items-center gap-2 font-mono text-[13px] text-charcoal">
-                <IconKeyStub className="size-4 text-pebble" /> sk-ant-•••• 4f2a
-              </span>
+          <Section title="Nexotao key">
+            <Row label="API key" hint="One balance for every model. Stored locally in ~/.nexotao.">
+              <ApiKeyRow />
             </Row>
           </Section>
 

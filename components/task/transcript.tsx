@@ -1,18 +1,38 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { useMemo, useState } from "react";
+import Link from "next/link";
+import { ArrowUpRight, Check, ChevronRight, CircleSlash, Clock, Flag, GitBranch, PauseCircle, TriangleAlert } from "lucide-react";
 import { Markdown } from "../ui/markdown";
+import { ActivityIndicator } from "./ActivityIndicator";
+import { ToolCall } from "./ToolCall";
+import { presentationFor, toolInput } from "./tool-config";
 
 // A single rendered line in a run transcript.
+// NOTE: consumed by use-run-stream.ts — coordinate before changing this shape.
 export type LogItem =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; name: string; target: string; status: "running" | "done" | "error"; display?: string; input?: unknown; output?: string }
-  | { kind: "event"; tone: "neutral" | "success" | "error"; label: string; detail?: string };
+  | { kind: "event"; tone: "neutral" | "success" | "error"; label: string; detail?: string }
+  // The agent's closing report — the one block that tells the user what happened.
+  | { kind: "summary"; text: string }
+  // A sub-task the lead handed to a teammate, rendered as a link to follow.
+  | { kind: "task"; id: string; ref: string; title: string; assignee: string };
+
+export type ToolItem = Extract<LogItem, { kind: "tool" }>;
+type EventItem = Extract<LogItem, { kind: "event" }>;
+type SummaryItem = Extract<LogItem, { kind: "summary" }>;
+export type TaskItem = Extract<LogItem, { kind: "task" }>;
+
+/** How the surrounding run is doing — drives which of the three end-of-run
+ *  presentations the transcript shows. `queued` deliberately does NOT get the
+ *  activity indicator: nothing is executing yet. */
+export type RunPhase = "queued" | "running" | "settled";
 
 export const TOOL_LABEL: Record<string, string> = {
   list_dir: "List", read_file: "Read", write_file: "Write", edit_file: "Edit",
   bash: "Run", grep: "Grep", web_search: "Search", web_fetch: "Fetch",
+  graph_query: "Graph", graph_path: "Graph", graph_explain: "Graph", delegate: "Delegate",
 };
 
 export const STATUS_LABEL: Record<string, string> = {
@@ -36,87 +56,261 @@ export function ago(ts: number) {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
-/* ── transcript (grouped tool accordions + markdown) ───────────── */
-type ToolItem = Extract<LogItem, { kind: "tool" }>;
-type EventItem = Extract<LogItem, { kind: "event" }>;
-type Block = { kind: "text"; text: string } | { kind: "tools"; items: ToolItem[] } | EventItem;
+/* ── blocking ────────────────────────────────────────────────── */
+
+type Block =
+  | { kind: "text"; text: string }
+  | { kind: "tools"; items: ToolItem[] }
+  | { kind: "tasks"; items: TaskItem[] }
+  | EventItem
+  | SummaryItem;
+/** Inside a tool block, consecutive calls to the SAME tool collapse together. */
+type Run = { name: string; items: ToolItem[] };
 
 function toBlocks(log: LogItem[]): Block[] {
   const blocks: Block[] = [];
   for (const it of log) {
     if (it.kind === "text") { blocks.push({ kind: "text", text: it.text }); continue; }
-    if (it.kind === "event") { blocks.push(it); continue; }
+    if (it.kind === "event" || it.kind === "summary") { blocks.push(it); continue; }
     const last = blocks[blocks.length - 1];
+    // Tasks delegated back to back read as one hand-off, so they group like tools.
+    if (it.kind === "task") {
+      if (last && last.kind === "tasks") last.items.push(it);
+      else blocks.push({ kind: "tasks", items: [it] });
+      continue;
+    }
     if (last && last.kind === "tools") last.items.push(it);
     else blocks.push({ kind: "tools", items: [it] });
   }
   return blocks;
 }
 
-function toolDot(s: string) {
-  return s === "running" ? "bg-electric-indigo nx-pulse" : s === "error" ? "bg-alarm-red" : "bg-pebble";
+function toRuns(items: ToolItem[]): Run[] {
+  const runs: Run[] = [];
+  for (const item of items) {
+    const last = runs[runs.length - 1];
+    if (last && last.name === item.name) last.items.push(item);
+    else runs.push({ name: item.name, items: [item] });
+  }
+  return runs;
 }
 
-function ToolRow({ it }: { it: ToolItem }) {
+/* ── grouped tools ───────────────────────────────────────────── */
+
+/** N calls to one tool, folded behind an x{n} badge and a preview of the first
+ *  couple of targets — the pattern from claudecodeui's ToolGroupContainer. */
+function ToolGroup({ run }: { run: Run }) {
+  const spec = presentationFor(run.name);
+  const active = run.items.some((i) => i.status === "running");
+  const failed = run.items.some((i) => i.status === "error");
+  const [open, setOpen] = useState(false);
+  const Icon = spec.icon;
+
+  const preview = useMemo(() => {
+    const first = run.items.slice(0, 2).map((i) => spec.value(toolInput(i.input)) || i.target).filter(Boolean);
+    const extra = run.items.length - first.length;
+    const text = first.join(", ");
+    if (!text) return extra > 0 ? `+${extra} more` : "";
+    return extra > 0 ? `${text}, +${extra} more` : text;
+  }, [run.items, spec]);
+
+  // Expanded rows sit dense: the group header already carries the tool identity.
   return (
-    <div className="py-[5px]">
-      <div className="flex items-center gap-3">
-        <span className={`size-[6px] shrink-0 rounded-full ${toolDot(it.status)}`} />
-        <span className="w-14 shrink-0 text-[12.5px] font-medium text-charcoal">{TOOL_LABEL[it.name] ?? it.name}</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-bark-grey">{it.target}</span>
-        <span className="shrink-0 font-mono text-[11px] text-pebble">{it.status === "running" ? "…" : it.display ?? it.status}</span>
-      </div>
-      {(it.input !== undefined || it.output) && (
-        <details className="ml-9 mt-1 text-[11px] text-pebble">
-          <summary className="cursor-pointer select-none">Payload</summary>
-          <pre className="scroll-thin mt-1 max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-md bg-warm-bone p-2 font-mono text-[10.5px] text-bark-grey">
-            {it.input !== undefined ? JSON.stringify(it.input, null, 2) : ""}{it.output ? `\n${it.output}` : ""}
-          </pre>
-        </details>
+    <div className={`border-l-2 ${spec.accent}`}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 py-1 pl-2.5 text-left"
+      >
+        <ChevronRight className={`size-3 shrink-0 text-pebble transition-transform ${open ? "rotate-90" : ""}`} />
+        <Icon className={`size-3.5 shrink-0 ${spec.iconTint}`} />
+        <span className="shrink-0 text-[11.5px] font-medium text-bark-grey">{spec.label}</span>
+        <span className={`shrink-0 rounded-md px-1.5 py-px text-[10px] font-medium ${
+          active ? "bg-electric-indigo/10 text-electric-indigo" : failed ? "bg-alarm-red/10 text-alarm-red" : "bg-black/[0.05] text-bark-grey"
+        }`}>
+          ×{run.items.length}
+        </span>
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-pebble" title={preview}>{preview}</span>
+        {active && <span className="size-1.5 shrink-0 rounded-full bg-electric-indigo nx-pulse" />}
+      </button>
+      {open && (
+        <div className="ml-2.5 border-l border-line pl-1.5">
+          {run.items.map((item) => <ToolCall key={item.id} item={item} dense />)}
+        </div>
       )}
     </div>
   );
 }
 
-function ToolGroup({ items }: { items: ToolItem[] }) {
-  const running = items.some((i) => i.status === "running");
-  const [open, setOpen] = useState(items.length <= 2 || running);
-  if (items.length === 1) return <div className="rounded-lg border border-line bg-paper-white px-3"><ToolRow it={items[0]} /></div>;
-  const counts: Record<string, number> = {};
-  for (const i of items) { const k = TOOL_LABEL[i.name] ?? i.name; counts[k] = (counts[k] ?? 0) + 1; }
-  const summary = Object.entries(counts).map(([k, n]) => `${k} ${n}`).join(" · ");
+/** A contiguous stretch of tool activity, boxed so it reads as one "the agent
+ *  went and did things" beat between paragraphs of prose. */
+function ToolBlock({ items }: { items: ToolItem[] }) {
+  const runs = toRuns(items);
   return (
-    <div className="rounded-lg border border-line bg-paper-white">
-      <button onClick={() => setOpen((v) => !v)} className="flex w-full items-center gap-2.5 px-3 py-2 text-left">
-        <span className={`size-[6px] shrink-0 rounded-full ${running ? "bg-electric-indigo nx-pulse" : "bg-pebble"}`} />
-        <span className="text-[12.5px] font-medium text-charcoal">{items.length} steps</span>
-        <span className="min-w-0 flex-1 truncate font-mono text-[11.5px] text-pebble">{summary}</span>
-        <ChevronRight className={`size-3.5 shrink-0 text-pebble transition-transform ${open ? "rotate-90" : ""}`} />
-      </button>
-      {open && <div className="border-t border-line px-3 py-1">{items.map((it) => <ToolRow key={it.id} it={it} />)}</div>}
+    <div className="space-y-0.5 rounded-xl border border-line bg-paper-white/70 px-2 py-1.5">
+      {runs.map((run, index) =>
+        run.items.length > 1
+          ? <ToolGroup key={`${run.name}-${index}`} run={run} />
+          : <ToolCall key={run.items[0].id} item={run.items[0]} />
+      )}
     </div>
   );
 }
 
-function EventCard({ event }: { event: EventItem }) {
-  const dot = event.tone === "success" ? "bg-lichen-green" : event.tone === "error" ? "bg-alarm-red" : "bg-sapphire-link";
+/* ── closing report ──────────────────────────────────────────── */
+
+/** The agent's report back to the user, written after the work in a turn of its
+ *  own. Set apart from the running commentary above it because it is the part
+ *  the user actually came for — previously there was no such block at all, and a
+ *  run just stopped mid-thought. */
+function SummaryBlock({ text }: { text: string }) {
   return (
-    <div className="flex items-center gap-2.5 rounded-lg border border-line bg-paper-white px-3 py-2 text-[12px]">
-      <span className={`size-[6px] shrink-0 rounded-full ${dot}`} /><span className="font-medium text-charcoal">{event.label}</span>
-      {event.detail && <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-pebble">{event.detail}</span>}
+    <div className="rounded-xl border border-electric-indigo/25 bg-mist-lavender/30 px-3.5 py-3">
+      <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-electric-indigo">
+        <Flag className="size-3" /> Result
+      </p>
+      <div className="text-[13.5px] leading-relaxed text-charcoal"><Markdown>{text}</Markdown></div>
     </div>
   );
 }
 
-export function Transcript({ log, waiting }: { log: LogItem[]; waiting: string }) {
-  const blocks = toBlocks(log);
-  if (log.length === 0) return <p className="text-[13.5px] text-pebble">{waiting}</p>;
+/* ── delegated sub-tasks ─────────────────────────────────────── */
+
+/** Tasks the lead handed to teammates. Each is a link the user can open, so
+ *  "what am I actually waiting for?" has an answer they can click. */
+function TaskBlock({ items }: { items: TaskItem[] }) {
   return (
-    <div className="space-y-3.5">
-      {blocks.map((block, index) => block.kind === "text"
-        ? <Markdown key={index}>{block.text}</Markdown>
-        : block.kind === "tools" ? <ToolGroup key={index} items={block.items} />
-        : <EventCard key={index} event={block} />)}
+    <div className="rounded-xl border border-line bg-paper-white/70 px-2.5 py-2">
+      <p className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-bark-grey">
+        <GitBranch className="size-3" /> Handed off · {items.length}
+      </p>
+      <div className="space-y-0.5">
+        {items.map((task) => (
+          <Link
+            key={task.id}
+            href={`/board/${task.id}`}
+            className="flex items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-black/[0.035]"
+          >
+            <span className="shrink-0 font-mono text-[11px] text-electric-indigo">{task.ref}</span>
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-charcoal" title={task.title}>{task.title}</span>
+            {task.assignee && <span className="shrink-0 text-[11px] text-pebble">{task.assignee}</span>}
+            <ArrowUpRight className="size-3 shrink-0 text-pebble" />
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── terminal state ──────────────────────────────────────────── */
+
+const TERMINAL: Record<string, { icon: typeof Check; className: string }> = {
+  success: { icon: Check, className: "border-lichen-green/30 bg-lichen-green/[0.07] text-lichen-green" },
+  error: { icon: TriangleAlert, className: "border-alarm-red/30 bg-alarm-red/[0.06] text-alarm-red" },
+  neutral: { icon: CircleSlash, className: "border-line-strong bg-black/[0.03] text-bark-grey" },
+};
+
+/** Done / Paused / Cancelled / Failed chip that closes out a run section.
+ *  Cancellations arrive with tone `error` from the stream but read as neutral,
+ *  not a fault; "Paused" (out of steps) is neutral too — nothing broke, the work
+ *  simply is not finished. */
+function TerminalChip({ event }: { event: EventItem }) {
+  const cancelled = /cancel/i.test(event.label);
+  const paused = /paused/i.test(event.label);
+  const spec = TERMINAL[cancelled || paused ? "neutral" : event.tone] ?? TERMINAL.neutral;
+  const Icon = paused ? PauseCircle : cancelled ? CircleSlash : spec.icon;
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11.5px] font-medium ${spec.className}`}>
+        <Icon className="size-3" /> {event.label}
+      </span>
+      {event.detail && <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-pebble" title={event.detail}>{event.detail}</span>}
+    </div>
+  );
+}
+
+/** Non-terminal notices (e.g. "Waiting — approval required"). */
+function EventNote({ event }: { event: EventItem }) {
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-line bg-warm-bone px-2.5 py-1.5 text-[12px]">
+      <Clock className="size-3 shrink-0 text-pebble" />
+      <span className="font-medium text-charcoal">{event.label}</span>
+      {event.detail && <span className="min-w-0 flex-1 truncate text-[11.5px] text-bark-grey">{event.detail}</span>}
+    </div>
+  );
+}
+
+const TERMINAL_LABELS = new Set(["Done", "Failed", "Cancelled", "Ended", "Paused"]);
+
+/* ── transcript ──────────────────────────────────────────────── */
+
+/** Map a persisted run status onto the chip we'd have shown had the stream
+ *  delivered a terminal event. Used when a run finished before the client
+ *  connected, or when the stream closed without a final frame. */
+function chipForStatus(status: string): EventItem {
+  // The ledger's vocabulary (HeartbeatStatus) is succeeded/failed/cancelled;
+  // "done"/"error" are the stream's names for the same three. Accept both, and
+  // never return null: a settled section with no chip renders as an empty
+  // bubble, which is precisely the "is it still running?" ambiguity being fixed.
+  if (status === "succeeded" || status === "done") return { kind: "event", tone: "success", label: "Done" };
+  if (status === "in_review") return { kind: "event", tone: "neutral", label: "Paused", detail: "Needs your review before it continues" };
+  if (status === "cancelled") return { kind: "event", tone: "error", label: "Cancelled" };
+  if (status === "failed" || status === "error") return { kind: "event", tone: "error", label: "Failed" };
+  // queued/running/waiting reaching here means the run ended without ever
+  // reporting how — stale, not successful.
+  return { kind: "event", tone: "neutral", label: "Ended", detail: `No result recorded (${status || "unknown"})` };
+}
+
+export function Transcript({
+  log, phase, status, startedAt, onStop, stopping,
+}: {
+  log: LogItem[];
+  phase: RunPhase;
+  /** Persisted run status, used to settle the section when the stream is silent. */
+  status?: string;
+  /** Epoch ms the run began — drives the elapsed clock. */
+  startedAt?: number | null;
+  onStop?: () => void;
+  stopping?: boolean;
+}) {
+  const blocks = useMemo(() => toBlocks(log), [log]);
+
+  if (log.length === 0 && phase === "queued") {
+    return (
+      <p className="flex items-center gap-2 text-[13px] text-pebble">
+        <Clock className="size-3.5" /> Queued — Hutao will start shortly…
+      </p>
+    );
+  }
+
+  // A run can settle without the stream ever emitting a terminal frame (cancelled
+  // mid-flight, replayed after the fact). Never leave a section open-ended.
+  const streamedTerminal = blocks.some((b) => b.kind === "event" && TERMINAL_LABELS.has(b.label));
+  const fallbackChip = phase === "settled" && !streamedTerminal ? chipForStatus(status ?? "") : null;
+  // A settled run that produced no transcript at all still owes the user a
+  // sentence: an avatar next to an empty bubble reads as "stuck", not "finished".
+  const empty = blocks.length === 0;
+
+  return (
+    <div className="space-y-3">
+      {blocks.map((block, index) => {
+        if (block.kind === "text") return <Markdown key={index}>{block.text}</Markdown>;
+        if (block.kind === "tools") return <ToolBlock key={index} items={block.items} />;
+        if (block.kind === "tasks") return <TaskBlock key={index} items={block.items} />;
+        if (block.kind === "summary") return <SummaryBlock key={index} text={block.text} />;
+        return TERMINAL_LABELS.has(block.label)
+          ? <TerminalChip key={index} event={block} />
+          : <EventNote key={index} event={block} />;
+      })}
+
+      {phase === "running" && (
+        <ActivityIndicator log={log} startedAt={startedAt ?? null} onStop={onStop} stopping={stopping} />
+      )}
+      {fallbackChip && <TerminalChip event={fallbackChip} />}
+      {empty && phase === "settled" && (
+        <p className="text-[12.5px] text-pebble">This run ended without producing a transcript.</p>
+      )}
     </div>
   );
 }

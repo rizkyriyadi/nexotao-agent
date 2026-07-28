@@ -40,7 +40,17 @@ export class DurableHeartbeatRuntime {
   async initialize() {
     if (this.initialized) return;
     await this.repositories.recoverOrphanedHeartbeats();
+    // Requeued work keeps its checkout; anything still `in_progress` behind a
+    // run that will never resume is released here, so a restart never leaves a
+    // task falsely reporting as running.
+    await this.repositories.recoverStaleIssues();
+    // Set before draining: performDrain awaits initialize(), and this flag is
+    // what stops that from recursing.
     this.initialized = true;
+    // Work queued before the process went down has no one to wake it — drain
+    // ran only on enqueue, so a task queued across a restart sat there looking
+    // queued until some unrelated task happened to arrive.
+    void this.drain();
   }
 
   async enqueue(trigger: HeartbeatTrigger) {
@@ -53,6 +63,9 @@ export class DurableHeartbeatRuntime {
       idempotencyKey: triggerIdempotencyKey(trigger),
       availableAt: trigger.availableAt,
     });
+    // Drains even when the enqueue was an idempotent no-op: the wakeup may
+    // already exist yet still be sitting unclaimed, and returning early here is
+    // what left a re-tick unable to rescue it.
     void this.drain();
     return queued;
   }
@@ -95,18 +108,24 @@ export class DurableHeartbeatRuntime {
   }
 
 
+  /** Idempotent: cancelling a run that already finished re-asserts the issue
+   * release and reports success rather than throwing or 404-ing. */
   async cancel(runId: string, reason = "Cancelled by user") {
     const active = this.active.get(runId);
     active?.controller.abort(new Error(reason));
     const heartbeat = this.repositories.getHeartbeat(runId);
-    if (!heartbeat || ["succeeded", "failed", "cancelled"].includes(heartbeat.status)) return false;
-    try {
-      await this.repositories.completeHeartbeat(runId, "cancelled", { reason }, { error: reason });
-      return true;
-    } catch (error) {
-      if (error instanceof RunEventDomainError && error.code === "terminal") return false;
-      throw error;
+    if (!heartbeat) return false;
+    if (!["succeeded", "failed", "cancelled"].includes(heartbeat.status)) {
+      try {
+        await this.repositories.completeHeartbeat(runId, "cancelled", { reason }, { error: reason });
+      } catch (error) {
+        if (!(error instanceof RunEventDomainError && error.code === "terminal")) throw error;
+      }
     }
+    // Releasing the issue is the authoritative half of a cancel and must not
+    // depend on this process still holding the live Run in memory.
+    await this.repositories.cancelRunIssue(runId);
+    return true;
   }
 
   async retry(runId: string, availableAt: number, error?: string) {

@@ -1,8 +1,42 @@
 "use client";
 
-import { memo } from "react";
+import { memo, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { CopyButton } from "../task/tool-atoms";
+
+/** Flatten a code block's children back to the raw source, so the copy button
+ *  hands over exactly what the model wrote rather than rendered markup. */
+function textOf(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  if (node && typeof node === "object" && "props" in node) {
+    return textOf((node as { props?: { children?: ReactNode } }).props?.children);
+  }
+  return "";
+}
+
+/** Fenced code block with chrome: the language on the left, a copy button that
+ *  appears on hover, and a scrollable body. */
+function CodeBlock({ children }: { children: ReactNode }) {
+  const source = textOf(children);
+  // react-markdown nests the <code> element (carrying `language-x`) inside <pre>.
+  const inner = Array.isArray(children) ? children[0] : children;
+  const className = (inner && typeof inner === "object" && "props" in inner
+    ? (inner as { props?: { className?: string } }).props?.className
+    : "") ?? "";
+  const language = /language-([\w-]+)/.exec(className)?.[1];
+
+  return (
+    <div className="group relative my-3">
+      <div className="flex items-center justify-between rounded-t-xl border border-b-0 border-line bg-code-surface px-3 py-1">
+        <span className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-pebble">{language ?? "code"}</span>
+        <CopyButton text={source} label="Copy code" className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100" />
+      </div>
+      <pre className="scroll-thin overflow-x-auto rounded-b-xl border border-line bg-[#faf9f7] p-3.5 text-[13px]">{children}</pre>
+    </div>
+  );
+}
 
 /** Renders agent output as pretty markdown (bold, headings, lists, code, tables)
  * styled to the app's design tokens. Safe for streaming/partial markdown. */
@@ -35,7 +69,7 @@ function MarkdownImpl({ children, className = "" }: { children: string; classNam
             }
             return <code className={`${className ?? ""} font-mono text-[13px] leading-[1.6]`}>{children}</code>;
           },
-          pre: ({ children }) => <pre className="scroll-thin my-3 overflow-x-auto rounded-xl border border-line bg-[#faf9f7] p-3.5 text-[13px]">{children}</pre>,
+          pre: ({ children }) => <CodeBlock>{children}</CodeBlock>,
           table: ({ children }) => <div className="scroll-thin my-3 overflow-x-auto"><table className="w-full border-collapse text-[13.5px]">{children}</table></div>,
           thead: ({ children }) => <thead className="border-b border-line-strong text-left">{children}</thead>,
           th: ({ children }) => <th className="px-3 py-1.5 font-semibold text-charcoal">{children}</th>,

@@ -33,8 +33,11 @@ export type BlockerAttentionReason =
 export const MAX_BLOCKER_DEPTH = 8;
 export const MAX_BLOCKER_NODES = 2000;
 
-/** Agent statuses that can never pick work up again without human intervention. */
-const UNINVOKABLE_AGENT_STATUS = new Set(["paused", "error", "terminated"]);
+/** Agent statuses that can never pick work up again without human intervention.
+ *  `error` is absent on purpose — it records that the *last* task failed, and the
+ *  queue hands the agent its next one regardless, so calling that work stalled
+ *  would send the user chasing something already moving. */
+const UNINVOKABLE_AGENT_STATUS = new Set(["paused", "terminated"]);
 
 export type AttentionIssue = {
   id: string;

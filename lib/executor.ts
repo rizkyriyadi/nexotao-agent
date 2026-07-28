@@ -4,16 +4,19 @@
 // conversation continues.
 import { promises as fs } from "fs";
 import { getConfig } from "./config";
-import { getProject, addAgentRun } from "./store";
+import { getProject, addAgentRun, listProjects } from "./store";
 import { appendRunToWorkGraph } from "./graphify";
 import { expandHome } from "./paths";
 import { DEFAULT_MODEL } from "./nexotao";
 import { createRun, type RunEvent } from "./run-manager";
-import { runIssueAgent } from "./agent";
+import { runIssueAgent, type DelegateFn } from "./agent";
 import * as I from "./issues";
 import { getDatabase } from "./db/database";
 import { ControlPlaneRepositories, type ClaimedHeartbeat, type WakeupReason } from "./db/repositories";
 import { RunEventDomainError } from "./run-events";
+import {
+  RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, TASK_DELEGATED_EVENT_TYPE, settledIssueStatus,
+} from "./run-transcript";
 import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runtime";
 import { GitWorkspaceManager } from "./git-workspace";
 import { isBlockerResolved } from "./blocker-attention";
@@ -84,6 +87,15 @@ export async function tick(projectId: string) {
   }
 }
 
+/** Pick up work that was queued when the process last went down. Constructing
+ *  the runtime recovers orphaned heartbeats and drains the queue; ticking every
+ *  project re-enqueues anything that is ready but has no wakeup at all. */
+export async function resumeQueuedWork() {
+  const runtime = await heartbeatRuntime();
+  await runtime.initialize();
+  for (const project of await listProjects()) await tick(project.id).catch(() => {});
+}
+
 export async function triggerHeartbeat(input: { agentId: string; issueId?: string | null; reason: WakeupReason; eventId: string; availableAt?: number }) {
   return (await heartbeatRuntime()).enqueue(input);
 }
@@ -100,6 +112,10 @@ export async function retryHeartbeat(runId: string) {
 function durableEvent(event: RunEvent): [string, unknown] | null {
   switch (event.type) {
     case "text": return ["reasoning_summary", { text: event.text, thread: event.thread }];
+    case "summary": return [RUN_SUMMARY_EVENT_TYPE, { text: event.text, thread: event.thread }];
+    case "task_delegated": return [TASK_DELEGATED_EVENT_TYPE, {
+      id: event.id, ref: event.ref, title: event.title, assignee: event.assignee, thread: event.thread,
+    }];
     case "tool_use": return ["tool_call", { id: event.id, name: event.name, input: event.input, thread: event.thread }];
     case "approval": return ["approval_wait", { id: event.id, name: event.name, input: event.input, thread: event.thread }];
     case "tool_result": return ["tool_result", {
@@ -172,7 +188,37 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
       for (const c of followUps) messages.push({ role: "user", content: c.body });
     }
 
-    let result: { text: string } = { text: "" };
+    // Teammates the lead may hand work to. A single-agent project has none, so
+    // the delegate tool is never offered and the lead does everything itself.
+    const project = await getProject(projectId);
+    const roster = project?.mode === "multi"
+      ? (await I.listAgents(projectId)).filter((a) => a.id !== agent.id && a.role === "worker")
+      : [];
+    const delegate: DelegateFn = async ({ title, detail, assignee }) => {
+      if (!title) return { ok: false, error: "a sub-task needs a title" };
+      const named = assignee
+        ? roster.find((a) => a.name.toLowerCase() === assignee.toLowerCase())
+        : undefined;
+      if (assignee && !named) {
+        return { ok: false, error: `no teammate named "${assignee}" — available: ${roster.map((a) => a.name).join(", ")}` };
+      }
+      // Unassigned work would sit in the backlog forever; fall back to whoever
+      // is first on the roster so every delegated task actually gets picked up.
+      const target = named ?? roster[0];
+      if (!target) return { ok: false, error: "this project has no teammates to delegate to" };
+      const child = await I.createIssue({
+        projectId, parentId: issue.id, title, detail: detail || title,
+        assigneeAgentId: target.id, createdByAgentId: agent.id,
+        // "todo", not "backlog": the executor's tick only ever starts todo or
+        // blocked issues, so a backlog sub-task would never run.
+        status: "todo", stage: "execute", runMode: "agent",
+        actor: { type: "agent", id: agent.id, runId },
+      });
+      return { ok: true, task: { id: child.id, ref: child.ref, title: child.title, assignee: target.name } };
+    };
+
+    let result: { text: string; summary: string; completion: import("./run-transcript").RunCompletion; delegated: { id: string; ref: string; title: string; assignee: string }[] } =
+      { text: "", summary: "", completion: "complete", delegated: [] };
     try {
       // Provision the isolated worktree inside the run's try/catch so a
       // preparation failure (e.g. `git worktree add`) is reported as a failed
@@ -185,6 +231,7 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
       }
       result = await runIssueAgent({
         run, apiKey, model, root: executionRoot, mode, agentName: agent.name, messages, beforeMutation,
+        teammates: roster.map((a) => a.name), delegate,
       });
       if (mode === "lead-execute") {
         // Persist the work to the isolated worktree. The commit is an internal
@@ -197,11 +244,16 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
         await repositories.putDocument({ issueId, key: "plan", body: result.text, createdByType: "agent", createdById: agent.id }).catch(() => {});
       }
       await eventWrites;
-      await heartbeat.emit("output", { text: result.text, thread: "lead" });
+      // Deliberately NOT an `output`/text event: every token above was already
+      // persisted as a `reasoning_summary` delta, so a transcript that appended
+      // this too would render the whole answer twice on replay.
+      await heartbeat.emit(RUN_RESULT_EVENT_TYPE, {
+        text: result.text, summary: result.summary, completion: result.completion, thread: "lead",
+      });
       run.push({ type: "done" });
     } catch (e: any) {
       run.push({ type: "error", error: String(e?.message ?? e) });
-      result = { text: `Failed: ${String(e?.message ?? e)}` };
+      result = { text: `Failed: ${String(e?.message ?? e)}`, summary: "", completion: "complete", delegated: [] };
       if (run.cancelled) await I.updateIssue(issueId, { status: "cancelled", summary: "Cancelled by user" }, { type: "agent", id: agent.id, runId });
       else await onIssueFinished(projectId, issue, agent, result, false, false);
       throw e;
@@ -220,15 +272,22 @@ async function onIssueFinished(
   projectId: string,
   issue: I.Issue,
   agent: I.Agent,
-  result: { text: string },
+  result: { text: string; summary?: string; completion?: import("./run-transcript").RunCompletion },
   ok: boolean,
   requeue: boolean,
 ) {
-  const status = ok ? (requeue ? "todo" : "done") : "in_review";
-  await I.updateIssue(issue.id, { status, summary: result.text }, { type: "agent", id: agent.id, runId: issue.runId });
+  // An agent that ran out of steps was still mid-task. Calling that "done" is
+  // what made finished-looking tasks trail off mid-sentence with nothing to
+  // show for them; it goes to review instead, where the user can continue it.
+  const truncated = result.completion === "truncated";
+  const status = settledIssueStatus({ ok, truncated, requeue });
+  // The closing report is what the user reads on the board, so it is preferred
+  // over the raw stream of mid-task thinking that used to land here.
+  const summary = result.summary?.trim() || result.text;
+  await I.updateIssue(issue.id, { status, summary }, { type: "agent", id: agent.id, runId: issue.runId });
   // Record the run, then fold it into the work-history graph incrementally. Both
   // are fire-and-forget so run completion isn't slowed or blocked by indexing.
-  addAgentRun(projectId, { agent: agent.name, task: issue.title, summary: result.text.slice(0, 400), ok })
+  addAgentRun(projectId, { agent: agent.name, task: issue.title, summary: summary.slice(0, 400), ok: ok && !truncated })
     .then((run) => appendRunToWorkGraph(projectId, { run, issue: { identifier: issue.ref, title: issue.title, status } }))
     .catch(() => {});
   tick(projectId);

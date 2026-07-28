@@ -55,6 +55,63 @@ test("wakeup idempotency, per-agent concurrency, and restart recovery are durabl
   } finally { await rm(f.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 }); }
 });
 
+/* One task failing used to leave the agent parked in `error`, and the claim loop
+ * skipped agents in `error` — so every *later* task for that agent sat queued
+ * forever with nothing running and nothing saying why. */
+test("a failed task does not wedge the agent's next task", async () => {
+  const f = await fixture();
+  try {
+    const runtime = new DurableHeartbeatRuntime(f.repositories, async (job) => {
+      if (job.wakeup.issueId === "i1") throw new Error("git exited with 1");
+    });
+    const failing = await runtime.enqueue({ agentId: "a", issueId: "i1", reason: "assignment", eventId: "one" });
+    await runtime.runUntilIdle();
+    assert.equal(f.repositories.getHeartbeat(failing.heartbeat.id)?.status, "failed");
+    // The failure is still recorded — the point is that it stops being a gate.
+    assert.equal(f.repositories.agents.get("a")?.status, "error");
+
+    const next = await runtime.enqueue({ agentId: "a", issueId: "i2", reason: "assignment", eventId: "two" });
+    await runtime.runUntilIdle();
+    assert.equal(f.repositories.getHeartbeat(next.heartbeat.id)?.status, "succeeded");
+    assert.equal(f.repositories.agents.get("a")?.errorReason, null, "the stale reason does not outlive the run that caused it");
+    await runtime.shutdown();
+    await f.database.close();
+  } finally { await rm(f.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 }); }
+});
+
+/* Work queued when the process went down had nothing to wake it: drain ran only
+ * on enqueue, so the task sat at "queued" until unrelated traffic arrived. */
+test("a restart picks up work that was already queued", async () => {
+  const f = await fixture();
+  try {
+    const stranded = await f.repositories.enqueueHeartbeat({ agentId: "a", issueId: "i1", reason: "assignment", idempotencyKey: "assignment:i1:1" });
+    assert.equal(f.repositories.listWakeups("queued").length, 1, "the wakeup outlives the process that made it");
+
+    // A fresh runtime over the same database is what a restart looks like. Only
+    // initialize() is called — deliberately not runUntilIdle(), which drains on
+    // its own and would pass with or without the boot drain. In production
+    // nothing calls it either: booting has to be enough on its own.
+    const restarted = new DurableHeartbeatRuntime(f.repositories, async () => {});
+    await restarted.initialize();
+    await waitFor(() => f.repositories.getHeartbeat(stranded.heartbeat.id)?.status, "succeeded");
+    assert.equal(f.repositories.listWakeups("queued").length, 0, "nothing is left stranded");
+    await restarted.shutdown();
+    await f.database.close();
+  } finally { await rm(f.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 }); }
+});
+
+/* A paused or terminated agent is a human decision and must survive new work. */
+test("pausing an agent still holds its queue", async () => {
+  const f = await fixture();
+  try {
+    await new AgentLifecycleService(f.database).action("a", "pause");
+    await f.repositories.enqueueHeartbeat({ agentId: "a", issueId: "i1", reason: "assignment", idempotencyKey: "assignment:i1:1" });
+    assert.equal(await f.repositories.claimNextHeartbeat(), null);
+    assert.equal(f.repositories.agents.get("a")?.status, "paused");
+    await f.database.close();
+  } finally { await rm(f.dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 }); }
+});
+
 test("heartbeat runtime persists waiting, success, failure, and cancellation", async () => {
   const f = await fixture();
   try {

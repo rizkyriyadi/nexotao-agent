@@ -246,6 +246,95 @@ async function main() {
     });
     check("cancelled run is terminal in the ledger", cancelledState);
 
+    /* 7b. Cancel releases the issue — the reported bug.
+
+       Closing the run row was never the complaint: the task kept rendering as
+       running because its issue stayed `in_progress`, still checked out to a run
+       that would never resume. Assert the canonical state first, then that the
+       task page agrees, since "is it really running or just the UI?" was exactly
+       what the report could not answer. */
+    page = await visit(page, `http://${HOST}:${port}/board/${ids.stuck}?session_token=${token}`);
+    await page.waitForSelector('textarea[aria-label="Prompt the lead agent"]');
+    const beforeCancel = (await pageJson(page, `/api/issues/${ids.stuck}`)).body?.issue;
+    // The API serialises `checkoutRunId` as `runId`.
+    check("a checked-out run holds its issue in progress", beforeCancel?.status === "in_progress" && beforeCancel?.runId === ids.stuckRunId, `${beforeCancel?.status}, runId ${beforeCancel?.runId}`);
+    await page.screenshot({ path: join(artifacts, "06-running-before-cancel.png") });
+
+    const stuckResp = await pageJson(page, "/api/run/cancel", { method: "POST", body: JSON.stringify({ runId: ids.stuckRunId }) });
+    check("cancelling a checked-out run reports cancelled", stuckResp.body?.cancelled === true, `status ${stuckResp.status}`);
+    const released = await poll(async () => {
+      const issue = (await pageJson(page, `/api/issues/${ids.stuck}`)).body?.issue;
+      return issue?.status === "cancelled" && !issue?.runId;
+    });
+    check("cancel releases the issue, not just the run row", released);
+    // Cancelling twice must stay successful: the UI retries, and a 404 there is
+    // what made a cancel look like it had not taken.
+    const twice = await pageJson(page, "/api/run/cancel", { method: "POST", body: JSON.stringify({ runId: ids.stuckRunId }) });
+    check("cancelling twice is idempotent", twice.body?.cancelled === true, `status ${twice.status}`);
+
+    // The surface must agree with the ledger: no spinner, no Cancel affordance.
+    page = await visit(page, `http://${HOST}:${port}/board/${ids.stuck}?session_token=${token}`);
+    await page.waitForSelector('textarea[aria-label="Prompt the lead agent"]');
+    await settle(1200);
+    const settledUi = await page.evaluate(() => ({
+      text: document.body.innerText,
+      spinners: [...document.querySelectorAll(".animate-spin")].map((el) => {
+        const owner = el.closest("p, span, div, button");
+        return (owner?.textContent?.trim().slice(0, 60) || "(no text)") + " @ " + (owner?.className ?? "").slice(0, 60);
+      }),
+      cancelButtons: [...document.querySelectorAll("button")].filter((b) => /^(cancel|stop)/i.test(b.textContent?.trim() ?? "")).length,
+    }));
+    check("cancelled task no longer renders as running", settledUi.spinners.length === 0 && settledUi.cancelButtons === 0, `spinners [${settledUi.spinners.join(" | ")}], cancel buttons ${settledUi.cancelButtons}`);
+    check("cancelled task reads as cancelled", /cancel/i.test(settledUi.text));
+    // Every settled run owes an explicit outcome. A section that renders as an
+    // empty bubble is the same "is it done or stuck?" ambiguity in another guise.
+    check("every settled run states an outcome", /Done|Failed|Cancelled|Ended/.test(settledUi.text), settledUi.text.replace(/\s+/g, " ").slice(0, 120));
+    await page.screenshot({ path: join(artifacts, "07-cancelled-settled.png") });
+
+    /* 7c. The transcript itself, replayed from the durable log.
+
+       The redesign's whole claim is that a finished run reads as prose plus
+       legible tool calls rather than a JSON dump, so assert the shapes that
+       claim rests on — and capture it, since "does it look right?" is the one
+       question only a screenshot answers. */
+    page = await visit(page, `http://${HOST}:${port}/board/${ids.rich}?session_token=${token}`);
+    await page.waitForSelector('textarea[aria-label="Prompt the lead agent"]');
+    await settle(1800);
+    const transcript = await page.evaluate(() => ({
+      text: document.body.innerText,
+      // A raw payload dump — the thing being removed — would show up as braces.
+      rawJson: /"old_str"|"new_str"|\{"path":/.test(document.body.innerText),
+      groups: [...document.querySelectorAll("button")].filter((b) => /^×\d+$/.test(b.querySelector("span:nth-child(4)")?.textContent?.trim() ?? "")).length,
+    }));
+    check("transcript renders prose, not a payload dump", !transcript.rawJson);
+    check("tool calls read as labelled sentences", ["Read", "Edit", "List", "Grep"].every((l) => transcript.text.includes(l)),
+      ["Read", "Edit", "List", "Grep"].filter((l) => !transcript.text.includes(l)).join(",") || "all present");
+    // bash deliberately has no "Run" label: the command lives in a shell pill so
+    // it reads as a terminal line rather than a label/value pair.
+    check("shell commands render as a shell line", transcript.text.includes("$ npm test -- transcript"));
+    check("repeated calls to one tool fold into a group", transcript.text.includes("×2"));
+    check("a refused tool reads as denied, not as a crash", transcript.text.includes("Denied"));
+    check("a failed tool is distinguishable from a denied one", transcript.text.includes("Error"));
+    check("the finished run states its outcome", /\bDone\b/.test(transcript.text));
+    // A run the ledger has not resolved yet must read as queued. Announcing that
+    // an unstarted run has "Ended" is the mirror image of the original bug.
+    check("a run with no outcome yet reads as queued, not ended", transcript.text.includes("Queued") && !transcript.text.includes("Ended"),
+      transcript.text.includes("Ended") ? "an unresolved run claimed it ended" : "ok");
+    await page.screenshot({ path: join(artifacts, "08-transcript.png"), fullPage: true });
+
+    // Expanding a tool call reveals its body — the diff/terminal/list views.
+    const expanded = await page.evaluate(() => {
+      const row = [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("transcript.tsx") && b.textContent?.includes("Edit"));
+      if (!row) return false;
+      row.click();
+      return true;
+    });
+    check("a tool call can be expanded", expanded);
+    await settle(600);
+    const diff = await page.evaluate(() => document.body.innerText);
+    check("expanding an edit shows a diff, not JSON", /\+\d+/.test(diff) && /−\d+/.test(diff));
+    await page.screenshot({ path: join(artifacts, "09-transcript-expanded.png"), fullPage: true });
+
     // 8. Retry / re-invoke — moving an assigned issue to todo enqueues a fresh run.
     const retryResp = await pageJson(page, "/api/issues", { method: "PATCH", body: JSON.stringify({ id: ids.retry, status: "todo" }) });
     check("re-invoke request accepted", retryResp.ok, `status ${retryResp.status}`);

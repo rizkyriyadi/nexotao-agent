@@ -22,6 +22,10 @@ export type ClaimedHeartbeat = {
   wakeup: typeof wakeupRequests.$inferSelect;
   heartbeat: typeof heartbeatRuns.$inferSelect;
 };
+/** Statuses a human chose and only a human clears. Notably *not* `error`: that
+ *  one is set by whichever task happened to fail last, so treating it as a gate
+ *  would let a single failure strand the agent's entire queue. */
+export const HUMAN_GATED_AGENT_STATUS = ["paused", "terminated"];
 
 export interface AgentRepository {
   list(projectId: string): AgentRow[];
@@ -66,6 +70,38 @@ export class ControlPlaneRepositories {
       if (error instanceof IssueDomainError && ["conflict", "forbidden", "not_found"].includes(error.code)) return null;
       throw error;
     }
+  }
+  /** Cancelling a run must release its issue even when the in-memory `Run` is
+   * gone — after a restart, after the run-manager GC, or when the cancel is
+   * served by a different worker than the one executing. Without this the issue
+   * stays `in_progress` forever and every surface keeps rendering a spinner. */
+  async cancelRunIssue(runId: string) {
+    const issueId = this.getHeartbeat(runId)?.issueId;
+    if (!issueId) return null;
+    const issue = this.issues.get(issueId);
+    if (!issue) return null;
+    if (issue.status === "cancelled") return issue; // already released — cancel twice is a no-op
+    // Only the checkout this run holds is released. A run cancelled before it
+    // checked out owns nothing (the task stays runnable, which is what pausing
+    // an agent means), and a newer run's checkout belongs to the work that
+    // replaced this one.
+    if (issue.status !== "in_progress" || issue.checkoutRunId !== runId) return null;
+    try {
+      return await new IssueLifecycleService(this.database).transition(issueId, "cancelled", { type: "system", runId });
+    } catch (error) {
+      if (error instanceof IssueDomainError && ["invalid_transition", "conflict", "not_found"].includes(error.code)) return null;
+      throw error;
+    }
+  }
+  /** Boot-time counterpart to `recoverOrphanedHeartbeats`: requeueing the wakeup
+   * is not enough, because an issue whose run already reached a terminal state
+   * stays checked out to it and renders as running forever. A requeued orphan
+   * keeps its checkout — `checkout` is idempotent for its own run id — so only
+   * issues whose run is gone for good are released. */
+  recoverStaleIssues(staleAfterMs = 0, now = Date.now()) {
+    const live = this.database.read((db) => db.select({ id: heartbeatRuns.id }).from(heartbeatRuns)
+      .where(inArray(heartbeatRuns.status, ["queued", "running", "waiting"])).all());
+    return new IssueLifecycleService(this.database).recover({ staleAfterMs, now, activeRunIds: live.map((row) => row.id) });
   }
   addComment(input: { issueId: string; authorType: string; authorId?: string | null; runId?: string | null; body: string }) {
     const row = { id: randomUUID(), createdAt: Date.now(), authorId: null, runId: null, ...input };
@@ -114,7 +150,12 @@ export class ControlPlaneRepositories {
       db.insert(wakeupRequests).values(wakeup).run();
       db.insert(heartbeatRuns).values(heartbeat).run();
       const agent = db.select().from(agents).where(eq(agents.id, input.agentId)).get();
-      if (agent && !["paused", "error", "terminated"].includes(agent.status)) db.update(agents).set({ status: "queued", updatedAt: now }).where(eq(agents.id, input.agentId)).run();
+      // `paused` and `terminated` are human decisions and must survive new work.
+      // `error` is not: it is the residue of one task that failed. Latching it
+      // would strand every *other* task assigned to this agent, silently.
+      if (agent && !HUMAN_GATED_AGENT_STATUS.includes(agent.status)) {
+        db.update(agents).set({ status: "queued", errorReason: null, updatedAt: now }).where(eq(agents.id, input.agentId)).run();
+      }
       return { wakeup, heartbeat };
     });
   }
@@ -188,7 +229,10 @@ export class ControlPlaneRepositories {
         .orderBy(asc(wakeupRequests.availableAt), asc(wakeupRequests.createdAt)).all().filter((row) => row.availableAt <= now);
       for (const candidate of candidates) {
         const agent = db.select().from(agents).where(eq(agents.id, candidate.agentId)).get();
-        if (!agent || ["paused", "error", "terminated"].includes(agent.status)) continue;
+        // Only a human-gated status blocks the claim. An agent left in `error` by
+        // a previous failure still picks up the next task — otherwise one bad run
+        // wedges the queue forever and the work just sits there looking queued.
+        if (!agent || HUMAN_GATED_AGENT_STATUS.includes(agent.status)) continue;
         const concurrency = Math.max(1, agent.concurrency);
         const active = db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.agentId, candidate.agentId), inArray(heartbeatRuns.status, ["running", "waiting"]))).all().length;
         if (active >= concurrency) continue;

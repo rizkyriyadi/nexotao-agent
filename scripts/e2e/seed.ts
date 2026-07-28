@@ -32,6 +32,13 @@ async function main() {
   // A non-terminal heartbeat run to cancel through /api/run/cancel.
   const cancelRun = await repositories.createHeartbeat({ agentId: worker.id, issueId: root.id, source: "invoke", status: "waiting", startedAt: now, updatedAt: now });
 
+  // The shape of the reported "cancelled but still shows as running" bug: a run
+  // that holds its issue's checkout, with nothing in memory to abort. Cancelling
+  // it must release the issue, not just close the run row.
+  const stuck = await createIssue({ projectId: project.id, title: "Cancel mid-flight", assigneeAgentId: worker.id, status: "todo", actor: { type: "user" } });
+  const stuckRun = await repositories.createHeartbeat({ agentId: worker.id, issueId: stuck.id, source: "invoke", status: "running", startedAt: now, updatedAt: now });
+  await repositories.checkoutIssue(stuck.id, worker.id, stuckRun.id);
+
   // A pending, non-execution approval card on the root issue for the approve flow.
   const approvalId = randomUUID();
   await database.write((db) => db.insert(approvals).values({
@@ -39,10 +46,46 @@ async function main() {
     payload: { summary: "Approve the staged rollout plan", phase: "beta" }, status: "pending", createdAt: now,
   }).run());
 
+  /* A finished run carrying one of every transcript shape — prose, a grouped
+     repeat of one tool, a diff, a shell command, a failure and a denial. This is
+     what the transcript redesign is actually judged on, and without it the E2E
+     screenshots only ever show empty runs. */
+  const rich = await createIssue({ projectId: project.id, title: "Tidy the run transcript", assigneeAgentId: worker.id, status: "todo", actor: { type: "user" } });
+  const richRun = await repositories.createHeartbeat({ agentId: worker.id, issueId: rich.id, source: "invoke", status: "running", startedAt: now, updatedAt: now });
+  const say = (text: string) => repositories.appendHeartbeatEvent(richRun.id, "reasoning_summary", { text, thread: "lead" });
+  const call = (id: string, name: string, input: unknown) => repositories.appendHeartbeatEvent(richRun.id, "tool_call", { id, name, input });
+  const result = (id: string, output: string, ok = true) => repositories.appendHeartbeatEvent(richRun.id, "tool_result", { id, output, ok });
+
+  await say("I'll look at how the transcript renders today, then tighten it up.\n\n");
+  await call("t1", "list_dir", { path: "components/task" });
+  await result("t1", ["ActivityIndicator.tsx", "ToolCall.tsx", "TaskView.tsx", "transcript.tsx", "use-run-stream.ts"].join("\n"));
+  // Two reads in a row — these collapse behind an ×2 group.
+  await call("t2", "read_file", { path: "components/task/transcript.tsx" });
+  await result("t2", "export function Transcript({ log, phase }) {\n  const blocks = toBlocks(log);\n}");
+  await call("t3", "read_file", { path: "components/task/use-run-stream.ts" });
+  await result("t3", "export function useRunStream(runId) { /* … */ }");
+  await say("The tool rows dump raw JSON, so a long run reads as noise. Switching them to one-line summaries.\n\n");
+  await call("t4", "edit_file", {
+    path: "components/task/transcript.tsx",
+    old_str: "  const waiting = status === \"queued\" ? \"Queued\" : \"Working…\";\n  return <pre>{JSON.stringify(log)}</pre>;",
+    new_str: "  const blocks = toBlocks(log);\n  return blocks.map(renderBlock);",
+  });
+  await result("t4", "Edited components/task/transcript.tsx");
+  await call("t5", "bash", { command: "npm test -- transcript" });
+  await result("t5", "PASS tests/transcript.test.ts\n\nTests: 12 passed, 12 total");
+  await call("t6", "grep", { pattern: "JSON.stringify\\(log\\)" });
+  await result("t6", "no matches found", false);
+  await call("t7", "bash", { command: "rm -rf node_modules" });
+  await result("t7", "The user denied this action.", false);
+  await say("Done — tool calls now read as sentences, and repeated calls fold into a single group.");
+  await repositories.completeHeartbeat(richRun.id, "succeeded", { status: "succeeded" });
+
   process.stdout.write(JSON.stringify({
     projectId: project.id, lead: lead.id, worker: worker.id,
     root: root.id, blocker: blocker.id, review: review.id, retry: retry.id,
     cancelRunId: cancelRun.id, approvalId,
+    stuck: stuck.id, stuckRunId: stuckRun.id,
+    rich: rich.id, richRunId: richRun.id,
   }) + "\n");
 }
 

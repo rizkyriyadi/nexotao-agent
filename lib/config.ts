@@ -52,10 +52,18 @@ export async function saveConfig(patch: Partial<Config>): Promise<Config> {
   return next;
 }
 
+/** Last four characters of a key, enough to tell two keys apart without
+ *  disclosing one. Short or absent keys yield null rather than leaking a
+ *  meaningful fraction of themselves. */
+function keyHint(key?: string): string | null {
+  return key && key.length >= 12 ? key.slice(-4) : null;
+}
+
 export function publicView(c: Config) {
   return {
     onboarded: !!c.onboarded,
     hasKey: !!c.apiKey,
+    keyHint: keyHint(c.apiKey),
     model: c.model ?? null,
     activeProjectId: c.activeProjectId ?? null,
     defaultMode: c.defaultMode ?? "agent",
