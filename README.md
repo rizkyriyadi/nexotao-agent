@@ -35,6 +35,24 @@ That's it. The UI opens at `http://localhost:4319`. On first launch you'll be wa
 
 Everything is stored locally in `~/.nexotao/nexotao.sqlite`. Nothing leaves your machine except the model calls to the Nexotao API.
 
+### Removing everything
+
+```bash
+nexotao uninstall            # show the plan, ask you to type UNINSTALL, then remove it all
+nexotao uninstall --dry-run  # print the plan and stop, changing nothing
+```
+
+It shows you exactly what it will remove and waits for you to type `UNINSTALL`. Then, in this order:
+
+1. **Releases the Git worktrees** Nexotao registered inside your own repositories, and deletes only its own `nexotao/*` branches.
+2. **Deletes the data directory** — `~/.nexotao` (or your `NEXOTAO_DATA_DIR`): database, settings, API key, work graphs, backups.
+3. **Sweeps its code indexes** — only the `nexotao-idx-*` files in `~/.cache/codebase-memory-mcp/`, never that directory and never a file it did not create.
+4. **Uninstalls the package** — `npm uninstall -g nexotao`. If your global prefix needs root, it prints the `sudo` line to finish rather than escalating on its own.
+
+Your code, commits and branches are never touched. If a worktree still holds uncommitted work, the command names the files and stops without deleting anything; `--force` proceeds anyway. `--keep-package` leaves the npm package installed.
+
+**Deleting `~/.nexotao` by hand is not equivalent.** Nexotao registers worktrees inside your repositories, so removing those directories without releasing them first leaves every repository you have run against with a stranded worktree registry and dangling branches. That order is the reason this is a command rather than a documented procedure.
+
 The database uses SQLite through a Drizzle repository boundary. The packaged driver is the SQL.js embedded JavaScript build, which works on every supported Node platform without native compilation. Because this driver does not expose durable WAL mode, commits are serialized and the exported database is replaced atomically. The repository contract stays driver-independent so a native WAL driver can replace it after Linux, macOS, and Windows packaging smoke tests pass.
 
 ### Upgrading from JSON storage

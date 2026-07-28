@@ -9,6 +9,14 @@ import { randomBytes } from "node:crypto";
 
 const require = createRequire(import.meta.url);
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+// Before anything else, and before the port is even validated: `uninstall` must
+// never boot a server it is about to delete the database out from under.
+if (process.argv[2] === "uninstall") {
+  const { parseArgs, runUninstall } = await import("./uninstall.mjs");
+  process.exit((await runUninstall(parseArgs(process.argv.slice(3)))).exitCode);
+}
+
 const port = process.env.PORT || "4319";
 const numericPort = Number(port);
 if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) throw new Error("PORT must be between 1 and 65535");

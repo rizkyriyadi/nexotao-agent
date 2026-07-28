@@ -49,6 +49,26 @@ directory, and its `nexotao-idx-` code index. It leaves the append-only activity
 audit trail) and any git worktrees under `worktrees/`, because those are keyed by repository rather
 than by project. If no other project uses that repository, remove them with `git worktree prune`.
 
+### Removing everything
+
+`nexotao uninstall` is the complete removal. It prints what it will do, requires you to type
+`UNINSTALL`, and then:
+
+| step | what it touches |
+|---|---|
+| release worktrees | `git worktree remove --force` + `prune` in each owning repository, then `git branch -D` for `nexotao/*` branches only |
+| delete the data directory | `~/.nexotao` (or `NEXOTAO_DATA_DIR`), plus `~/.nexotao/tools` when the data directory was moved elsewhere |
+| sweep the code index | only `nexotao-idx-*` files in `~/.cache/codebase-memory-mcp/` — never the directory, never a file without that prefix |
+| uninstall the package | `npm uninstall -g nexotao`. A root-owned global prefix makes this fail; the command prints the `sudo` line to finish it rather than escalating on its own. |
+
+**The order matters and is the reason this is a command rather than a documented procedure.**
+Deleting the data directory first pulls worktree directories out from under Git and leaves every
+repository you have run against with a stranded registry and dangling branches.
+
+It stops before deleting anything if a worktree still holds uncommitted work, naming the files.
+`--force` proceeds anyway, `--dry-run` prints the plan and exits, `--keep-package` leaves the npm
+package installed, and it refuses to run while the app is still serving on its port.
+
 ## Database
 
 The database is a single SQLite file (`nexotao.sqlite`) accessed through a Drizzle repository

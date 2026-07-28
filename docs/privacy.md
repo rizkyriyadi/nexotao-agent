@@ -88,11 +88,21 @@ You have two levels of deletion:
    other project records — including redacted run events and document history — are removed. The
    project's graph directory and its code index are removed with it. Git worktrees are keyed by
    repository rather than by project, so they are left in place and the report says so.
-2. **Full removal.** Stop the app and delete the data directory (`~/.nexotao` or your
-   `NEXOTAO_DATA_DIR`), and — if you installed the code index — `~/.cache/codebase-memory-mcp/`.
-   This removes the database, configuration (including your API key), backups, and any code indexes.
-   Uninstalling the npm package does not touch these directories, so removing them is the way to
-   erase all local state.
+2. **Full removal.** Stop the app and run `nexotao uninstall`. It shows exactly what it will
+   remove, asks you to type `UNINSTALL`, and stops without deleting anything if a worktree still
+   holds uncommitted work (`--force` overrides, `--dry-run` shows the plan and stops). It then
+   releases every managed worktree back to the repository that owns it, deletes the data directory
+   (`~/.nexotao` or your `NEXOTAO_DATA_DIR`) including the database, configuration, your API key,
+   work graphs and backups, removes only the `nexotao-idx-*` files from
+   `~/.cache/codebase-memory-mcp/`, and uninstalls the npm package. Your own code, commits and
+   branches are not touched, and neither are code indexes in that cache that Nexotao did not create.
+
+   Removing the data directory by hand is not equivalent. Nexotao registers Git worktrees inside
+   your own repositories, and deleting those directories without releasing them first leaves each
+   affected repository with a stranded worktree registry and dangling `nexotao/*` branches. If you
+   do remove things manually, run `git worktree remove --force <path>`, `git worktree prune` and
+   `git branch -D nexotao/…` in each repository first, and delete only the `nexotao-idx-*` files
+   from the shared cache — anything else there belongs to your own tooling.
 
 ## Exporting your data
 
