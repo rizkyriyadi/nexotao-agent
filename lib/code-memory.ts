@@ -456,3 +456,51 @@ export async function sweepCodeIndexCache(
   }
   return { removed };
 }
+
+// ---------------------------------------------------------------------------
+// Installation
+// ---------------------------------------------------------------------------
+
+/** The command the install route runs, and the one the UI offers to copy for
+ *  anyone who would rather run it themselves. */
+export const INSTALL_COMMAND = `npm install --prefix ${TOOLS_DIR} --no-audit --no-fund ${CLI_PACKAGE}`;
+
+let installing: Promise<{ ok: boolean; error?: string }> | null = null;
+
+/**
+ * Install the CLI into a Nexotao-owned prefix.
+ *
+ * Not `npm i -g`: `npm prefix -g` is commonly a root-owned directory, so a
+ * global install needs sudo and fails for most users in a way that reads as a
+ * bug in this app. ~/.nexotao/tools needs no privileges and is ours to clean up.
+ *
+ * Single-flight — a double-clicked button must not start two npm processes over
+ * the same node_modules — and never throws: a failed install returns the tail of
+ * npm's own output, which is the only thing that would help anyone.
+ */
+export function installCodeMemory(deps?: { exec?: CliExec }): Promise<{ ok: boolean; error?: string }> {
+  installing ??= (async () => {
+    try {
+      await fs.mkdir(TOOLS_DIR, { recursive: true });
+      const exec = deps?.exec ?? spawnCli("npm");
+      const r = await exec(
+        ["install", "--prefix", TOOLS_DIR, "--no-audit", "--no-fund", CLI_PACKAGE],
+        "",
+        { timeoutMs: 10 * 60_000 },
+      );
+      if (r.code === 0) return { ok: true };
+      const tail = `${r.stderr || r.stdout}`.trim().split("\n").slice(-8).join("\n");
+      return { ok: false, error: tail || `npm exited ${r.code}` };
+    } catch (e) {
+      return { ok: false, error: String((e as Error)?.message ?? e) };
+    } finally {
+      installing = null;
+    }
+  })();
+  return installing;
+}
+
+/** Test seam: forget any in-flight install. */
+export function resetInstallState() {
+  installing = null;
+}

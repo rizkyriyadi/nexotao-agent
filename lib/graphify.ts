@@ -24,7 +24,7 @@ export type EdgeRel = "child" | "blockedBy" | "references" | "touched" | "memory
 
 export type GraphNode = {
   id: string;
-  /** task | run | agent | memory | symbol | doc | … (superset of graphify's code kinds) */
+  /** task | run | agent | memory | symbol | doc | … (open, so code-shaped kinds fit) */
   kind: string;
   label: string;
   status?: string;

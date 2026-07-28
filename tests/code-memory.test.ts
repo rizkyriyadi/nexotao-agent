@@ -12,7 +12,8 @@ process.env.NEXOTAO_DATA_DIR = dir;
 const {
   parseCliOutput, codeIndexName, indexProject, refreshCodeIndex, resetCodeIndexCaches,
   searchCode, traceCode, explainCode, dropCodeIndex, detectCodeMemory, sweepCodeIndexCache,
-  canonicalRoot, codeIndexCacheDir, INDEX_PREFIX, CLI_PACKAGE,
+  canonicalRoot, codeIndexCacheDir, installCodeMemory, resetInstallState,
+  INDEX_PREFIX, CLI_PACKAGE, INSTALL_COMMAND, TOOLS_DIR,
 } = await import("../lib/code-memory");
 
 after(async () => {
@@ -241,4 +242,39 @@ test("the published package pulls in no code-index runtime", async () => {
   assert.ok(!deps.some((k) => /graphif|python|pip|codebase-memory/i.test(k)), "no code-index runtime may be bundled");
   const files: string[] = pkg.files ?? [];
   assert.ok(!files.some((f) => /python|graphify|codebase-memory/i.test(f)), "published files must not ship an index binary");
+});
+
+/* ── a quarter of a gigabyte, on purpose ─────────────────────────────────────
+ * The install downloads ~37 MB and unpacks ~258 MB onto the user's machine. That
+ * is fine when they asked for it and unacceptable as a side effect of anything
+ * else, so confirmation is required at the route and the spawn is single-flight:
+ * a double-clicked button running two npm processes over one node_modules is how
+ * a half-written install happens. */
+
+test("installing the code index is single-flight and never throws", async () => {
+  resetInstallState();
+  let spawns = 0;
+  const slow = async () => { spawns += 1; await new Promise((r) => setTimeout(r, 30)); return { code: 0, stdout: "added 1 package", stderr: "" }; };
+  const both = await Promise.all([installCodeMemory({ exec: slow as any }), installCodeMemory({ exec: slow as any })]);
+  assert.equal(spawns, 1, "a double click must not start two installs");
+  for (const r of both) assert.equal(r.ok, true);
+
+  // A failed install reports npm's own last words rather than throwing, because
+  // that output is the only thing that helps anyone.
+  resetInstallState();
+  const failing = async () => ({ code: 1, stdout: "", stderr: "npm ERR! code EACCES\nnpm ERR! syscall mkdir" });
+  const failed = await installCodeMemory({ exec: failing as any });
+  assert.equal(failed.ok, false);
+  assert.match(String(failed.error), /EACCES/);
+
+  // …and an exec that blows up entirely is still just a failed install.
+  resetInstallState();
+  const exploding = async () => { throw new Error("spawn ENOMEM"); };
+  assert.equal((await installCodeMemory({ exec: exploding as any })).ok, false);
+
+  // The command offered to the user is the one actually run, into a prefix that
+  // needs no privileges — `npm i -g` would need sudo on a root-owned prefix.
+  assert.match(INSTALL_COMMAND, new RegExp(`^npm install --prefix ${TOOLS_DIR.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} `));
+  assert.ok(INSTALL_COMMAND.endsWith(CLI_PACKAGE));
+  assert.ok(!INSTALL_COMMAND.includes(" -g"), "a global install would need sudo");
 });

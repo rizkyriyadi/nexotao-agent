@@ -24,9 +24,12 @@ type GraphResponse = {
   generatedAt: number | null;
 };
 // Mirror of POST /api/graph (build knowledge graph).
+type CodeIndex = { available: boolean; project: string | null; nodes: number; edges: number; indexedAt: number | null };
 type BuildResponse =
-  | { ok: true; work: { nodes: number; edges: number }; code: { available: boolean; nodes: number } }
+  | { ok: true; work: { nodes: number; edges: number }; code: CodeIndex }
   | { ok: false; error?: string };
+// Mirror of GET/POST /api/code-index/install.
+type InstallResponse = { ok: boolean; available?: boolean; error?: string; command?: string };
 
 // ── Visual language ──────────────────────────────────────────────────────────
 const KIND_COLOR: Record<string, string> = {
@@ -150,6 +153,12 @@ export function GraphView() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [building, setBuilding] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  // null until the probe answers, so the banner shows nothing rather than
+  // flashing "not installed" at someone who has it.
+  const [codeAvailable, setCodeAvailable] = useState<boolean | null>(null);
+  const [code, setCode] = useState<CodeIndex | null>(null);
+  const [installCommand, setInstallCommand] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [hidden, setHidden] = useState<Set<string>>(new Set());
@@ -170,9 +179,21 @@ export function GraphView() {
   };
   useEffect(load, []);
 
+  // Whether the optional code index is installed. Checked once on mount so the
+  // banner can offer the install without this page ever installing anything.
+  useEffect(() => {
+    fetch("/api/code-index/install")
+      .then((r) => r.json())
+      .then((r: InstallResponse) => {
+        setCodeAvailable(r.available === true);
+        setInstallCommand(r.command ?? null);
+      })
+      .catch(() => setCodeAvailable(false));
+  }, []);
+
   // Build the knowledge graph on demand: full rebuild of the work-history graph
-  // from the project's entire task history, plus the optional graphify code
-  // layer. Then reload so the fresh graph renders. (POST /api/graph.)
+  // from the project's entire task history, plus a re-index of the code layer
+  // when it is installed. Then reload so the fresh graph renders. (POST /api/graph.)
   const build = () => {
     if (building) return;
     setBuilding(true);
@@ -184,14 +205,40 @@ export function GraphView() {
           setNotice(res.error ?? "Could not build the graph.");
           return;
         }
+        setCodeAvailable(res.code.available);
+        setCode(res.code.available ? res.code : null);
         const parts = [`Indexed ${res.work.nodes} nodes · ${res.work.edges} edges`];
-        if (res.code.available) parts.push(`+${res.code.nodes} code nodes`);
-        else parts.push("install graphify for code-level nodes");
+        if (res.code.available) parts.push(`+${res.code.nodes} symbols · ${res.code.edges} relations`);
         setNotice(parts.join(" · "));
         load();
       })
       .catch(() => setNotice("Could not build the graph."))
       .finally(() => setBuilding(false));
+  };
+
+  // Install the code index. Explicit, confirmed, and never automatic: it pulls
+  // roughly 40 MB and unpacks a good deal more, so the button says so.
+  const install = () => {
+    if (installing) return;
+    setInstalling(true);
+    setNotice("Installing the code index — about a minute…");
+    fetch("/api/code-index/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    })
+      .then((r) => r.json())
+      .then((res: InstallResponse) => {
+        if (!res.ok) {
+          setNotice(res.error ? `Install failed: ${res.error.split("\n").pop()}` : "Install failed.");
+          return;
+        }
+        setCodeAvailable(true);
+        setNotice("Code index installed — building…");
+        build();
+      })
+      .catch(() => setNotice("Install failed."))
+      .finally(() => setInstalling(false));
   };
 
   const nodes = useMemo(() => data?.nodes ?? [], [data]);
@@ -340,6 +387,38 @@ export function GraphView() {
           </button>
         </div>
       </div>
+
+      {/* Code layer banner. The code index holds thousands of symbols — far too
+          many for an in-browser force layout — so it is reported as counts here
+          rather than drawn on the canvas. */}
+      {codeAvailable !== null && (
+        <div className="flex flex-wrap items-center gap-2 border-b border-line bg-code-surface/40 px-6 py-2 text-[11.5px] text-bark-grey">
+          <Boxes className="size-3.5 text-pebble" strokeWidth={2} />
+          {codeAvailable ? (
+            <span>
+              Code index active
+              {code ? ` · ${code.nodes} symbols · ${code.edges} relations` : " — the agent's graph tools answer from your code as well as its history"}
+            </span>
+          ) : (
+            <>
+              <span>No code index — the graph tools answer from work history only.</span>
+              <button
+                onClick={install}
+                disabled={installing}
+                className="h-6 rounded-full border border-line-strong bg-white px-2.5 text-[11.5px] font-medium text-charcoal transition-colors hover:border-charcoal disabled:opacity-50"
+              >
+                {installing ? "Installing…" : "Install code index"}
+              </button>
+              <span className="text-pebble">~40 MB download, about a minute</span>
+              {installCommand && (
+                <code className="truncate font-mono text-[11px] text-pebble" title={installCommand}>
+                  or run: {installCommand}
+                </code>
+              )}
+            </>
+          )}
+        </div>
+      )}
 
       {/* Filter chips */}
       {kinds.length > 0 && (
