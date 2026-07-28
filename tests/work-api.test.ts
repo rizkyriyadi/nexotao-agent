@@ -148,7 +148,7 @@ test("deleting an occupied column is refused rather than stranding its cards", a
 
 /* ---------- intake ---------- */
 
-test("intake shows only what is waiting, and accepting sends the work to the backlog", async () => {
+test("intake shows only what is waiting, and accepting clears it from the queue", async () => {
   const waiting = await createIssue({ projectId: project.id, title: "From outside", status: "backlog", intakeStatus: "pending", intakeSource: "external" });
   const before = await json(await intakeRoute.GET());
   assert.ok(before.body.pending.some((issue: { id: string }) => issue.id === waiting.id));
@@ -161,6 +161,17 @@ test("intake shows only what is waiting, and accepting sends the work to the bac
   const after = await json(await intakeRoute.GET());
   assert.ok(!after.body.pending.some((issue: { id: string }) => issue.id === waiting.id), "a decided item leaves the queue");
   assert.ok(after.body.recent.some((issue: { id: string }) => issue.id === waiting.id), "but stays visible, so a mis-click is recoverable");
+});
+
+/* Accepting used to force the item to `backlog`, which the lifecycle refuses for
+   anything past `todo` — so an item flagged pending while already in review
+   returned 409 and stayed in the queue forever, with no way to clear it. */
+test("accepting work that is already underway does not demote it", async () => {
+  const underway = await createIssue({ projectId: project.id, title: "Already in review", status: "in_review", intakeStatus: "pending" });
+  const { status, body } = await json(await intakeRoute.POST(send("POST", { issueId: underway.id, decision: "accept" }, "http://localhost/api/work/intake")));
+  assert.equal(status, 200);
+  assert.equal(body.issue.status, "in_review", "accepting is a triage decision, not a status change");
+  assert.equal(body.issue.intakeStatus, "accepted");
 });
 
 test("declining cancels the work rather than only flagging it", async () => {

@@ -81,9 +81,97 @@ async function drag(page, cardText, columnLabel) {
 
 const settle = (ms = 900) => new Promise((r) => setTimeout(r, ms));
 
+/** Attach the tab to the console, so a crash or an uncaught error in the app is
+ *  reported as itself rather than surfacing later as a detached frame. */
+function watch(page) {
+  page.on("pageerror", (error) => console.log(`  [page error] ${error.message}`));
+  page.on("error", (error) => console.log(`  [tab crashed] ${error.message}`));
+  page.on("console", (message) => {
+    if (message.type() === "error") console.log(`  [console] ${message.text().slice(0, 300)}`);
+  });
+  return page;
+}
+
+/* The two ways the driver loses its grip on a healthy app, and what each means.
+
+   A `goto` to a route the Next router has already prefetched detaches the frame
+   puppeteer is holding: the tab keeps working, the driver's handle to it does
+   not. Every /work destination is in the sub-nav, so the first move is to click
+   through it the way a user would — that never detaches, and it exercises the
+   client-side navigation besides.
+
+   `chrome-headless-shell` also segfaults occasionally, deep in its own Cocoa run
+   loop (`objc_autoreleasePoolPop`, no app frame on the stack). That is a browser
+   bug, so losing the remaining checks to it would report a driver crash as an
+   app failure. Both recoveries end the same way: get a live tab on the target
+   URL, relaunching the browser if that is what it takes. */
+const VIEWPORT = { width: 1440, height: 940 };
+let browser = null;
+let browserPath = null;
+
+async function launchBrowser() {
+  browser = await puppeteer.launch({ executablePath: browserPath, args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] });
+  return browser;
+}
+
+/** A fresh tab, relaunching the browser first if the old one died. Cookies live
+ *  on the browser, so a relaunch loses the session — the token is replayed. */
+async function freshPage(target, token) {
+  if (!browser?.connected) await launchBrowser();
+  const page = watch(await browser.newPage());
+  await page.setViewport(VIEWPORT);
+  const url = new URL(target);
+  if (!url.searchParams.has("session_token")) url.searchParams.set("session_token", token);
+  await page.goto(url.toString(), { waitUntil: "networkidle2" });
+  return page;
+}
+
+async function visit(page, target, token) {
+  const { pathname, search } = new URL(target);
+  // A query string carries something the click cannot — the session token on the
+  // first load — so only a bare path is eligible for the in-app route.
+  if (!search && browser?.connected) {
+    try { if (await follow(page, pathname)) return page; } catch { /* fall through to a reload */ }
+  }
+  try {
+    await page.goto(target, { waitUntil: "networkidle2" });
+    return page;
+  } catch (error) {
+    if (!/detached|disposed|Target closed|Connection closed|Session closed/i.test(String(error))) throw error;
+    const dead = !browser?.connected;
+    if (dead) console.log("  [browser died — relaunching; this is a chrome-headless-shell crash, not the app]");
+    const fresh = await freshPage(target, token);
+    if (!dead) await page.close().catch(() => {});
+    return fresh;
+  }
+}
+
+/* Follow an in-app link the way a user would, rather than issuing a fresh
+   `goto`. A `goto` to a route the router has already prefetched detaches the
+   frame puppeteer is holding — the page itself is fine, the driver's handle is
+   not — and clicking exercises the client-side navigation besides. */
+async function follow(page, href) {
+  // Bail before arming the navigation wait when nothing links there, rather than
+  // sitting out its full timeout for a link that was never going to be clicked.
+  const linked = await page.evaluate(
+    (target) => [...document.querySelectorAll("a")].some((anchor) => anchor.getAttribute("href") === target),
+    href,
+  ).catch(() => false);
+  if (!linked) return false;
+
+  await Promise.all([
+    page.waitForNavigation({ waitUntil: "networkidle2", timeout: 15000 }).catch(() => {}),
+    page.evaluate((target) => {
+      [...document.querySelectorAll("a")].find((anchor) => anchor.getAttribute("href") === target)?.click();
+    }, href),
+  ]);
+  await settle(900);
+  return page.url().endsWith(href);
+}
+
 async function main() {
-  const executablePath = resolveBrowser();
-  if (!executablePath) { console.error("No Chromium found."); process.exit(2); }
+  browserPath = resolveBrowser();
+  if (!browserPath) { console.error("No Chromium found."); process.exit(2); }
 
   const port = 4700 + (process.pid % 200);
   const token = "work-" + "t".repeat(40);
@@ -93,7 +181,8 @@ async function main() {
   await mkdir(shots, { recursive: true });
   const shot = (page, name) => page.screenshot({ path: join(shots, `work-${name}.png`) });
 
-  let server, browser;
+  // `browser` is module-level so `visit`/`freshPage` can replace it after a crash.
+  let server;
   try {
     const seedOut = await run(process.execPath, ["--import", "tsx", join(ROOT, "scripts/e2e/seed-work.ts")], {
       env: { ...process.env, NEXOTAO_DATA_DIR: dataDir, NEXOTAO_PROJECT_PATH: projectPath },
@@ -107,13 +196,13 @@ async function main() {
     });
     if (!check("server boots", await waitHealthy(port, token))) throw new Error("server never became healthy");
 
-    browser = await puppeteer.launch({ executablePath, args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] });
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1440, height: 940 });
+    await launchBrowser();
+    let page = watch(await browser.newPage());
+    await page.setViewport(VIEWPORT);
     const url = (path) => `http://${HOST}:${port}${path}`;
 
     // 1. The board renders the seeded work in its columns.
-    await page.goto(url(`/work?session_token=${token}`), { waitUntil: "networkidle2" });
+    page = await visit(page, url(`/work?session_token=${token}`), token);
     await page.waitForSelector("section h2", { timeout: 15000 });
     await settle();
     const columns = await page.$$eval("section h2", (els) => els.map((el) => el.textContent.trim()));
@@ -179,12 +268,107 @@ async function main() {
     await shot(page, "08-issue-peek");
 
     if (peek.href) {
-      await page.goto(url(peek.href), { waitUntil: "networkidle2" });
+      page = await visit(page, url(peek.href), token);
       await settle(900);
       const landed = await page.evaluate(() => document.body.innerText);
       check("conversation link lands on the issue", landed.includes("Verify the smoke matrix"));
       await shot(page, "09-conversation");
     }
+
+    // 6. Cycles: the list, then the one the fixture seeded work into.
+    page = await visit(page, url("/work/cycles"), token);
+    await settle(1100);
+    const cyclesText = await page.evaluate(() => document.body.innerText);
+    check("cycles list draws the seeded cycle", cyclesText.includes("Sprint 1"), cyclesText.slice(0, 120).replace(/\n/g, " "));
+    await shot(page, "10-cycles");
+
+    page = await visit(page, url(`/work/cycles/${ids.cycleId}`), token);
+    await settle(1100);
+    const cycleDetail = await page.evaluate(() => ({
+      text: document.body.innerText,
+      svgs: document.querySelectorAll("svg[role='img']").length,
+    }));
+    check("cycle detail names the cycle", cycleDetail.text.includes("Sprint 1"));
+    // The fixture has one day of snapshots, so the burn-down explains itself
+    // rather than drawing — either the card or the chart is a pass, an
+    // "Application error" is not.
+    check("cycle detail shows the burn-down card", /Burn-down/i.test(cycleDetail.text), `${cycleDetail.svgs} svg charts`);
+    await shot(page, "11-cycle-detail");
+
+    // 7. Modules.
+    page = await visit(page, url("/work/modules"), token);
+    await settle(1100);
+    check("modules list draws the seeded module", (await page.evaluate(() => document.body.innerText)).includes("Platform"));
+    await shot(page, "12-modules");
+
+    page = await visit(page, url(`/work/modules/${ids.moduleId}`), token);
+    await settle(1100);
+    const moduleDetail = await page.evaluate(() => document.body.innerText);
+    check("module detail lists its work", moduleDetail.includes("Platform") && /Work in this module/i.test(moduleDetail));
+    await shot(page, "13-module-detail");
+
+    // 8. Pages: create one, write markdown, save, and read it back rendered.
+    page = await visit(page, url("/work/pages"), token);
+    await settle(900);
+    await page.type('input[aria-label="Page title"]', "Release notes");
+    await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "New page")?.click());
+    await settle(1300);
+    const pageRow = await page.evaluate(() => [...document.querySelectorAll("a")].find((a) => a.textContent.includes("Release notes"))?.getAttribute("href") ?? null);
+    check("a page can be created", Boolean(pageRow), String(pageRow));
+    await shot(page, "14-pages");
+
+    if (pageRow) {
+      check("the page opens from the list", await follow(page, pageRow), page.url());
+      await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Edit")?.click());
+      await settle(500);
+      await page.type('textarea[aria-label="Page body"]', "## Shipped\n\n- Work surface\n- Cycles and modules\n");
+      await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Save")?.click());
+      await settle(1500);
+      const rendered = await page.evaluate(() => ({
+        heading: Boolean([...document.querySelectorAll("h2, h3")].find((h) => h.textContent.trim() === "Shipped")),
+        items: document.querySelectorAll("article li").length,
+      }));
+      check("page body saves and renders as markdown", rendered.heading && rendered.items >= 2, JSON.stringify(rendered));
+      await shot(page, "15-page-detail");
+    }
+
+    // 9. Intake: empty by default, then populated once something is marked pending.
+    page = await visit(page, url("/work/intake"), token);
+    await settle(1000);
+    check("intake is empty by default", /Nothing waiting/i.test(await page.evaluate(() => document.body.innerText)));
+    await shot(page, "16-intake-empty");
+
+    const marked = await page.evaluate(async (id) => {
+      const r = await fetch("/api/work/issues", {
+        method: "PATCH", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, intakeStatus: "pending" }),
+      });
+      return { ok: r.ok, status: r.status };
+    }, ids.review);
+    check("an item can be put into intake", marked.ok, JSON.stringify(marked));
+    await page.reload({ waitUntil: "networkidle2" });
+    await settle(1100);
+    check("intake queue shows the pending item", (await page.evaluate(() => document.body.innerText)).includes("Verify the smoke matrix"));
+    await shot(page, "17-intake-queue");
+
+    await page.evaluate(() => [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Accept")?.click());
+    await settle(1500);
+    const triaged = await pageJson(page, "/api/work/intake");
+    check("accepting clears the queue", (triaged.body?.pending ?? []).length === 0, `${triaged.body?.pending?.length} pending`);
+    check("accepted item is recorded as triaged", (triaged.body?.recent ?? []).some((i) => i.id === ids.review && i.intakeStatus === "accepted"));
+    await shot(page, "18-intake-triaged");
+
+    // 10. Analytics.
+    page = await visit(page, url("/work/analytics"), token);
+    await settle(1400);
+    const analytics = await page.evaluate(() => ({
+      text: document.body.innerText,
+      charts: document.querySelectorAll("svg[role='img']").length,
+    }));
+    check("analytics draws its stat cards", /Average cycle time/i.test(analytics.text) && /Throughput/i.test(analytics.text));
+    check("analytics draws charts", analytics.charts >= 1, `${analytics.charts} svg charts`);
+    check("analytics lists the cycle burn-down", analytics.text.includes("Sprint 1"));
+    await shot(page, "19-analytics");
   } finally {
     if (browser) await browser.close().catch(() => {});
     if (server && server.exitCode === null) {

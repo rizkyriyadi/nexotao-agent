@@ -134,12 +134,16 @@ test("distributions and counts describe the project's own work only", async () =
   await complete(done.id, "an5");
 
   const report = await analytics.projectAnalytics("an5");
-  assert.deepEqual(report.byPriority, [{ key: "urgent", count: 2 }, { key: "low", count: 1 }]);
+  assert.deepEqual(report.byPriority, [{ key: "urgent", label: "urgent", count: 2 }, { key: "low", label: "low", count: 1 }]);
   assert.equal(report.open, 2);
   assert.equal(report.completed, 1);
-  // Finishing work assigns it, so only the two open items are still unowned.
-  assert.deepEqual(report.byAssignee, [{ key: "unassigned", count: 2 }, { key: "an5-agent", count: 1 }],
-    "unassigned work is a bucket, not a gap");
+  // Finishing work assigns it, so only the two open items are still unowned. The
+  // assignee bucket keys by agent id but labels by name — a chart printing a uuid
+  // names nobody.
+  assert.deepEqual(report.byAssignee, [
+    { key: "unassigned", label: "Unassigned", count: 2 },
+    { key: "an5-agent", label: "Hutao", count: 1 },
+  ], "unassigned work is a bucket, not a gap");
   assert.ok(report.averageCycleTimeMs !== null && report.averageCycleTimeMs >= 0);
 });
 

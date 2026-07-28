@@ -11,6 +11,7 @@ import { useState } from "react";
 import { CalendarDays, Columns3, GanttChartSquare, List, Plus, Search, Table2 } from "lucide-react";
 import type { GroupBy, Layout, OrderBy, ViewConfig } from "@/lib/work-view";
 import { Picker, type WorkData } from "./parts";
+import { WorkNav } from "./WorkNav";
 
 const LAYOUTS: Array<{ value: Layout; label: string; icon: typeof List }> = [
   { value: "board", label: "Board", icon: Columns3 },
@@ -57,7 +58,9 @@ export function WorkHeader({ config, total, data, onConfig, onCreate }: {
         <span className="text-xs text-pebble">{total} shown · {data.issues.length} total</span>
       </div>
 
-      <div className="mt-4 flex flex-wrap items-center gap-2">
+      <div className="mt-4"><WorkNav /></div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <div className="flex rounded-xl border border-line bg-white/60 p-0.5">
           {LAYOUTS.map(({ value, label, icon: Icon }) => (
             <button

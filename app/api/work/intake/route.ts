@@ -14,9 +14,15 @@ export const runtime = "nodejs";
 /** What each decision does to the work item. The lifecycle owns `status`, so a
  *  decline is a real `cancelled` transition rather than a flag the scheduler
  *  cannot see; snoozing leaves the item where it is and only clears it from the
- *  queue. */
+ *  queue.
+ *
+ *  Accepting changes no status at all. A pending item already sits somewhere in
+ *  the workflow — intake is a flag beside the status, not a state in front of it
+ *  — so accepting one that has reached `in_review` would demote work already
+ *  underway, and the lifecycle refuses that move regardless. What accept means
+ *  is "this belongs here": the queue clears, the work stays where it got to. */
 const DECISIONS = {
-  accept: { intakeStatus: "accepted", status: "backlog" },
+  accept: { intakeStatus: "accepted", status: null },
   decline: { intakeStatus: "declined", status: "cancelled" },
   duplicate: { intakeStatus: "duplicate", status: "cancelled" },
   snooze: { intakeStatus: "snoozed", status: null },

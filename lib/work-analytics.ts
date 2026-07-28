@@ -11,7 +11,7 @@
 
 import { and, eq, gte, inArray } from "drizzle-orm";
 import { getDatabase } from "./db/database";
-import { activityLog, cycleSnapshots, cycles, issues } from "./db/schema";
+import { activityLog, agents, cycleSnapshots, cycles, issues } from "./db/schema";
 import type { Issue } from "./issues";
 
 export const DAY_MS = 86_400_000;
@@ -68,17 +68,21 @@ export async function burndown(cycleId: string): Promise<BurnPoint[]> {
 
 /* ---------- project-wide analytics ---------- */
 
-export type Distribution = Array<{ key: string; count: number }>;
+/** A charted category. `key` identifies the bucket, `label` is what the chart
+ *  prints — they differ wherever the bucket is an id: an assignee tallies by
+ *  agent id, and a bar reading `f982aa88-64a2-…` tells nobody anything. */
+export type Distribution = Array<{ key: string; label: string; count: number }>;
 export type Analytics = {
   throughput: Array<{ week: number; completed: number }>;
   byStatus: Distribution; byPriority: Distribution; byAssignee: Distribution;
   open: number; completed: number; averageCycleTimeMs: number | null;
 };
 
-const tally = (values: string[]): Distribution => {
+const tally = (values: string[], name: (key: string) => string = (key) => key): Distribution => {
   const counts = new Map<string, number>();
   for (const value of values) counts.set(value, (counts.get(value) ?? 0) + 1);
-  return [...counts].map(([key, count]) => ({ key, count })).sort((a, b) => b.count - a.count || (a.key < b.key ? -1 : 1));
+  return [...counts].map(([key, count]) => ({ key, label: name(key), count }))
+    .sort((a, b) => b.count - a.count || (a.label < b.label ? -1 : 1));
 };
 
 /** The Monday-anchored week a timestamp falls in, as an epoch ms. Epoch day 0 was
@@ -104,8 +108,10 @@ export async function projectAnalytics(projectId: string, weeks = 12): Promise<A
           .where(and(eq(activityLog.action, "issue.transitioned"), gte(activityLog.createdAt, since), inArray(activityLog.entityId, ids)))
           .all()
       : [];
-    return { list, events };
+    const crew = db.select({ id: agents.id, name: agents.name }).from(agents).where(eq(agents.projectId, projectId)).all();
+    return { list, events, crew };
   });
+  const agentName = new Map(rows.crew.map((agent) => [agent.id, agent.name]));
 
   const finished = rows.events.filter((event) => (event.summary as { to?: string } | null)?.to === "done");
   const perWeek = new Map<number, number>();
@@ -119,7 +125,12 @@ export async function projectAnalytics(projectId: string, weeks = 12): Promise<A
     throughput: [...perWeek].map(([week, completed]) => ({ week, completed })).sort((a, b) => a.week - b.week),
     byStatus: tally(rows.list.map((issue) => issue.status)),
     byPriority: tally(rows.list.map((issue) => issue.priority)),
-    byAssignee: tally(rows.list.map((issue) => issue.assigneeAgentId ?? "unassigned")),
+    // An agent deleted after its work was assigned leaves an id with no name;
+    // "Unknown agent" is more use on a chart than the bare uuid.
+    byAssignee: tally(
+      rows.list.map((issue) => issue.assigneeAgentId ?? "unassigned"),
+      (key) => (key === "unassigned" ? "Unassigned" : agentName.get(key) ?? "Unknown agent"),
+    ),
     open: rows.list.filter((issue) => !DONE.has(issue.status)).length,
     completed: rows.list.filter((issue) => DONE.has(issue.status)).length,
     averageCycleTimeMs: durations.length ? Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length) : null,
