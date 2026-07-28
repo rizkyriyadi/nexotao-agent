@@ -2,7 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { openDatabase, type AppDatabase } from "../lib/db/database";
@@ -63,6 +64,16 @@ async function activate(f: Fixture, id: string) {
   });
   await new IssueLifecycleService(f.database).checkout(`issue-${id}`, `agent-${id}`, heartbeat.id, now);
   return heartbeat.id;
+}
+
+/** Where `provisionLocked` will put a run's worktree. Mirrors its derivation so
+ *  a test can occupy that path before provisioning and reproduce a checkout that
+ *  fails after the branch exists. */
+async function plannedWorkspace(f: Fixture, identifier: string, runId: string) {
+  const real = await realpath(f.repositoryPath);
+  const repoKey = createHash("sha256").update(real).digest("hex").slice(0, 16);
+  const part = (value: string) => value.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
+  return path.join(f.managedRoot, repoKey, `${part(identifier)}-${part(runId)}`);
 }
 
 async function cleanup(f: Fixture) {
@@ -243,6 +254,66 @@ test("a failed workspace record rolls back the worktree so the same run can retr
     const assignment = await f.manager.provision(input);
     assert.equal(assignment.runId, run, "the same run id provisions cleanly on retry");
     assert.equal(await git(assignment.workspacePath, "rev-parse", "--abbrev-ref", "HEAD"), assignment.branch);
+  } finally { await cleanup(f); }
+});
+
+/* Reported from a real machine: an 8 674-file checkout on Windows died partway
+ * with "fatal: Could not reset index file to revision 'HEAD'", and the issue
+ * then failed six more times. `worktree add` creates the branch first and checks
+ * out second, so a checkout that dies leaves the branch behind while registering
+ * no worktree. The branch carries the run id, a retry reuses that id, and every
+ * later attempt fails with "already exists" — one transient fault becoming a
+ * permanent one. The rollback used to cover only the database write that follows
+ * this call, never the call itself. */
+
+test("a checkout that dies partway leaves nothing behind to block the retry", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "one");
+    const input = { projectId: "project", issueId: "issue-one", identifier: "NEXA-1", runId: run, repositoryPath: f.repositoryPath };
+    // Stand in for the interrupted checkout: an occupied target is refused by
+    // `worktree add` at the same point, after the branch has been created.
+    const workspacePath = await plannedWorkspace(f, "NEXA-1", run);
+    await mkdir(workspacePath, { recursive: true });
+    await writeFile(path.join(workspacePath, "leftover.txt"), "debris from the failed attempt\n");
+
+    await assert.rejects(f.manager.provision(input), /already exists/, "the original cause is reported, not the rollback's");
+    assert.equal(await git(f.repositoryPath, "branch", "--list", "nexotao/*"), "", "the branch that would block the retry is gone");
+
+    // The proof that matters: the same run id now provisions cleanly.
+    const assignment = await f.manager.provision(input);
+    assert.equal(assignment.runId, run);
+    assert.equal(await git(assignment.workspacePath, "rev-parse", "--abbrev-ref", "HEAD"), assignment.branch);
+    await assert.rejects(access(path.join(assignment.workspacePath, "leftover.txt")), "the partial directory was cleared, not inherited");
+  } finally { await cleanup(f); }
+});
+
+/* `git rev-parse` answers from any subdirectory, so a project folder sitting
+ * inside a larger checkout passes every "is this a repository?" test and only
+ * fails here. A user who selected `…/vendora/backend-admin-seller` was told
+ * their path "must be the Git worktree root" — true, and no help at all, since
+ * nothing named the repository we had actually found. */
+
+test("a project nested inside a larger repository is told which repository to select", async () => {
+  const f = await fixture();
+  try {
+    const nested = path.join(f.repositoryPath, "packages", "backend-admin");
+    await mkdir(nested, { recursive: true });
+    await writeFile(path.join(nested, "index.ts"), "export {};\n");
+    const run = await activate(f, "two");
+
+    await assert.rejects(
+      f.manager.provision({ projectId: "project", issueId: "issue-two", identifier: "NEXA-2", runId: run, repositoryPath: nested }),
+      (error: Error) => {
+        assert.match(error.message, /must be the Git worktree root/, "the rule is still stated");
+        assert.ok(error.message.includes(f.repositoryPath), "the repository we found is named");
+        assert.match(error.message, /Select .+ as the project/, "and the fix is spelled out");
+        assert.match(error.message, /git init/, "along with the alternative");
+        return true;
+      },
+    );
+    // Nesting is reported, never resolved by initialising a repo inside a repo.
+    assert.equal(await git(nested, "rev-parse", "--show-toplevel"), f.repositoryPath);
   } finally { await cleanup(f); }
 });
 

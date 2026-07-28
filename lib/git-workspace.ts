@@ -63,8 +63,18 @@ function command(commandName: string, args: string[], cwd: string, options: { sh
   });
 }
 
+/** Windows refuses a path over 260 characters unless `core.longpaths` is on, and
+ *  a managed worktree spends around a hundred of those before the repository's
+ *  own files are appended. A large tree then checks out partway and dies with
+ *  "Could not reset index file to revision 'HEAD'" — a message that names
+ *  neither the path nor the limit. Passed per invocation rather than written
+ *  into the user's config, because it is ours to need and not theirs to keep;
+ *  the key is inert off Windows, so the platform check is only to keep the
+ *  command line honest about what it is for. */
+const GIT_PLATFORM_ARGS = process.platform === "win32" ? ["-c", "core.longpaths=true"] : [];
+
 async function git(cwd: string, ...args: string[]) {
-  return command("git", args, cwd);
+  return command("git", [...GIT_PLATFORM_ARGS, ...args], cwd);
 }
 
 export function isProhibitedAgentMarkdown(file: string) {
@@ -207,7 +217,17 @@ export class GitWorkspaceManager {
     const repositoryPath = await fs.realpath(path.resolve(input.repositoryPath));
     await this.ensureRepository(repositoryPath);
     const topLevel = await fs.realpath((await git(repositoryPath, "rev-parse", "--show-toplevel")).stdout);
-    if (topLevel !== repositoryPath) throw new Error(`Project path must be the Git worktree root: ${repositoryPath}`);
+    // Naming the repository we found is the whole point: `rev-parse` answers from
+    // any subdirectory, so a project folder nested inside a larger checkout looks
+    // like a repository right up to this line. Restating the rejected path alone
+    // tells someone their path is wrong without telling them what is right — and
+    // what is right is nearly always "select the parent instead".
+    if (topLevel !== repositoryPath) {
+      throw new Error(
+        `Project path must be the Git worktree root, but ${repositoryPath} is inside the repository at ${topLevel}. `
+        + `Select ${topLevel} as the project, or run \`git init\` in ${repositoryPath} to make it its own repository.`,
+      );
+    }
     const targetBranch = (await git(repositoryPath, "symbolic-ref", "--short", "HEAD")).stdout;
     const baseCommit = (await git(repositoryPath, "rev-parse", "HEAD")).stdout;
     const repoKey = createHash("sha256").update(repositoryPath).digest("hex").slice(0, 16);
@@ -217,7 +237,21 @@ export class GitWorkspaceManager {
     if (!within(this.managedRoot, workspacePath)) throw new Error("Resolved worktree path escapes the managed workspace root");
     await fs.mkdir(path.dirname(workspacePath), { recursive: true, mode: 0o700 });
     await git(repositoryPath, "check-ref-format", "--branch", branch);
-    await git(repositoryPath, "worktree", "add", "-b", branch, workspacePath, baseCommit);
+    try {
+      await git(repositoryPath, "worktree", "add", "-b", branch, workspacePath, baseCommit);
+    } catch (error) {
+      // `worktree add` creates the branch first and checks out second, so a
+      // checkout that dies partway — a lock, a full disk, a path Windows will
+      // not accept — leaves the branch behind while registering no worktree.
+      // The branch carries this run's id, and a retry reuses that id, so every
+      // subsequent attempt fails with "a branch named … already exists": one
+      // transient fault turns into a permanently broken issue. Undo what was
+      // created so the retry is a clean first attempt, and report the original
+      // cause rather than the rollback's.
+      const rollback = await this.discardWorkspace(repositoryPath, workspacePath, branch);
+      const cause = error instanceof Error ? error.message : String(error);
+      throw new Error(rollback ? `${cause} (cleanup incomplete: ${rollback})` : cause);
+    }
     try {
       return await this.repositories.assignWorkspace({
         id: randomUUID(), projectId: input.projectId, issueId: input.issueId, runId: input.runId,
@@ -233,21 +267,41 @@ export class GitWorkspaceManager {
       // original cause rather than replacing it.
       const rollback = await this.discardWorkspace(repositoryPath, workspacePath, branch);
       const cause = error instanceof Error ? error.message : String(error);
-      throw new Error(rollback ? `${cause} (worktree preserved at ${workspacePath}: ${rollback})` : cause);
+      throw new Error(rollback ? `${cause} (cleanup incomplete at ${workspacePath}: ${rollback})` : cause);
     }
   }
 
-  /** Remove a just-created worktree and its branch. Returns null on success, or
-   *  the reason it could not be undone so the caller can report it. */
+  /** Remove a just-created worktree and its branch. Returns null when nothing was
+   *  left behind, or the reasons it could not be undone so the caller can report
+   *  them.
+   *
+   *  Every step is attempted independently. A half-created workspace is the
+   *  common case here — `worktree add` registers the worktree only after the
+   *  checkout succeeds, so a failure partway leaves a branch with no worktree,
+   *  and `worktree remove` then fails with "is not a working tree". Running the
+   *  steps in one `try` would let that expected failure skip `branch -D`, which
+   *  is precisely the deletion that unblocks the retry. */
   private async discardWorkspace(repositoryPath: string, workspacePath: string, branch: string) {
-    try {
-      await git(repositoryPath, "worktree", "remove", "--force", workspacePath);
-      await git(repositoryPath, "worktree", "prune");
-      await git(repositoryPath, "branch", "-D", branch);
-      return null;
-    } catch (error) {
-      return error instanceof Error ? error.message : String(error);
-    }
+    const problems: string[] = [];
+    const attempt = async (label: string, run: () => Promise<unknown>) => {
+      try {
+        await run();
+      } catch (error) {
+        problems.push(`${label}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    // Best-effort and unreported: the worktree legitimately may never have been
+    // registered, and saying so would make a clean rollback look like a failure.
+    await git(repositoryPath, "worktree", "remove", "--force", workspacePath).catch(() => undefined);
+    await git(repositoryPath, "worktree", "prune").catch(() => undefined);
+    // A directory left by a partial checkout is not a worktree git will remove,
+    // but it does block the retry with "already exists".
+    await attempt("directory", () => fs.rm(workspacePath, { recursive: true, force: true }));
+    // The one deletion that must work: the branch is named after the run id, so
+    // leaving it behind is what makes the failure permanent.
+    const branchExists = await git(repositoryPath, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}`).then(() => true).catch(() => false);
+    if (branchExists) await attempt("branch", () => git(repositoryPath, "branch", "-D", branch));
+    return problems.length ? problems.join("; ") : null;
   }
 
   async validate(issueId: string, runId: string) {
