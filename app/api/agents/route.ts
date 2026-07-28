@@ -3,7 +3,7 @@ import { getActiveProject } from "@/lib/store";
 import { listAgents, listIssues, seedAgents } from "@/lib/issues";
 import { getDatabase } from "@/lib/db/database";
 import { AgentLifecycleError, AgentLifecycleService, type AgentConfigInput } from "@/lib/agent-lifecycle";
-import { HttpError, jsonError, readJsonObject, stringField } from "@/lib/http";
+import { HttpError, jsonError, numberField, objectField, readJsonObject, stringField, stringsField } from "@/lib/http";
 
 export const runtime = "nodejs";
 
@@ -11,29 +11,6 @@ function lifecycleError(error: unknown) {
   if (!(error instanceof AgentLifecycleError)) return jsonError(error);
   const status = error.code === "not_found" ? 404 : error.code === "conflict" ? 409 : error.code === "confirmation_required" ? 428 : 400;
   return NextResponse.json({ error: error.message, code: error.code }, { status });
-}
-
-function objectField(body: Record<string, unknown>, key: string, fallback: Record<string, unknown> = {}) {
-  const value = body[key];
-  if (value === undefined) return fallback;
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(`${key} must be an object`);
-  return value as Record<string, unknown>;
-}
-
-function stringsField(body: Record<string, unknown>, key: string, fallback: string[] = []) {
-  const value = body[key];
-  if (value === undefined) return fallback;
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new HttpError(`${key} must be an array of strings`);
-  return value as string[];
-}
-
-function numberField(body: Record<string, unknown>, key: string, fallback: number | null) {
-  const value = body[key];
-  if (value === undefined || value === "") return fallback;
-  if (value === null) return null;
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(parsed)) throw new HttpError(`${key} must be a number`);
-  return parsed;
 }
 
 function avatarField(body: Record<string, unknown>): string | null | undefined {

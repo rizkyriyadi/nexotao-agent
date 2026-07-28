@@ -26,6 +26,39 @@ export function stringField(body: Record<string, unknown>, key: string, opts: { 
   return trimmed;
 }
 
+export function stringsField(body: Record<string, unknown>, key: string, fallback: string[] = []) {
+  const value = body[key];
+  if (value === undefined) return fallback;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new HttpError(`${key} must be an array of strings`);
+  return value as string[];
+}
+
+export function objectField(body: Record<string, unknown>, key: string, fallback: Record<string, unknown> = {}) {
+  const value = body[key];
+  if (value === undefined) return fallback;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(`${key} must be an object`);
+  return value as Record<string, unknown>;
+}
+
+/** `undefined` means "leave alone" and `null` means "clear it", so a PATCH can
+ *  distinguish an omitted field from one the user emptied. Empty string is
+ *  treated as absent because that is what an emptied form input sends. */
+export function numberField(body: Record<string, unknown>, key: string, fallback: number | null) {
+  const value = body[key];
+  if (value === undefined || value === "") return fallback;
+  if (value === null) return null;
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(parsed)) throw new HttpError(`${key} must be a number`);
+  return parsed;
+}
+
+export function booleanField(body: Record<string, unknown>, key: string, fallback: boolean) {
+  const value = body[key];
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") throw new HttpError(`${key} must be a boolean`);
+  return value;
+}
+
 export function jsonError(error: unknown) {
   const status = error instanceof HttpError ? error.status : 500;
   return NextResponse.json({ error: status === 500 ? "Internal server error" : safeError(error) }, { status });
