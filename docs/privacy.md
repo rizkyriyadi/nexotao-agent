@@ -17,10 +17,21 @@ Contents:
 | --- | --- |
 | `config.json` | Local configuration: your Nexotao API key, selected model, onboarding state, active project, an optional web-search key, and retention settings. Written with file mode `0600`. |
 | `nexotao.sqlite` | The application database: projects, sessions, tasks, runs, agents, issues, approvals, cost events, and the redacted activity log. Written with file mode `0600`. |
+| `graph/<projectId>/` | The project's work-history graph: tasks, runs, agents, and the links between them. |
+| `worktrees/` | Throwaway git checkouts, one per run, so a run never edits your working tree directly. |
+| `tools/` | The optional code-index CLI, if you chose to install it. |
 | `backups/json-v1-<timestamp>/` | A one-time backup of legacy JSON files created during migration to SQLite (if applicable). |
 
 The data directory is created with mode `0700` (owner-only). See [storage.md](storage.md) for schema
 detail and portability.
+
+**One exception.** If you install the optional code index, it stores a symbol-level map of your
+source — function and class names, file and line ranges, and the call graph between them — in
+`~/.cache/codebase-memory-mcp/`, which is outside the data directory and outside the `0700` regime
+above. It stays on your machine and is never uploaded; it is used only to answer the agent's own
+`graph_query` calls locally. It is removed when you delete the project, and the directory does not
+exist at all if you never install the index. See
+[storage.md](storage.md#one-directory-outside-the-data-directory).
 
 ## What leaves your machine
 
@@ -74,10 +85,13 @@ You have two levels of deletion:
    "confirm": true }`, you can delete a project and its associated records. Deletion requires
    explicit confirmation and returns a report of exactly what was removed and what was retained. The
    append-only audit activity is intentionally retained as the durable record of what happened; all
-   other project records — including redacted run events and document history — are removed.
+   other project records — including redacted run events and document history — are removed. The
+   project's graph directory and its code index are removed with it. Git worktrees are keyed by
+   repository rather than by project, so they are left in place and the report says so.
 2. **Full removal.** Stop the app and delete the data directory (`~/.nexotao` or your
-   `NEXOTAO_DATA_DIR`). This removes the database, configuration (including your API key), and
-   backups. Uninstalling the npm package does not touch this directory, so removing it is the way to
+   `NEXOTAO_DATA_DIR`), and — if you installed the code index — `~/.cache/codebase-memory-mcp/`.
+   This removes the database, configuration (including your API key), backups, and any code indexes.
+   Uninstalling the npm package does not touch these directories, so removing them is the way to
    erase all local state.
 
 ## Exporting your data

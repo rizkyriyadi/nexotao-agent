@@ -5,6 +5,7 @@
 // how a user takes their data out or removes it. Everything returned here is
 // passed through `redactValue` so secrets never reach an export, an audit
 // summary, or a deletion report.
+import { promises as fs } from "node:fs";
 import { and, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./db/database";
 import {
@@ -174,6 +175,54 @@ export class DataControlError extends Error {
   }
 }
 
+/** Everything a project leaves outside its database rows. Injectable so the
+ *  tests exercise the real code path against a throwaway directory. */
+export type PurgeDeps = {
+  graphDir?: (projectId: string) => string;
+  dropCodeIndex?: (projectId: string) => Promise<boolean>;
+};
+
+/**
+ * Remove a deleted project's on-disk artifacts: the work-history graph it wrote
+ * under `~/.nexotao/graph/<projectId>/`, and the symbol index the code layer
+ * keeps in the CLI's shared cache. Neither cascades off the project row, so
+ * before this both survived a deletion the user was told was complete — and the
+ * code index is a symbol-level map of their source sitting in a directory
+ * outside NEXOTAO_DATA_DIR entirely.
+ *
+ * Each step is independently guarded and this never throws. A cache file held
+ * open by another process must not turn a confirmed deletion into a failure;
+ * the counts simply report 0 and the rows are gone regardless.
+ *
+ * Worktrees are deliberately NOT removed: `~/.nexotao/worktrees/<repoHash>/` is
+ * keyed by repository, so two projects on one repo share it, and deleting it
+ * without `git worktree prune` strands the repo's own registry. The note says
+ * so by name rather than leaving the user to discover the directory.
+ */
+export async function purgeProjectArtifacts(
+  projectId: string,
+  deps: PurgeDeps = {},
+): Promise<{ deleted: Record<string, number>; note: string }> {
+  const deleted: Record<string, number> = { workGraph: 0, codeIndex: 0 };
+
+  try {
+    const dir = deps.graphDir ? deps.graphDir(projectId) : (await import("./graph-data")).graphDir(projectId);
+    await fs.stat(dir); // count only what was actually there
+    await fs.rm(dir, { recursive: true, force: true });
+    deleted.workGraph = 1;
+  } catch { /* never built, already gone, or unreadable — all the same outcome */ }
+
+  try {
+    const drop = deps.dropCodeIndex ?? (await import("./code-memory")).dropCodeIndex;
+    if (await drop(projectId)) deleted.codeIndex = 1;
+  } catch { /* the index is optional; its absence is the normal case */ }
+
+  return {
+    deleted,
+    note: " Local graph files and the code index for this project were removed. Git worktrees under ~/.nexotao/worktrees/ are shared per repository and are left in place; remove them with `git worktree prune` if no other project uses that repository.",
+  };
+}
+
 /** Delete all deletable local data for a project and report exactly what was
  * removed and what was intentionally kept. Requires explicit confirmation.
  *
@@ -181,15 +230,18 @@ export class DataControlError extends Error {
  * and are removed by hand to avoid orphans: `run_events` (keyed by run id, no
  * foreign key) and `documents`/`document_revisions` (only the join row cascades
  * from an issue). The append-only `activity_log` is deliberately RETAINED — it
- * is the durable audit trail — so the outcome reports it under `retained`. */
+ * is the durable audit trail — so the outcome reports it under `retained`.
+ *
+ * On-disk artifacts are purged after the write, not inside it: `database.write`
+ * takes a synchronous callback, so filesystem work cannot live in there. */
 export async function deleteProjectData(
   database: AppDatabase,
   projectId: string,
-  options: { confirm: boolean },
+  options: { confirm: boolean; purge?: PurgeDeps },
   now = Date.now(),
 ): Promise<DeletionOutcome> {
   if (!options.confirm) throw new DataControlError("confirmation_required", "Deletion requires explicit confirmation");
-  return database.write((db) => {
+  const outcome = await database.write((db) => {
     const project = db.select().from(projects).where(eq(projects.id, projectId)).get();
     if (!project) throw new DataControlError("not_found", "Project not found");
 
@@ -246,6 +298,13 @@ export async function deleteProjectData(
         "All other project records are removed, including redacted run events and document history.",
     } satisfies DeletionOutcome;
   });
+
+  const purged = await purgeProjectArtifacts(projectId, options.purge);
+  return {
+    ...outcome,
+    deleted: { ...outcome.deleted, ...purged.deleted },
+    integrityNote: outcome.integrityNote + purged.note,
+  };
 }
 
 function clipValue(value: unknown): unknown {

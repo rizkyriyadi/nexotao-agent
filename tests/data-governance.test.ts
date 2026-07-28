@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { openDatabase } from "../lib/db/database";
@@ -23,6 +23,9 @@ const config = (name: string, role: "lead" | "worker", reportsTo: string | null 
   runtimeConfig: {}, permissions: { shell: false }, instructions: "Work carefully",
   projectAccess: ["p"], concurrency: 1,
 });
+
+/** Artifact purge that touches nothing: no graph directory, no CLI spawn. */
+const quiet = { graphDir: () => path.join(tmpdir(), "nexotao-absent-graph-dir"), dropCodeIndex: async () => false };
 
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-governance-"));
@@ -163,10 +166,12 @@ test("delete removes eligible data, reports the outcome, retains audit, and leav
     await repositories.putDocument({ issueId: "i", key: "plan", body: `plan with ${SECRET}`, createdByType: "user" });
     await repositories.appendActivity({ actorType: "user", actorId: null, action: "note", entityType: "issue", entityId: "i", summary: { text: "kept" } });
 
-    await assert.rejects(() => deleteProjectData(database, "p", { confirm: false }), (error: unknown) => error instanceof DataControlError && error.code === "confirmation_required");
-    await assert.rejects(() => deleteProjectData(database, "missing", { confirm: true }), (error: unknown) => error instanceof DataControlError && error.code === "not_found");
+    await assert.rejects(() => deleteProjectData(database, "p", { confirm: false, purge: quiet }), (error: unknown) => error instanceof DataControlError && error.code === "confirmation_required");
+    await assert.rejects(() => deleteProjectData(database, "missing", { confirm: true, purge: quiet }), (error: unknown) => error instanceof DataControlError && error.code === "not_found");
 
-    const outcome = await deleteProjectData(database, "p", { confirm: true });
+    // No real CLI spawn and no real ~/.nexotao writes: the artifact purge has
+    // its own test below.
+    const outcome = await deleteProjectData(database, "p", { confirm: true, purge: quiet });
     assert.equal(outcome.deleted.agents, 1);
     assert.equal(outcome.deleted.issues, 1);
     assert.equal(outcome.deleted.heartbeatRuns, 1);
@@ -184,6 +189,65 @@ test("delete removes eligible data, reports the outcome, retains audit, and leav
     assert.equal(database.read((db) => db.select().from(documents).all()).length, 0, "no orphaned documents");
     // The append-only audit trail survives as the durable record.
     assert.equal(database.read((db) => db.select().from(activityLog).where(eq(activityLog.entityId, "i")).all()).length, 1);
+  } finally {
+    await database.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/* ── the half of a deletion that is not in the database ──────────────────────
+ * "Delete my project" used to clear rows and leave two things behind: the work
+ * graph under ~/.nexotao/graph/<id>/ (four such orphaned directories were found
+ * on a real machine) and, since the code layer landed, a symbol-level index of
+ * the user's source in a cache directory outside NEXOTAO_DATA_DIR that they were
+ * never told about. Both now go with the rows.
+ *
+ * The second half of this test is the more important one: a purge that fails —
+ * a locked cache file, a CLI that is not installed, a directory owned by
+ * another user — must not fail the deletion. The rows are already gone; turning
+ * that into an error would tell the user nothing was deleted when most of it
+ * was. */
+
+test("deleting a project removes its graph files and code index, and a failed purge still deletes", async () => {
+  const { dir, database } = await fixture();
+  try {
+    const graphDir = path.join(dir, "graph", "p");
+    await mkdir(graphDir, { recursive: true });
+    await writeFile(path.join(graphDir, "work.json"), JSON.stringify({ nodes: [], edges: [] }));
+
+    const dropped: string[] = [];
+    const outcome = await deleteProjectData(database, "p", {
+      confirm: true,
+      purge: { graphDir: () => graphDir, dropCodeIndex: async (id) => { dropped.push(id); return true; } },
+    });
+
+    assert.equal(outcome.deleted.workGraph, 1, "the project's graph directory is removed");
+    assert.equal(outcome.deleted.codeIndex, 1, "and its code index with it");
+    assert.deepEqual(dropped, ["p"], "the index dropped is the one keyed by this project");
+    assert.equal(await stat(graphDir).then(() => true, () => false), false, "nothing is left on disk");
+    // The user is told about the one thing we deliberately do not touch.
+    assert.match(outcome.integrityNote, /worktrees/);
+    // The existing row counts still ride in the same record, so the settings
+    // page's Object.values reduce picks the new keys up unchanged.
+    assert.equal(outcome.deleted.agents, 0);
+
+    // A purge where every step blows up is still a successful deletion.
+    const { dir: dir2, database: database2 } = await fixture();
+    try {
+      const failed = await deleteProjectData(database2, "p", {
+        confirm: true,
+        purge: {
+          graphDir: () => { throw new Error("EACCES"); },
+          dropCodeIndex: async () => { throw new Error("spawn ENOENT"); },
+        },
+      });
+      assert.equal(failed.deleted.workGraph, 0);
+      assert.equal(failed.deleted.codeIndex, 0);
+      assert.equal(database2.read((db) => db.select().from(projects).where(eq(projects.id, "p")).get()), undefined, "the rows are gone regardless");
+    } finally {
+      await database2.close();
+      await rm(dir2, { recursive: true, force: true });
+    }
   } finally {
     await database.close();
     await rm(dir, { recursive: true, force: true });

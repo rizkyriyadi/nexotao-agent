@@ -5,7 +5,7 @@ database, backups, file permissions, and portability.
 
 ## Location
 
-All state lives under a single data directory:
+Almost all state lives under a single data directory:
 
 - **Default:** `~/.nexotao`
 - **Override:** set `NEXOTAO_DATA_DIR` to an absolute path.
@@ -16,7 +16,38 @@ The directory is created with mode `0700` (owner-only) and re-chmodded on write.
 | --- | --- |
 | `config.json` | Local configuration: API key, selected model, onboarding state, active project, optional search key, retention settings. Mode `0600`. |
 | `nexotao.sqlite` | The application database (SQLite). Mode `0600`. |
+| `graph/<projectId>/work.json` | The project's work-history graph — tasks, runs, agents and the links between them. Rebuilt on demand and removed when the project is deleted. |
+| `worktrees/<repoHash>/<run>/` | Throwaway git worktrees, one per run, keyed by repository. Shared between projects that point at the same repository, so they are **not** removed when a project is deleted — see [Deleting a project](#deleting-a-project). |
+| `tools/` | The optional code-index CLI, if you installed it from the graph page. Nothing else is ever installed here. |
 | `backups/json-v1-<timestamp>/` | One-time backup of legacy JSON files taken during migration to SQLite (only present if you upgraded from a JSON-storage version). Mode `0700`, files `0600`. |
+
+### One directory outside the data directory
+
+The optional code index writes its SQLite databases to the CLI's own cache, **not** to your data
+directory:
+
+| Path | Contents |
+| --- | --- |
+| `~/.cache/codebase-memory-mcp/nexotao-idx-<projectId>.db` | A symbol-level index of the project's source: function and class names, their file and line ranges, and the call graph between them. Roughly 2–11 MB per repository. |
+
+This location is fixed by the CLI and honours neither `NEXOTAO_DATA_DIR` nor the `0700` regime above,
+so it is worth knowing three things about it:
+
+- **It is not covered by the backup steps below.** Copying `~/.nexotao` does not copy it. That is
+  usually fine — the index is derived data and rebuilds from your source in about a second.
+- **The cache is shared.** Indexes you built yourself by running the CLI live in the same directory.
+  Nexotao only ever creates and deletes files carrying its own `nexotao-idx-` prefix; yours are never
+  touched.
+- **It is removed when the project is deleted**, along with `graph/<projectId>/`.
+
+If you never install the code index, this directory does not exist.
+
+### Deleting a project
+
+Deleting a project from Settings → Data removes its database rows, its `graph/<projectId>/`
+directory, and its `nexotao-idx-` code index. It leaves the append-only activity log (the durable
+audit trail) and any git worktrees under `worktrees/`, because those are keyed by repository rather
+than by project. If no other project uses that repository, remove them with `git worktree prune`.
 
 ## Database
 
