@@ -3,6 +3,7 @@ import { getConfig, saveConfig, publicView, type Config } from "@/lib/config";
 import { addProject, getActiveProject } from "@/lib/store";
 import { seedAgents } from "@/lib/issues";
 import { AGENT_MODES, type AgentMode } from "@/lib/execution-policy";
+import { refreshCodeIndex } from "@/lib/code-memory";
 
 export const runtime = "nodejs";
 
@@ -33,6 +34,9 @@ export async function POST(req: Request) {
     const p = await addProject(body.project);
     patch.activeProjectId = p.id;
     await seedAgents(p.id, p.agents ?? []); // create the lead + specialist workers
+    // Fire-and-forget beside seedAgents: a cold index can take minutes, and
+    // onboarding must not sit on a spinner waiting for one.
+    void refreshCodeIndex(p.id, p.path, { mode: "moderate" }).catch(() => null);
   }
   const c = await saveConfig(patch);
   return NextResponse.json({ ...publicView(c), project: await getActiveProject() });

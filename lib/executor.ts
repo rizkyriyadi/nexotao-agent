@@ -6,6 +6,7 @@ import { promises as fs } from "fs";
 import { getConfig } from "./config";
 import { getProject, addAgentRun, listProjects } from "./store";
 import { appendRunToWorkGraph } from "./graphify";
+import { refreshCodeIndex } from "./code-memory";
 import { expandHome } from "./paths";
 import { DEFAULT_MODEL } from "./nexotao";
 import { createRun, type RunEvent } from "./run-manager";
@@ -22,6 +23,11 @@ import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runt
 import { GitWorkspaceManager } from "./git-workspace";
 import { isBlockerResolved } from "./blocker-attention";
 import { recordCycleSnapshots } from "./work-analytics";
+
+/** How long a run start will wait for its code index to catch up before going
+ *  ahead anyway. A warm re-index measures ~0.1–0.6 s, so this is nearly never
+ *  reached; it exists so a cold first index of a large repo cannot stall a run. */
+const INDEX_WAIT_MS = 1_500;
 
 let runtimePromise: Promise<DurableHeartbeatRuntime> | undefined;
 async function heartbeatRuntime() {
@@ -231,6 +237,16 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
         executionRoot = assignment.workspacePath;
         beforeMutation = workspaceManager.mutationGuard(issueId, runId);
       }
+      // The agent's first instruction is to call graph_query before reading
+      // files, so the index wants to be current *before* the run starts, not
+      // after. We wait on a deadline rather than on the refresh: a warm
+      // re-index is well under a second, but a cold first index of a large repo
+      // must not hold up the run — it keeps going in the background and the
+      // next trigger joins it instead of starting over.
+      await Promise.race([
+        refreshCodeIndex(projectId, root, { mode: "fast" }).catch(() => null),
+        new Promise((resolve) => setTimeout(resolve, INDEX_WAIT_MS).unref()),
+      ]);
       result = await runIssueAgent({
         run, apiKey, model, root: executionRoot, mode, agentName: agent.name, messages, beforeMutation,
         teammates: roster.map((a) => a.name), delegate,
@@ -309,6 +325,12 @@ async function onIssueFinished(
   // are fire-and-forget so run completion isn't slowed or blocked by indexing.
   addAgentRun(projectId, { agent: agent.name, task: issue.title, summary: summary.slice(0, 400), ok: ok && !truncated })
     .then((run) => appendRunToWorkGraph(projectId, { run, issue: { identifier: issue.ref, title: issue.title, status } }))
+    .catch(() => {});
+  // The run's work has just been fast-forwarded into the user's branch, so this
+  // is where the new code lands in the canonical root. Fire-and-forget for the
+  // same reason as the work graph above: nothing about finishing waits on it.
+  getProject(projectId)
+    .then((project) => (project ? refreshCodeIndex(projectId, project.path, { mode: "fast" }) : null))
     .catch(() => {});
   tick(projectId);
 }

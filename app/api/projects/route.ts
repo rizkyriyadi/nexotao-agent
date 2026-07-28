@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getConfig, saveConfig } from "@/lib/config";
 import { listProjects, addProject, listSessions, listIssues } from "@/lib/store";
+import { refreshCodeIndex } from "@/lib/code-memory";
 
 export const runtime = "nodejs";
 
@@ -21,6 +22,9 @@ export async function POST(req: Request) {
   const body = (await req.json()) as { name: string; path: string; mode?: "single" | "multi"; agents?: any[] };
   const p = await addProject({ name: body.name, path: body.path, mode: body.mode ?? "single", agents: body.agents ?? [] });
   await saveConfig({ activeProjectId: p.id });
+  // Start the code index, but never wait for it: a cold index of an unknown repo
+  // can run for minutes and onboarding must not hang behind it.
+  void refreshCodeIndex(p.id, p.path, { mode: "moderate" }).catch(() => null);
   return NextResponse.json({ project: p });
 }
 

@@ -2,8 +2,7 @@ import { NextResponse } from "next/server";
 import { getActiveProject } from "@/lib/store";
 import { readProjectGraph } from "@/lib/graph-data";
 import { buildWorkGraph } from "@/lib/graphify";
-import { detectGraphify, refreshCodeGraph } from "@/lib/graphify-code";
-import { expandHome } from "@/lib/paths";
+import { detectCodeMemory, indexProject } from "@/lib/code-memory";
 
 export const runtime = "nodejs";
 
@@ -35,9 +34,10 @@ export async function GET() {
 //     "build knowledge first" step: every existing issue, run, agent, session
 //     and memory link is indexed up front instead of only accruing as new runs
 //     finish.
-//  2. Code graph (Phase 5 / NEXA-32) — layered on top only when the optional
-//     `graphify` CLI is on PATH. A clean no-op otherwise; `available` lets the UI
-//     hint at the opt-in install without ever installing anything itself.
+//  2. Code index — symbols and call graph from the optional
+//     `codebase-memory-mcp` CLI. A clean no-op when it is not installed;
+//     `available` is what lets the UI offer the install without this route ever
+//     installing anything itself.
 export async function POST() {
   const project = await getActiveProject();
   if (!project) {
@@ -47,16 +47,23 @@ export async function POST() {
   // 1. Work-history graph — always rebuilt from the full task history.
   const { graph } = await buildWorkGraph(project.id);
 
-  // 2. Optional graphify code graph — layered on only when the CLI is present.
-  const available = await detectGraphify();
-  const root = expandHome(project.path || process.cwd());
-  const codeNodes = available ? await refreshCodeGraph(project.id, root, { autoInstall: false }) : 0;
+  // 2. Optional code index. Awaited, unlike every other refresh trigger: this
+  //    one is an explicit button press with a spinner behind it, so returning
+  //    before the count exists would report zero symbols for a healthy index.
+  const available = await detectCodeMemory();
+  const status = available ? await indexProject(project.id, project.path, { mode: "moderate" }) : null;
 
   return NextResponse.json({
     ok: true,
     project: { id: project.id, name: project.name },
     work: { nodes: graph.nodes.length, edges: graph.edges.length },
-    code: { available, nodes: codeNodes },
+    code: {
+      available,
+      project: status?.project ?? null,
+      nodes: status?.nodes ?? 0,
+      edges: status?.edges ?? 0,
+      indexedAt: status?.indexedAt ?? null,
+    },
     generatedAt: graph.generatedAt,
   });
 }

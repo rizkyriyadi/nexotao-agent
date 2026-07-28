@@ -6,9 +6,11 @@
 //   - query side (Phase 2 / NEXA-29, this file): pure-TS structural queries over that
 //     graph.json — queryGraph / pathGraph / explainNode. No model call, read-only.
 //
-// The schema is a superset of graphify's graph.json so the same query/path/explain code
-// and the graph.html renderer work over both the native work-history layer and an
-// optional code-graph layer. See the `graphify-design` doc §4.1–4.3.
+// The schema keeps room for code-shaped nodes (kind: symbol, `source` as
+// "lib/agent.ts:15") because the renderer and these queries were written to span
+// both layers. Code itself no longer lands on disk here: it lives in the
+// codebase-memory-mcp index (lib/code-memory.ts) and is merged into the tool
+// answers at query time by lib/graph-answer.ts.
 
 import { promises as fs } from "fs";
 import path from "path";
@@ -52,16 +54,6 @@ export function graphDir(): string {
 /** Path to one project's work-history graph. */
 export function workGraphPath(projectId: string): string {
   return path.join(graphDir(), projectId, "work.json");
-}
-
-/**
- * Path to one project's optional code graph (Phase 5 / NEXA-32). Written by the
- * graphify bridge (lib/graphify-code.ts) when the user has the `graphify` CLI on
- * PATH; absent otherwise. Same location the UI reader (lib/graph-data.ts) loads
- * from, so `graph_query`/`path`/`explain` and the /graph page see one code graph.
- */
-export function codeGraphPath(projectId: string): string {
-  return path.join(graphDir(), projectId, "graphify-out", "graph.json");
 }
 
 // ---------------------------------------------------------------------------
@@ -392,11 +384,10 @@ export async function loadWorkGraph(projectId?: string): Promise<WorkGraph> {
     for (const n of g.nodes) if (!nodes.has(n.id)) nodes.set(n.id, n);
     for (const e of g.edges) edges.set(`${e.from} ${e.rel} ${e.to}`, e);
   };
-  // Each project contributes its work-history graph plus, when present, its
-  // optional graphify code graph (Phase 5) — merged so code + history query as one.
+  // Each project contributes its work-history graph. Code lives in a separate
+  // index now (lib/code-memory.ts) and is merged at answer time, not on disk.
   const absorbProject = async (id: string) => {
     absorb(await readGraphFile(workGraphPath(id)));
-    absorb(await readGraphFile(codeGraphPath(id)));
   };
 
   if (projectId) {
