@@ -6,7 +6,7 @@ import { resolveWithin, rel } from "./paths";
 import { webFetch, webSearch } from "./websearch";
 import { getConfig } from "./config";
 import { extractFileText } from "./extract";
-import { queryGraph, pathGraph, explainNode } from "./graphify";
+import { answerGraphQuery, answerGraphPath, answerGraphExplain } from "./graph-answer";
 
 const SKIP = new Set(["node_modules", ".git", ".next", "dist", "build", ".cache"]);
 const MUTATING = new Set(["write_file", "edit_file", "bash"]);
@@ -92,7 +92,7 @@ export const TOOL_DEFS = [
   {
     name: "graph_query",
     description:
-      "Query the work-history graph with a plain-language question to see what the codebase and past tasks already know about a topic. Returns a scoped subgraph (matching tasks, runs, symbols, and their connections). Prefer this over blind file reads when starting work.",
+      "Query the project's code index and work-history graph together with a plain-language question. Returns matching code symbols with their file:line locations, plus related tasks, runs and their connections. Prefer this over blind file reads when starting work.",
     input_schema: {
       type: "object",
       properties: { question: { type: "string", description: "Plain-language question, e.g. 'rate limiting / model routing'" } },
@@ -101,7 +101,7 @@ export const TOOL_DEFS = [
   },
   {
     name: "graph_path",
-    description: "Find the shortest path between two nodes in the work-history graph (by id like 'task:NEXA-14' or by label). Reveals how two concepts, tasks, or symbols are connected.",
+    description: "Find how two things are connected: the shortest path through the work-history graph (by id like 'task:NEXA-14' or by label), falling back to the call graph when both are code symbols.",
     input_schema: {
       type: "object",
       properties: { a: { type: "string", description: "Start node id or label" }, b: { type: "string", description: "End node id or label" } },
@@ -110,10 +110,10 @@ export const TOOL_DEFS = [
   },
   {
     name: "graph_explain",
-    description: "Explain one node in the work-history graph: its kind, source location, community, degree, and all connections. Accepts a node id or a label.",
+    description: "Explain one thing by name: a work-history node (kind, source, degree, connections) or, for a code symbol, its file:line location, complexity and source. Accepts a node id, a label, or a function/class name.",
     input_schema: {
       type: "object",
-      properties: { id: { type: "string", description: "Node id (e.g. 'task:NEXA-26') or label" } },
+      properties: { id: { type: "string", description: "Node id (e.g. 'task:NEXA-26'), label, or code symbol name" } },
       required: ["id"],
     },
   },
@@ -211,17 +211,21 @@ export async function executeTool(
         const r = await webFetch(String(input.url ?? ""));
         return { ok: r.ok, output: r.text, display: r.ok ? "fetched" : "failed" };
       }
+      // The graph tools answer from two layers — the project's code index and its
+      // work history — merged in lib/graph-answer.ts. `root` is what tells that
+      // module which project is asking; a run executes in a worktree, so it maps
+      // the root back to the canonical repo before looking anything up.
       case "graph_query": {
-        const r = await queryGraph(String(input.question ?? ""));
-        return { ok: r.ok, output: r.text, display: `${r.nodes.length} nodes` };
+        const r = await answerGraphQuery(String(input.question ?? ""), root);
+        return { ok: r.ok, output: r.text, display: r.display };
       }
       case "graph_path": {
-        const r = await pathGraph(String(input.a ?? ""), String(input.b ?? ""));
-        return { ok: r.ok, output: r.text, display: r.path.length ? `${r.edges.length} hops` : "no path" };
+        const r = await answerGraphPath(String(input.a ?? ""), String(input.b ?? ""), root);
+        return { ok: r.ok, output: r.text, display: r.display };
       }
       case "graph_explain": {
-        const r = await explainNode(String(input.id ?? ""));
-        return { ok: r.ok, output: r.text, display: r.node ? r.node.kind : "not found" };
+        const r = await answerGraphExplain(String(input.id ?? ""), root);
+        return { ok: r.ok, output: r.text, display: r.display };
       }
       default:
         return { ok: false, output: `Unknown tool: ${name}` };
