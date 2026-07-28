@@ -7,7 +7,7 @@ import { eq } from "drizzle-orm";
 import { openDatabase } from "../lib/db/database";
 import { ControlPlaneRepositories } from "../lib/db/repositories";
 import { activityLog, approvals, projects } from "../lib/db/schema";
-import { describeToolAction, evaluateExecutionPolicy, resolveExecutionApproval, modeToPolicy, modeSystemDirective } from "../lib/execution-policy";
+import { describeToolAction, evaluateExecutionPolicy, expireInvalidExecutionApprovals, resolveExecutionApproval, modeToPolicy, modeSystemDirective } from "../lib/execution-policy";
 import { createRun } from "../lib/run-manager";
 
 test("shared policy covers network, destructive, and unknown bypass attempts", () => {
@@ -101,6 +101,33 @@ test("approval resolution is persistent, idempotent, and resumes once", async ()
       risk: "medium", preview: "x", payload: {}, status: "pending", expiresAt: Date.now() + 60_000,
     });
     assert.equal((await resolveExecutionApproval({ approvalId: late.id, decision: "allow" }, database)).state, "expired");
+  } finally {
+    await database.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+// The sweep is named for execution approvals and must stay scoped to them. A
+// plan approval carries no runId, so a sweep over every pending row expired it
+// on the first inbox load and the non-execution decision path never saw one.
+test("expiring stale execution approvals leaves non-execution approvals pending", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "nexotao-approval-scope-"));
+  const database = await openDatabase(path.join(dir, "db.sqlite"), { migrateJson: false });
+  try {
+    await database.write((db) => db.insert(projects).values({ id: "p", name: "P", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run());
+    const repositories = new ControlPlaneRepositories(database);
+    const plan = await repositories.createApproval({
+      type: "plan", projectId: "p", issueId: null, payload: { summary: "Approve the rollout" }, status: "pending",
+    });
+    const orphaned = await repositories.createApproval({
+      type: "execution", projectId: "p", issueId: null, runId: "gone-after-restart", toolCallId: "tool-1",
+      action: "exec", target: "npm test", risk: "medium", preview: "npm test", payload: {}, status: "pending",
+    });
+
+    assert.equal(await expireInvalidExecutionApprovals("p", database), 1);
+    const statusOf = (id: string) => database.read((db) => db.select().from(approvals).where(eq(approvals.id, id)).get())?.status;
+    assert.equal(statusOf(orphaned.id), "expired");
+    assert.equal(statusOf(plan.id), "pending");
   } finally {
     await database.close();
     await rm(dir, { recursive: true, force: true });

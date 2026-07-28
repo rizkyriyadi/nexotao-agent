@@ -1,15 +1,18 @@
 import { NextResponse } from "next/server";
 import { getConfig, saveConfig } from "@/lib/config";
-import { listProjects, addProject, listSessions, listTasks } from "@/lib/store";
+import { listProjects, addProject, listSessions, listIssues } from "@/lib/store";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  const [projects, cfg, sessions, tasks] = await Promise.all([listProjects(), getConfig(), listSessions(), listTasks()]);
+  // Counted from `issues`, not the legacy `tasks` table: nothing has written a
+  // `tasks` row since work moved to issues, so the card read "0 tasks" for every
+  // project that had plenty.
+  const [projects, cfg, sessions, work] = await Promise.all([listProjects(), getConfig(), listSessions(), listIssues()]);
   const withCounts = projects.map((p) => ({
     ...p,
     sessions: sessions.filter((s) => s.projectId === p.id).length,
-    tasks: tasks.filter((t) => t.projectId === p.id).length,
+    tasks: work.filter((issue) => issue.projectId === p.id).length,
   }));
   return NextResponse.json({ projects: withCounts, activeId: cfg.activeProjectId ?? null });
 }

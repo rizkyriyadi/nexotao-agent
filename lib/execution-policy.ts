@@ -158,10 +158,16 @@ export async function resolveExecutionApproval(input: { approvalId?: string; run
   if (result.state === "resolved" && result.run && result.approval?.toolCallId) result.run.resolveApproval(result.approval.toolCallId, input.decision);
   return { state: result.state, approval: result.approval };
 }
+/** Expire pending *execution* approvals whose run is gone — a tool call nobody
+ *  can resume any more. Scoped to `type: "execution"` deliberately: those are the
+ *  only approvals gated on a live in-memory run. A plan approval carries no
+ *  `runId`, so sweeping it here would expire it the moment anyone opened the
+ *  inbox, and the non-execution decision path would never see a pending row. */
 export async function expireInvalidExecutionApprovals(projectId: string, databaseOverride?: AppDatabase) {
   const database = databaseOverride ?? await getDatabase();
   return database.write((db) => {
-    const pending = db.select().from(approvals).where(and(eq(approvals.projectId, projectId), eq(approvals.status, "pending"))).all();
+    const pending = db.select().from(approvals)
+      .where(and(eq(approvals.projectId, projectId), eq(approvals.status, "pending"), eq(approvals.type, "execution"))).all();
     const now = Date.now();
     let expired = 0;
     for (const approval of pending) {

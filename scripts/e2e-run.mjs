@@ -71,6 +71,52 @@ async function pageJson(page, path, init) {
   }, path, init ?? null);
 }
 
+/* The two ways the driver loses its grip on a healthy app.
+
+   A `goto` to a route the Next router has already prefetched detaches the frame
+   puppeteer is holding: the tab keeps working, the driver's handle to it does
+   not. Every destination here hangs off a prefetched `/board/[id]` link.
+
+   `chrome-headless-shell` also segfaults occasionally, deep in its own Cocoa run
+   loop (`objc_autoreleasePoolPop`, no app frame on the stack). That is a browser
+   bug, so aborting the remaining checks over it would report a driver crash as
+   an app failure. Both recoveries end the same way: get a live tab on the target
+   URL, relaunching the browser if that is what it takes. Every target here
+   carries the session token, so a relaunch — which loses the cookie jar with the
+   old browser — re-authenticates on the way in. */
+const VIEWPORT = { width: 1280, height: 900 };
+let browser = null;
+let browserPath = null;
+
+async function launchBrowser() {
+  browser = await puppeteer.launch({ executablePath: browserPath, args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] });
+  return browser;
+}
+
+async function freshPage(target) {
+  if (!browser?.connected) await launchBrowser();
+  const page = await browser.newPage();
+  await page.setViewport(VIEWPORT);
+  await page.goto(target, { waitUntil: "networkidle2" });
+  return page;
+}
+
+async function visit(page, target) {
+  try {
+    await page.goto(target, { waitUntil: "networkidle2" });
+    return page;
+  } catch (error) {
+    if (!/detached|disposed|Target closed|Connection closed|Session closed/i.test(String(error))) throw error;
+    const dead = !browser?.connected;
+    if (dead) console.log("  [browser died — relaunching; this is a chrome-headless-shell crash, not the app]");
+    const fresh = await freshPage(target);
+    if (!dead) await page.close().catch(() => {});
+    return fresh;
+  }
+}
+
+const settle = (ms = 900) => new Promise((r) => setTimeout(r, ms));
+
 async function poll(fn, timeoutMs = 8000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 200)); }
@@ -78,8 +124,8 @@ async function poll(fn, timeoutMs = 8000) {
 }
 
 async function main() {
-  const executablePath = resolveBrowser();
-  if (!executablePath) {
+  browserPath = resolveBrowser();
+  if (!browserPath) {
     console.error("No Chromium found. Install one: npx @puppeteer/browsers install chrome-headless-shell@stable");
     process.exit(2);
   }
@@ -90,7 +136,8 @@ async function main() {
   const artifacts = join(ROOT, "e2e-artifacts");
   await mkdir(artifacts, { recursive: true });
 
-  let server, browser;
+  // `browser` is module-level so `visit` can replace it after a crash.
+  let server;
   try {
     // 1. Seed the fixture into the data dir.
     const seedOut = await run(process.execPath, ["--import", "tsx", join(ROOT, "scripts/e2e/seed.ts")], {
@@ -101,57 +148,91 @@ async function main() {
     // 2. Boot the real server and a real browser.
     server = bootServer(port, token, dataDir);
     check("server boots and reports healthy", await waitHealthy(port, token));
-    browser = await puppeteer.launch({ executablePath, args: ["--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage"] });
-    const page = await browser.newPage();
-    await page.setViewport({ width: 1280, height: 900 });
+    await launchBrowser();
+    let page = await browser.newPage();
+    await page.setViewport(VIEWPORT);
 
     // Auth bootstrap: the session_token query sets the httpOnly session cookie.
-    await page.goto(`http://${HOST}:${port}/board?session_token=${token}`, { waitUntil: "networkidle2" });
+    page = await visit(page, `http://${HOST}:${port}/board?session_token=${token}`);
     check("authenticated board renders", (await page.content()).length > 500);
     await page.screenshot({ path: join(artifacts, "01-board.png") });
 
-    // 3. Delegation — add a child issue from the issue detail UI.
-    await page.goto(`http://${HOST}:${port}/board/${ids.root}?session_token=${token}`, { waitUntil: "networkidle2" });
-    await page.waitForSelector('input[aria-label="New child issue title"]');
-    await page.type('input[aria-label="New child issue title"]', "Packaged install smoke");
-    await page.evaluate(() => {
-      const btn = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Add");
-      btn?.click();
+    /* 3. The task page — the prompt-first surface itself.
+
+       `cda50bd` replaced the old per-issue board with this composer, and the
+       delegation and dependency widgets this suite used to click went with it.
+       Those flows are exercised below through the same endpoints the client
+       calls, issued from inside the authenticated page so the session cookie and
+       the Origin check apply exactly as they do to the app. That is a narrower
+       claim than a click — it does not prove a control is reachable — so the
+       rendering the surface *does* still have is asserted here first, and the
+       properties UI that replaced those widgets is covered by e2e-work.mjs. */
+    page = await visit(page, `http://${HOST}:${port}/board/${ids.root}?session_token=${token}`);
+    await page.waitForSelector('textarea[aria-label="Prompt the lead agent"]');
+    const taskPage = await page.evaluate(() => document.body.innerText);
+    check("task page renders its title and composer", taskPage.includes("Ship public beta"));
+    await page.screenshot({ path: join(artifacts, "02-task-page.png") });
+
+    // 4. Delegation — a child issue under the root.
+    const childResp = await pageJson(page, `/api/issues/${ids.root}`, {
+      method: "POST", body: JSON.stringify({ action: "child", title: "Packaged install smoke" }),
     });
+    check("delegation request accepted", childResp.ok, `status ${childResp.status}`);
     const delegated = await poll(async () => {
       const r = await pageJson(page, `/api/issues/${ids.root}`);
       return r.body?.children?.some((c) => c.title === "Packaged install smoke");
     });
     check("delegation creates a child issue", delegated);
-    await page.screenshot({ path: join(artifacts, "02-delegation.png") });
 
-    // 4. Dependencies — add a blocker via the blocker select.
-    await page.select('select[aria-label="Add a blocker"]', ids.blocker);
+    // 5. Dependencies — record a blocker edge on the root.
+    await pageJson(page, "/api/issues", { method: "PATCH", body: JSON.stringify({ id: ids.root, blockedBy: [ids.blocker] }) });
     const dependency = await poll(async () => {
       const r = await pageJson(page, `/api/issues/${ids.root}`);
       return r.body?.blockedBy?.some((b) => b.id === ids.blocker);
     });
     check("dependency edge is recorded", dependency);
-    await page.screenshot({ path: join(artifacts, "03-dependency.png") });
 
-    // 5. Approval — approve the pending plan card.
-    await page.reload({ waitUntil: "networkidle2" });
-    await page.evaluate(() => {
-      const btn = [...document.querySelectorAll("button")].find((b) => b.textContent.trim() === "Approve");
-      btn?.click();
+    /* 6. Approval — decide the pending plan card.
+
+       Plan approvals have no runId, so they go through the issue endpoint rather
+       than /api/approve, which resolves execution approvals against a live run. */
+    const approvalResp = await pageJson(page, `/api/issues/${ids.root}`, {
+      method: "POST", body: JSON.stringify({ action: "approval", approvalId: ids.approvalId, decision: "approved" }),
     });
+    check("approval request accepted", approvalResp.ok, `status ${approvalResp.status}`);
     const approved = await poll(async () => {
       const r = await pageJson(page, `/api/issues/${ids.root}`);
       return r.body?.approvals?.some((a) => a.id === ids.approvalId && a.status === "approved");
     });
     check("approval decision is persisted", approved);
 
-    // 6. Review -> done transition via the Status select.
-    await page.goto(`http://${HOST}:${port}/board/${ids.review}?session_token=${token}`, { waitUntil: "networkidle2" });
-    await page.evaluate(() => {
-      const select = [...document.querySelectorAll("select")].find((s) => s.value === "in_review");
-      if (select) { select.value = "done"; select.dispatchEvent(new Event("change", { bubbles: true })); }
+    /* 7. Review -> done, driven through the real State control.
+
+       The one status transition with a surviving UI: the properties panel on
+       /work. It writes through PATCH /api/work/issues, so the lifecycle guard
+       applies to this click exactly as it would to a drag. */
+    page = await visit(page, `http://${HOST}:${port}/work?session_token=${token}`);
+    await settle(1200);
+    const opened = await page.evaluate((title) => {
+      const card = [...document.querySelectorAll("button, article, li")].find((el) => el.textContent?.includes(title));
+      if (!card) return false;
+      (card.querySelector("button") ?? card).click();
+      return true;
+    }, "Verify smoke matrix");
+    check("issue card opens the properties panel", opened);
+    await settle(700);
+
+    const moved = await page.evaluate(() => {
+      const select = document.querySelector('select[aria-label="State"]');
+      if (!select) return null;
+      const option = [...select.options].find((o) => /done/i.test(o.textContent ?? ""));
+      if (!option) return null;
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
+      setter.call(select, option.value);
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      return option.textContent;
     });
+    check("State control offers a Done column", Boolean(moved), String(moved));
     const done = await poll(async () => (await pageJson(page, `/api/issues/${ids.review}`)).body?.issue?.status === "done");
     check("review issue transitions to done", done);
     await page.screenshot({ path: join(artifacts, "04-review-done.png") });
@@ -175,14 +256,14 @@ async function main() {
     await stopServer(server);
     server = bootServer(port, token, dataDir);
     check("server reboots healthy", await waitHealthy(port, token));
-    await page.goto(`http://${HOST}:${port}/board/${ids.review}?session_token=${token}`, { waitUntil: "networkidle2" });
+    page = await visit(page, `http://${HOST}:${port}/board/${ids.review}?session_token=${token}`);
     const survivedReview = (await pageJson(page, `/api/issues/${ids.review}`)).body?.issue?.status === "done";
     const survivedChild = (await pageJson(page, `/api/issues/${ids.root}`)).body?.children?.some((c) => c.title === "Packaged install smoke");
     check("done status survives restart", survivedReview);
     check("delegated child survives restart", survivedChild);
     await page.screenshot({ path: join(artifacts, "05-restart-recovered.png") });
 
-    await writeFile(join(artifacts, "e2e-results.json"), JSON.stringify({ ranAt: Date.now(), executablePath, results }, null, 2));
+    await writeFile(join(artifacts, "e2e-results.json"), JSON.stringify({ ranAt: Date.now(), executablePath: browserPath, results }, null, 2));
   } finally {
     if (browser) await browser.close().catch(() => {});
     await stopServer(server);
