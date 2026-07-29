@@ -67,13 +67,13 @@ export function CalendarLayout({ groups, data, onOpen }: { groups: IssueGroup[];
       <div className="grid grid-cols-7 gap-px overflow-hidden rounded-2xl border border-line bg-line">
         {WEEKDAYS.map((day) => <div key={day} className="bg-warm-bone px-2 py-1 text-[10px] font-medium text-pebble">{day}</div>)}
         {cells.map((cell, index) => (
-          <div key={index} className={`min-h-[84px] bg-white/60 p-1.5 ${cell.inMonth ? "" : "opacity-40"}`}>
-            <span className={`text-[10px] ${dayKey(cell.date.getTime()) === today ? "rounded bg-electric-indigo px-1 text-white" : "text-pebble"}`}>
+          <div key={index} className={`min-h-[84px] bg-raise/60 p-1.5 ${cell.inMonth ? "" : "opacity-40"}`}>
+            <span className={`text-[10px] ${dayKey(cell.date.getTime()) === today ? "rounded bg-electric-indigo px-1 text-on-indigo" : "text-pebble"}`}>
               {cell.date.getDate()}
             </span>
             <div className="mt-1 space-y-0.5">
               {cell.issues.slice(0, 3).map((issue) => (
-                <button key={issue.id} onClick={() => onOpen(issue)} className="flex w-full items-center gap-1 rounded border border-line bg-white px-1 py-0.5 text-left text-[10px] text-charcoal hover:border-line-strong">
+                <button key={issue.id} onClick={() => onOpen(issue)} className="flex w-full items-center gap-1 rounded border border-line bg-raise px-1 py-0.5 text-left text-[10px] text-charcoal hover:border-line-strong">
                   <PriorityDot value={issue.priority} /><span className="truncate">{issue.title}</span>
                 </button>
               ))}
@@ -88,7 +88,7 @@ export function CalendarLayout({ groups, data, onOpen }: { groups: IssueGroup[];
           <h3 className="mb-1.5 text-[11px] font-semibold text-pebble">No target date · {undated.length}</h3>
           <div className="flex flex-wrap gap-1.5">
             {undated.map((issue) => (
-              <button key={issue.id} onClick={() => onOpen(issue)} className="flex items-center gap-1.5 rounded-lg border border-line bg-white/70 px-2 py-1 text-[11px] text-charcoal hover:border-line-strong">
+              <button key={issue.id} onClick={() => onOpen(issue)} className="flex items-center gap-1.5 rounded-lg border border-line bg-raise/70 px-2 py-1 text-[11px] text-charcoal hover:border-line-strong">
                 <PriorityDot value={issue.priority} />{issue.title}
               </button>
             ))}

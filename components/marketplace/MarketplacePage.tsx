@@ -28,8 +28,8 @@ function modelLabel(id: string) {
 
 const categoryStyle: Record<string, string> = {
   engineering: "bg-mist-lavender text-deep-violet", product: "bg-electric-indigo/12 text-electric-indigo",
-  design: "bg-amber-50 text-amber-700", growth: "bg-emerald-50 text-emerald-700",
-  data: "bg-sky-50 text-sky-700", operations: "bg-charcoal/8 text-bark-grey",
+  design: "bg-amber/12 text-amber", growth: "bg-lichen-green/12 text-lichen-green",
+  data: "bg-sapphire-link/12 text-sapphire-link", operations: "bg-charcoal/8 text-bark-grey",
 };
 
 function Chip({ children, className = "" }: { children: React.ReactNode; className?: string }) {
@@ -200,10 +200,10 @@ export function MarketplacePage() {
                       ))}
                     </div>
                     <div className="mt-3 flex items-center gap-2 text-[12px]">
-                      <Chip className={rc.modelAvailable ? "bg-mist-lavender text-deep-violet" : "bg-amber-50 text-amber-700"} >
+                      <Chip className={rc.modelAvailable ? "bg-mist-lavender text-deep-violet" : "bg-amber/12 text-amber"} >
                         <Cpu className="size-3" /> {modelLabel(rc.recommendedModel)}
                       </Chip>
-                      {!rc.modelAvailable && <span className="text-amber-700">unavailable</span>}
+                      {!rc.modelAvailable && <span className="text-amber">unavailable</span>}
                     </div>
                     <div className="mt-4 flex justify-end">
                       <Button size="sm" variant="secondary" disabled={busy === rc.id} onClick={() => void hireRole(rc)}>

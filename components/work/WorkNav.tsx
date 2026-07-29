@@ -31,7 +31,7 @@ export function WorkNav() {
             href={tab.href}
             aria-current={on ? "page" : undefined}
             className={`rounded-lg px-2.5 py-1 text-[12px] transition-colors ${
-              on ? "bg-electric-indigo text-white" : "text-pebble hover:bg-black/[.04] hover:text-charcoal"
+              on ? "bg-electric-indigo text-on-indigo" : "text-pebble hover:bg-veil hover:text-charcoal"
             }`}
           >
             {tab.label}

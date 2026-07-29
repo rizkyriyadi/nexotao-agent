@@ -81,7 +81,7 @@ export function WorkSurface() {
   const layoutProps = { groups: view.groups, data, onOpen };
 
   if (loading) return <main className="min-w-0 flex-1 p-8 text-sm text-pebble">Loading work items…</main>;
-  if (error) return <main className="min-w-0 flex-1 p-8"><p className="rounded-2xl border border-line bg-white/60 p-8 text-center text-sm text-pebble">{error}</p></main>;
+  if (error) return <main className="min-w-0 flex-1 p-8"><p className="rounded-2xl border border-line bg-raise/60 p-8 text-center text-sm text-pebble">{error}</p></main>;
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1">

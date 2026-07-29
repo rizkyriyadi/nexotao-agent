@@ -28,8 +28,8 @@ function RowIcon({ node, open }: { node: TreeNode; open: boolean }) {
 /** Git's own colours for working-tree state, as one letter each. Untracked is
  *  `U` rather than git's `??` because a single column reads better in a tree. */
 const STATUS_TONE: Record<string, string> = {
-  M: "text-amber-600", A: "text-emerald-600", U: "text-emerald-600",
-  D: "text-red-500", R: "text-sapphire-link",
+  M: "text-amber", A: "text-lichen-green", U: "text-lichen-green",
+  D: "text-alarm-red", R: "text-sapphire-link",
 };
 
 /** Keep only the nodes whose path matches, plus every ancestor needed to reach
@@ -67,7 +67,7 @@ function Row({
         title={node.path}
         style={{ paddingLeft: 8 + depth * 13 }}
         className={`group flex w-full items-center gap-1.5 rounded-lg py-[3px] pr-2 text-left text-[12.5px] transition-colors ${
-          isSelected ? "bg-electric-indigo/12 text-charcoal" : "text-bark-grey hover:bg-black/[0.035]"
+          isSelected ? "bg-electric-indigo/12 text-charcoal" : "text-bark-grey hover:bg-veil"
         } ${node.ignored ? "opacity-45" : ""}`}
       >
         <ChevronRight
@@ -77,7 +77,7 @@ function Row({
         <RowIcon node={node} open={open} />
         <span className={`min-w-0 flex-1 truncate ${isSelected ? "font-medium" : ""}`}>{node.name}</span>
         {node.status && <span className={`shrink-0 font-mono text-[10px] ${STATUS_TONE[node.status] ?? "text-pebble"}`}>{node.status}</span>}
-        {!node.status && node.dirty && <span className="size-1.5 shrink-0 rounded-full bg-amber-500/70" aria-label="contains changes" />}
+        {!node.status && node.dirty && <span className="size-1.5 shrink-0 rounded-full bg-amber/70" aria-label="contains changes" />}
       </button>
       {node.type === "dir" && open &&
         (node.children ?? []).map((child) => (

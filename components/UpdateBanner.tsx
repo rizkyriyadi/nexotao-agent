@@ -26,7 +26,7 @@ export function UpdateBanner() {
     <div className="flex items-center gap-3 border-b border-line bg-mist-lavender/50 px-6 py-2.5 text-[13px]">
       <ArrowUpCircle className="size-4 shrink-0 text-electric-indigo" />
       <span className="text-charcoal">
-        Update available — <span className="font-medium">v{info.latest}</span>. Your projects & history in <code className="rounded bg-black/[0.05] px-1 py-0.5 font-mono text-[11px]">~/.nexotao</code> are kept.
+        Update available — <span className="font-medium">v{info.latest}</span>. Your projects & history in <code className="rounded bg-veil px-1 py-0.5 font-mono text-[11px]">~/.nexotao</code> are kept.
       </span>
       <button
         onClick={() => { navigator.clipboard?.writeText(cmd).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); }}

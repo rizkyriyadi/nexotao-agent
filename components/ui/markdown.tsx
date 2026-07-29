@@ -33,7 +33,7 @@ function CodeBlock({ children }: { children: ReactNode }) {
         <span className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-pebble">{language ?? "code"}</span>
         <CopyButton text={source} label="Copy code" className="opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100" />
       </div>
-      <pre className="scroll-thin overflow-x-auto rounded-b-xl border border-line bg-[#faf9f7] p-3.5 text-[13px]">{children}</pre>
+      <pre className="scroll-thin overflow-x-auto rounded-b-xl border border-line bg-code-surface/60 p-3.5 text-[13px]">{children}</pre>
     </div>
   );
 }
@@ -65,7 +65,7 @@ function MarkdownImpl({ children, className = "" }: { children: string; classNam
           code: ({ className, children }) => {
             const inline = !className?.includes("language-");
             if (inline) {
-              return <code className="rounded-md bg-black/[0.05] px-1.5 py-0.5 font-mono text-[0.86em] text-charcoal">{children}</code>;
+              return <code className="rounded-md bg-veil px-1.5 py-0.5 font-mono text-[0.86em] text-charcoal">{children}</code>;
             }
             return <code className={`${className ?? ""} font-mono text-[13px] leading-[1.6]`}>{children}</code>;
           },

@@ -27,7 +27,7 @@ export function IssueCard({ issue, data, onOpen, draggable = false, onDragStart,
       role="button"
       tabIndex={0}
       onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); onOpen(issue); } }}
-      className={`group cursor-pointer rounded-xl border border-line bg-white/80 p-2.5 text-left transition-colors hover:border-line-strong focus:outline-none focus-visible:border-electric-indigo ${compact ? "" : "shadow-[0_1px_2px_rgba(0,0,0,0.03)]"}`}
+      className={`group cursor-pointer rounded-xl border border-line bg-raise/80 p-2.5 text-left transition-colors hover:border-line-strong focus:outline-none focus-visible:border-electric-indigo ${compact ? "" : "shadow-[0_1px_2px_rgba(0,0,0,0.03)]"}`}
     >
       <div className="flex items-start gap-2">
         <PriorityDot value={issue.priority} />
@@ -42,12 +42,12 @@ export function IssueCard({ issue, data, onOpen, draggable = false, onDragStart,
             without them. */}
         {issue.parentId && <GitBranch className="size-3 text-pebble" aria-label="Sub-issue" />}
         {issue.blockedBy.length > 0 && (
-          <span className="inline-flex items-center gap-0.5 text-[10px] text-amber-700" title={`${issue.blockedBy.length} blocker(s)`}>
+          <span className="inline-flex items-center gap-0.5 text-[10px] text-amber" title={`${issue.blockedBy.length} blocker(s)`}>
             <Link2 className="size-3" />{issue.blockedBy.length}
           </span>
         )}
         {issue.estimatePoint != null && (
-          <span className="rounded bg-black/[.05] px-1 text-[10px] text-bark-grey" title="Estimate">{issue.estimatePoint}</span>
+          <span className="rounded bg-veil px-1 text-[10px] text-bark-grey" title="Estimate">{issue.estimatePoint}</span>
         )}
         {due && (
           <span className="ml-auto inline-flex items-center gap-0.5 text-[10px] text-pebble"><CalendarDays className="size-3" />{due}</span>

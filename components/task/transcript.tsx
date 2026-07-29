@@ -132,7 +132,7 @@ function ToolGroup({ run }: { run: Run }) {
         <Icon className={`size-3.5 shrink-0 ${spec.iconTint}`} />
         <span className="shrink-0 text-[11.5px] font-medium text-bark-grey">{spec.label}</span>
         <span className={`shrink-0 rounded-md px-1.5 py-px text-[10px] font-medium ${
-          active ? "bg-electric-indigo/10 text-electric-indigo" : failed ? "bg-alarm-red/10 text-alarm-red" : "bg-black/[0.05] text-bark-grey"
+          active ? "bg-electric-indigo/10 text-electric-indigo" : failed ? "bg-alarm-red/10 text-alarm-red" : "bg-veil text-bark-grey"
         }`}>
           ×{run.items.length}
         </span>
@@ -195,7 +195,7 @@ function IntegrationBlock({ item }: { item: IntegrationItem }) {
       </p>
       <p className="text-[13px] leading-relaxed text-charcoal">{item.reason}.</p>
       <p className="mt-2 text-[12.5px] text-bark-grey">Bring the work in with:</p>
-      <code className="mt-1 block overflow-x-auto rounded-lg bg-black/[0.05] px-2 py-1.5 font-mono text-[11.5px] text-charcoal">
+      <code className="mt-1 block overflow-x-auto rounded-lg bg-veil px-2 py-1.5 font-mono text-[11.5px] text-charcoal">
         git merge {item.branch}
       </code>
     </div>
@@ -217,7 +217,7 @@ function TaskBlock({ items }: { items: TaskItem[] }) {
           <Link
             key={task.id}
             href={`/board/${task.id}`}
-            className="flex items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-black/[0.035]"
+            className="flex items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-veil"
           >
             <span className="shrink-0 font-mono text-[11px] text-electric-indigo">{task.ref}</span>
             <span className="min-w-0 flex-1 truncate text-[12.5px] text-charcoal" title={task.title}>{task.title}</span>
@@ -235,7 +235,7 @@ function TaskBlock({ items }: { items: TaskItem[] }) {
 const TERMINAL: Record<string, { icon: typeof Check; className: string }> = {
   success: { icon: Check, className: "border-lichen-green/30 bg-lichen-green/[0.07] text-lichen-green" },
   error: { icon: TriangleAlert, className: "border-alarm-red/30 bg-alarm-red/[0.06] text-alarm-red" },
-  neutral: { icon: CircleSlash, className: "border-line-strong bg-black/[0.03] text-bark-grey" },
+  neutral: { icon: CircleSlash, className: "border-line-strong bg-veil text-bark-grey" },
 };
 
 /** Done / Paused / Cancelled / Failed chip that closes out a run section.

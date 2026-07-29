@@ -174,7 +174,7 @@ export function Composer({
             aria-haspopup="menu"
             aria-expanded={open}
             title={active.desc}
-            className="flex items-center gap-2 rounded-xl border border-line px-2.5 py-1.5 text-[13px] font-medium text-charcoal transition-colors hover:border-line-strong hover:bg-black/[0.02]"
+            className="flex items-center gap-2 rounded-xl border border-line px-2.5 py-1.5 text-[13px] font-medium text-charcoal transition-colors hover:border-line-strong hover:bg-veil"
           >
             <ActiveIcon className="size-3.5 text-electric-indigo" />
             {active.label}
@@ -195,7 +195,7 @@ export function Composer({
                     role="menuitemradio"
                     aria-checked={on}
                     onClick={() => { onModeChange(m.id); setOpen(false); }}
-                    className={`group flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${on ? "bg-electric-indigo/[0.06]" : "hover:bg-black/[0.03]"}`}
+                    className={`group flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors ${on ? "bg-electric-indigo/[0.06]" : "hover:bg-veil"}`}
                   >
                     <Icon className={`mt-0.5 size-4 shrink-0 ${on ? "text-electric-indigo" : "text-bark-grey"}`} />
                     <span className="min-w-0 flex-1">
@@ -223,7 +223,7 @@ export function Composer({
               aria-haspopup="menu"
               aria-expanded={modelOpen}
               title={activeModel ? `Running on ${activeModel.name}` : "Using this project's default model"}
-              className="flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-[13px] font-medium text-charcoal transition-colors hover:border-line-strong hover:bg-black/[0.02]"
+              className="flex items-center gap-1.5 rounded-xl border border-line px-2.5 py-1.5 text-[13px] font-medium text-charcoal transition-colors hover:border-line-strong hover:bg-veil"
             >
               <Cpu className="size-3.5 text-electric-indigo" />
               <span className="max-w-[9rem] truncate">{activeModel?.name ?? "Default model"}</span>
@@ -275,7 +275,7 @@ function ModelRow({ label, detail, on, onSelect }: { label: string; detail: stri
       role="menuitemradio"
       aria-checked={on}
       onClick={onSelect}
-      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${on ? "bg-electric-indigo/[0.06]" : "hover:bg-black/[0.03]"}`}
+      className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left transition-colors ${on ? "bg-electric-indigo/[0.06]" : "hover:bg-veil"}`}
     >
       <span className="min-w-0 flex-1">
         <span className="block truncate text-[13px] font-medium text-charcoal">{label}</span>

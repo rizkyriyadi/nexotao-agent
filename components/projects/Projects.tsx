@@ -34,7 +34,7 @@ export function Projects() {
               <Lock className="size-3.5 text-pebble" /> Each project has its own isolated workspace — agents never cross between them.
             </p>
           </div>
-          <Link href="/onboarding" className="flex h-9 items-center gap-2 rounded-full bg-electric-indigo px-4 text-[13px] font-medium text-white transition-colors hover:bg-deep-violet"><Plus className="size-4" /> New project</Link>
+          <Link href="/onboarding" className="flex h-9 items-center gap-2 rounded-full bg-electric-indigo px-4 text-[13px] font-medium text-on-indigo transition-colors hover:bg-deep-violet"><Plus className="size-4" /> New project</Link>
         </div>
 
         {projects.length === 0 ? (

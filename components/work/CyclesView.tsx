@@ -20,11 +20,11 @@ const parseDay = (value: string) => (value ? Date.parse(`${value}T00:00:00Z`) : 
 /** Where a cycle sits relative to now. Derived rather than stored: a cycle whose
  *  end date passed is over whether or not anything marked it so. */
 function phase(cycle: Cycle, now: number | null): { word: string; tone: string } {
-  if (cycle.completedAt) return { word: "completed", tone: "bg-black/[.05] text-pebble" };
+  if (cycle.completedAt) return { word: "completed", tone: "bg-veil text-pebble" };
   if (now == null) return { word: "", tone: "" };
   if (cycle.startDate && now < cycle.startDate) return { word: "upcoming", tone: "bg-electric-indigo/10 text-electric-indigo" };
-  if (cycle.endDate && now > cycle.endDate) return { word: "overdue", tone: "bg-amber-500/12 text-amber-700" };
-  return { word: "active", tone: "bg-emerald-500/12 text-emerald-700" };
+  if (cycle.endDate && now > cycle.endDate) return { word: "overdue", tone: "bg-amber/12 text-amber" };
+  return { word: "active", tone: "bg-lichen-green/12 text-lichen-green" };
 }
 
 export function CyclesView() {
@@ -62,30 +62,30 @@ export function CyclesView() {
     <div className="space-y-4">
       <form
         onSubmit={(event) => { event.preventDefault(); void create(); }}
-        className="flex flex-wrap items-end gap-2 rounded-2xl border border-line bg-white/60 p-3"
+        className="flex flex-wrap items-end gap-2 rounded-2xl border border-line bg-raise/60 p-3"
       >
         <label className="flex flex-col gap-1 text-[11px] text-pebble">
           Name
           <input
             value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })}
             placeholder="Sprint 4" aria-label="Cycle name"
-            className="w-48 rounded-lg border border-line bg-white px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong"
+            className="w-48 rounded-lg border border-line bg-raise px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong"
           />
         </label>
         <label className="flex flex-col gap-1 text-[11px] text-pebble">
           Starts
           <input type="date" value={draft.startDate} onChange={(event) => setDraft({ ...draft, startDate: event.target.value })}
             aria-label="Cycle start date"
-            className="rounded-lg border border-line bg-white px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong" />
+            className="rounded-lg border border-line bg-raise px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong" />
         </label>
         <label className="flex flex-col gap-1 text-[11px] text-pebble">
           Ends
           <input type="date" value={draft.endDate} onChange={(event) => setDraft({ ...draft, endDate: event.target.value })}
             aria-label="Cycle end date"
-            className="rounded-lg border border-line bg-white px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong" />
+            className="rounded-lg border border-line bg-raise px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong" />
         </label>
         <button type="submit" disabled={!draft.name.trim()}
-          className="rounded-lg bg-electric-indigo px-3 py-1.5 text-[12px] text-white disabled:opacity-40">
+          className="rounded-lg bg-electric-indigo px-3 py-1.5 text-[12px] text-on-indigo disabled:opacity-40">
           Add cycle
         </button>
       </form>
@@ -97,7 +97,7 @@ export function CyclesView() {
           const state = phase(cycle, now);
           return (
             <li key={cycle.id}>
-              <Link href={`/work/cycles/${cycle.id}`} className="block rounded-2xl border border-line bg-white/60 p-3.5 transition-colors hover:border-line-strong">
+              <Link href={`/work/cycles/${cycle.id}`} className="block rounded-2xl border border-line bg-raise/60 p-3.5 transition-colors hover:border-line-strong">
                 <div className="flex items-center gap-2">
                   <h2 className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-charcoal">{cycle.name}</h2>
                   {state.word && <span className={`rounded px-1.5 py-px text-[10px] font-medium ${state.tone}`}>{state.word}</span>}

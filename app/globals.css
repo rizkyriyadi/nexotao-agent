@@ -21,6 +21,38 @@
   --color-mist-lavender: #edecfb;  /* soft indigo card fill */
   --color-mist-lavender-2: #e3e1fb;
 
+  /* Syntax colours, named by role rather than by hue so the dark theme can
+     re-point them without any component knowing a theme exists. */
+  --color-tok-comment: #8a857e;
+  --color-tok-string: #2f7d4f;
+  --color-tok-keyword: #8250df;
+  --color-tok-type: #1f6feb;
+  --color-tok-constant: #b4541b;
+  --color-tok-number: #b4541b;
+  --color-tok-function: #6639ba;
+  --color-tok-punct: #7d766f;
+
+  /* Surfaces that used to be spelled `bg-white` or `bg-black/[0.04]`. Both are
+     literal colours Tailwind resolves at build time, so neither can follow a
+     theme; these are the token equivalents. */
+  /* Text that sits *on* an indigo fill. In dark mode indigo becomes a light
+     violet, and white-on-violet drops to ~3.6:1 — this flips to dark instead
+     and reads at ~5.9:1. */
+  --color-on-indigo: #ffffff;
+  --color-raise: #ffffff;         /* a card lifted off the page */
+
+  /* A shell transcript. Deliberately *not* re-pointed by the dark theme: a
+     terminal is dark in both, and spelling it `bg-charcoal` meant it inverted
+     to green-on-cream the moment the theme flipped. */
+  /* A modal scrim. `bg-charcoal/25` inverted with the theme and dimmed the page
+     with *light*, which reads as fog rather than as depth. */
+  --color-scrim: rgba(38, 34, 31, 0.25);
+  --color-terminal: #26221f;
+  --color-terminal-text: #8ddc5f;
+  --color-terminal-dim: #5f9b3a;
+  --color-veil: rgba(0, 0, 0, 0.04);       /* hover wash */
+  --color-veil-strong: rgba(0, 0, 0, 0.07);
+
   --shadow-float: 0 1px 2px rgba(20, 18, 30, 0.04), 0 12px 32px -12px rgba(20, 18, 30, 0.12);
 
   --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, -apple-system,
@@ -52,6 +84,82 @@
   --input: #e2e0dc;
   --ring: #5b57f5;
 }
+
+/* ── Dark theme ──────────────────────────────────────────────
+   Class-driven, not `prefers-color-scheme`: the toggle in the rail has to be
+   able to disagree with the OS, and a media query cannot be overridden by a
+   click.
+
+   Deliberately *soft*. The backdrop is #17161a, not #000 — a warm-neutral
+   charcoal with a trace of the brand's violet in it. Pure black against white
+   text is the highest contrast a screen can produce, and reading code at that
+   contrast for an hour is what makes people turn dark mode back off. Text tops
+   out at #e8e5e1 rather than #fff for the same reason: bright enough to read,
+   short of glare. Every colour below is a re-point of an existing token, so no
+   component branches on the theme. */
+.dark {
+  --color-warm-bone: #17161a;
+  --color-paper-white: #1e1d22;
+  --color-line: #2e2c33;
+  --color-line-strong: #3a373f;
+  --color-charcoal: #e8e5e1;
+  --color-bark-grey: #a8a29c;
+  --color-pebble: #7b756e;
+  --color-electric-indigo: #8b87ff;
+  --color-deep-violet: #a29eff;
+  --color-lichen-green: #7cc25c;
+  --color-alarm-red: #ef7a6d;
+  --color-amber: #e0a34a;
+  --color-sapphire-link: #79aef5;
+  --color-code-surface: #232227;
+  --color-canvas: #121114;
+  --color-mist-lavender: #26242f;
+  --color-mist-lavender-2: #2e2b3a;
+
+  --color-tok-comment: #7b756e;
+  --color-tok-string: #8ecf9c;
+  --color-tok-keyword: #c8a6f5;
+  --color-tok-type: #86b8f3;
+  --color-tok-constant: #e8a06a;
+  --color-tok-number: #e8a06a;
+  --color-tok-function: #b9a5f7;
+  --color-tok-punct: #928b83;
+
+  --color-scrim: rgba(0, 0, 0, 0.6);
+  --color-on-indigo: #17161a;
+  --color-raise: #1e1d22;
+  --color-veil: rgba(255, 255, 255, 0.05);
+  --color-veil-strong: rgba(255, 255, 255, 0.09);
+
+  /* Shadows do not read on a dark backdrop — there is no light to occlude. A
+     hairline border carries the same "this floats above" signal instead. */
+  --shadow-float: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -12px rgba(0, 0, 0, 0.55);
+
+  --background: #17161a;
+  --foreground: #e8e5e1;
+  --card: #1e1d22;
+  --card-foreground: #e8e5e1;
+  --popover: #1e1d22;
+  --popover-foreground: #e8e5e1;
+  --primary: #e8e5e1;
+  --primary-foreground: #17161a;
+  --secondary: #26252b;
+  --secondary-foreground: #e8e5e1;
+  --muted: #232227;
+  --muted-foreground: #a8a29c;
+  --accent: #26252b;
+  --accent-foreground: #e8e5e1;
+  --destructive: #ef7a6d;
+  --border: #2e2c33;
+  --input: #3a373f;
+  --ring: #8b87ff;
+
+  color-scheme: dark;
+}
+
+/* Tailwind's default `dark:` follows the OS. Ours follows the class the toggle
+   writes, so the two never disagree. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme inline {
   --color-background: var(--background);
@@ -86,6 +194,9 @@ body {
 body {
   background: var(--color-warm-bone);
   color: var(--color-charcoal);
+  /* The whole app is token-driven, so flipping the class repaints everything at
+     once. Without a transition that lands as a jarring flash. */
+  transition: background-color 160ms ease, color 160ms ease;
   font-family: var(--font-sans);
   font-size: 15px;
   line-height: 1.6;

@@ -42,7 +42,7 @@ export function CycleDetail({ id }: { id: string }) {
     await load();
   };
 
-  if (error) return <p className="rounded-2xl border border-line bg-white/60 p-8 text-center text-sm text-pebble">{error}</p>;
+  if (error) return <p className="rounded-2xl border border-line bg-raise/60 p-8 text-center text-sm text-pebble">{error}</p>;
   if (!data) return <p className="text-sm text-pebble">Loading cycle…</p>;
 
   const { cycle, issues, progress, burndown } = data;
@@ -58,7 +58,7 @@ export function CycleDetail({ id }: { id: string }) {
             Close cycle
           </button>
         )}
-        {cycle.completedAt && <span className="ml-auto rounded bg-black/[.05] px-1.5 py-px text-[10px] text-pebble">closed {shortDate(cycle.completedAt)}</span>}
+        {cycle.completedAt && <span className="ml-auto rounded bg-veil px-1.5 py-px text-[10px] text-pebble">closed {shortDate(cycle.completedAt)}</span>}
       </div>
 
       <div className="grid gap-2 sm:grid-cols-3">
@@ -71,7 +71,7 @@ export function CycleDetail({ id }: { id: string }) {
         <Burndown points={burndown} />
       </ChartCard>
 
-      <section className="rounded-2xl border border-line bg-white/60 p-4">
+      <section className="rounded-2xl border border-line bg-raise/60 p-4">
         <header className="mb-3 flex items-center gap-2">
           <h2 className="text-[13px] font-semibold text-charcoal">Work in this cycle</h2>
           <span className="min-w-[120px] flex-1"><ProgressBar completed={progress.completed} total={progress.total} /></span>
@@ -84,7 +84,7 @@ export function CycleDetail({ id }: { id: string }) {
               <Link href={`/board/${issue.id}`} className="min-w-0 flex-1 truncate text-[12.5px] text-charcoal hover:text-electric-indigo">{issue.title}</Link>
               <StatusTag status={issue.status} />
               <span className="font-mono text-[10px] text-pebble">{issue.ref}</span>
-              {issue.estimatePoint != null && <span className="rounded bg-black/[.05] px-1 text-[10px] text-bark-grey">{issue.estimatePoint}</span>}
+              {issue.estimatePoint != null && <span className="rounded bg-veil px-1 text-[10px] text-bark-grey">{issue.estimatePoint}</span>}
               <span className="w-14 shrink-0 text-right text-[10.5px] capitalize text-pebble">{issue.status.replace(/_/g, " ")}</span>
             </li>
           ))}

@@ -66,7 +66,7 @@ export function IntakeView() {
 
       <ul className="space-y-2">
         {pending.map((issue) => (
-          <li key={issue.id} className="rounded-2xl border border-line bg-white/60 p-3.5">
+          <li key={issue.id} className="rounded-2xl border border-line bg-raise/60 p-3.5">
             <div className="flex items-center gap-2">
               <PriorityDot value={issue.priority} />
               <Link href={`/board/${issue.id}`} className="min-w-0 flex-1 truncate text-[13px] text-charcoal hover:text-electric-indigo">{issue.title}</Link>
@@ -74,7 +74,7 @@ export function IntakeView() {
                   statuses a board column cannot express. There are no columns
                   here, and the status is the point: Accept keeps it, so the row
                   has to say what accepting will leave the work as. */}
-              <span className="shrink-0 rounded bg-black/[.05] px-1.5 py-px text-[10px] capitalize text-bark-grey">
+              <span className="shrink-0 rounded bg-veil px-1.5 py-px text-[10px] capitalize text-bark-grey">
                 {issue.status.replace(/_/g, " ")}
               </span>
               <span className="font-mono text-[10px] text-pebble">{issue.ref}</span>
@@ -88,7 +88,7 @@ export function IntakeView() {
                   onClick={() => void decide(issue.id, decision)}
                   className={`rounded-lg px-2.5 py-1 text-[12px] transition-colors disabled:opacity-40 ${
                     decision.key === "accept"
-                      ? "bg-electric-indigo text-white"
+                      ? "bg-electric-indigo text-on-indigo"
                       : "border border-line text-charcoal hover:border-line-strong"
                   }`}
                 >
@@ -102,13 +102,13 @@ export function IntakeView() {
       </ul>
 
       {recent.length > 0 && (
-        <section className="rounded-2xl border border-line bg-white/60 p-4">
+        <section className="rounded-2xl border border-line bg-raise/60 p-4">
           <h2 className="mb-2 text-[13px] font-semibold text-charcoal">Recently triaged</h2>
           <ul className="divide-y divide-line">
             {recent.map((issue) => (
               <li key={issue.id} className="flex items-center gap-2 py-2">
                 <Link href={`/board/${issue.id}`} className="min-w-0 flex-1 truncate text-[12.5px] text-charcoal hover:text-electric-indigo">{issue.title}</Link>
-                <span className="rounded bg-black/[.05] px-1.5 py-px text-[10px] capitalize text-bark-grey">{issue.intakeStatus}</span>
+                <span className="rounded bg-veil px-1.5 py-px text-[10px] capitalize text-bark-grey">{issue.intakeStatus}</span>
                 <StatusTag status={issue.status} />
                 <span className="w-16 shrink-0 text-right text-[10.5px] text-pebble">{shortDate(issue.updatedAt)}</span>
               </li>

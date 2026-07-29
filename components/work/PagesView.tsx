@@ -45,18 +45,18 @@ export function PagesView() {
     <div className="space-y-4">
       <form
         onSubmit={(event) => { event.preventDefault(); void create(); }}
-        className="flex flex-wrap items-end gap-2 rounded-2xl border border-line bg-white/60 p-3"
+        className="flex flex-wrap items-end gap-2 rounded-2xl border border-line bg-raise/60 p-3"
       >
         <label className="flex flex-1 flex-col gap-1 text-[11px] text-pebble">
           Title
           <input
             value={title} onChange={(event) => setTitle(event.target.value)}
             placeholder="Release notes" aria-label="Page title"
-            className="w-full rounded-lg border border-line bg-white px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong"
+            className="w-full rounded-lg border border-line bg-raise px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong"
           />
         </label>
         <button type="submit" disabled={!title.trim()}
-          className="rounded-lg bg-electric-indigo px-3 py-1.5 text-[12px] text-white disabled:opacity-40">
+          className="rounded-lg bg-electric-indigo px-3 py-1.5 text-[12px] text-on-indigo disabled:opacity-40">
           New page
         </button>
       </form>
@@ -70,7 +70,7 @@ export function PagesView() {
       <ul className="space-y-1.5">
         {live.map((page) => (
           <li key={page.id}>
-            <Link href={`/work/pages/${page.id}`} className="flex items-center gap-2 rounded-xl border border-line bg-white/60 px-3 py-2.5 transition-colors hover:border-line-strong">
+            <Link href={`/work/pages/${page.id}`} className="flex items-center gap-2 rounded-xl border border-line bg-raise/60 px-3 py-2.5 transition-colors hover:border-line-strong">
               <span className="min-w-0 flex-1 truncate text-[13px] text-charcoal">{page.title}</span>
               <span className="shrink-0 text-[11px] text-pebble">{shortDate(page.updatedAt)}</span>
             </Link>
@@ -79,7 +79,7 @@ export function PagesView() {
       </ul>
 
       {archived.length > 0 && (
-        <details className="rounded-xl border border-line bg-white/40 px-3 py-2">
+        <details className="rounded-xl border border-line bg-raise/40 px-3 py-2">
           <summary className="cursor-pointer text-[11.5px] text-pebble">Archived ({archived.length})</summary>
           <ul className="mt-2 space-y-1">
             {archived.map((page) => (

@@ -76,7 +76,7 @@ export function AnalyticsView() {
             <button
               key={option} onClick={() => setWeeks(option)}
               className={`rounded-lg px-2 py-0.5 text-[11px] transition-colors ${
-                option === weeks ? "bg-electric-indigo text-white" : "border border-line text-pebble hover:text-charcoal"
+                option === weeks ? "bg-electric-indigo text-on-indigo" : "border border-line text-pebble hover:text-charcoal"
               }`}
             >
               {option}w

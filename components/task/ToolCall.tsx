@@ -36,10 +36,10 @@ export function ToolCall({ item, dense = false }: { item: ToolItem; dense?: bool
             type="button"
             onClick={() => hasBody && setOpen((v) => !v)}
             disabled={!hasBody}
-            className="min-w-0 flex-1 rounded-lg bg-charcoal px-2.5 py-1.5 text-left disabled:cursor-default"
+            className="min-w-0 flex-1 rounded-lg bg-terminal px-2.5 py-1.5 text-left disabled:cursor-default"
           >
-            <code className="block break-all font-mono text-[12px] leading-[1.5] text-[#8ddc5f]">
-              <span className="select-none text-[#5f9b3a]">$ </span>{value}
+            <code className="block break-all font-mono text-[12px] leading-[1.5] text-terminal-text">
+              <span className="select-none text-terminal-dim">$ </span>{value}
             </code>
           </button>
           <div className="flex shrink-0 items-center gap-1 pt-1">

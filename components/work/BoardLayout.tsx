@@ -49,13 +49,13 @@ export function BoardLayout({ groups, data, onOpen, onDrop, groupedByState }: {
           onDragLeave={() => setOver((current) => (current === group.key ? null : current))}
           onDrop={(event) => { event.preventDefault(); if (dragging) dropAt(group, group.issues.length, dragging); }}
           className={`flex w-[272px] shrink-0 flex-col rounded-2xl border p-2 transition-colors ${
-            over === group.key ? "border-electric-indigo bg-electric-indigo/[.04]" : "border-line bg-white/40"
+            over === group.key ? "border-electric-indigo bg-electric-indigo/[.04]" : "border-line bg-raise/40"
           }`}
         >
           <header className="flex items-center gap-2 px-1.5 pb-2 pt-1">
             {group.color && <span className="size-2 rounded-full" style={{ background: group.color }} />}
             <h2 className="text-[12px] font-semibold capitalize text-charcoal">{group.label}</h2>
-            <span className="rounded-full bg-black/[.05] px-1.5 text-[10px] text-pebble">{group.issues.length}</span>
+            <span className="rounded-full bg-veil px-1.5 text-[10px] text-pebble">{group.issues.length}</span>
           </header>
 
           <div className="scroll-thin flex min-h-[80px] flex-1 flex-col gap-1.5 overflow-y-auto">

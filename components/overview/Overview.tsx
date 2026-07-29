@@ -72,7 +72,7 @@ export function Overview() {
 
         <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
-            <Link href="/board" className="flex h-8 items-center gap-1.5 rounded-full bg-electric-indigo px-3.5 text-[13px] font-medium text-white transition-colors hover:bg-deep-violet"><Columns3 className="size-3.5" /> Open control panel</Link>
+            <Link href="/board" className="flex h-8 items-center gap-1.5 rounded-full bg-electric-indigo px-3.5 text-[13px] font-medium text-on-indigo transition-colors hover:bg-deep-violet"><Columns3 className="size-3.5" /> Open control panel</Link>
             <Link href="/board" className="flex h-8 items-center gap-1.5 rounded-full border border-line-strong px-3.5 text-[13px] text-bark-grey transition-colors hover:border-charcoal hover:text-charcoal"><Plus className="size-3.5" /> New task</Link>
             <Link href="/agents" className="flex h-8 items-center gap-1.5 rounded-full border border-line-strong px-3.5 text-[13px] text-bark-grey transition-colors hover:border-charcoal hover:text-charcoal"><Bot className="size-3.5" /> Agents</Link>
           </div>
@@ -89,7 +89,7 @@ export function Overview() {
               <h2 className="text-[22px] font-semibold leading-snug tracking-[-0.01em] text-charcoal">Let the agent do the grind.</h2>
               <p className="mt-2.5 text-[13.5px] leading-relaxed text-bark-grey">Describe a task in the control panel — it reads, edits, and runs code in {project?.name ?? "your project"}, with your approval.</p>
             </div>
-            <Link href="/board" className="mt-6 inline-flex h-9 w-fit items-center gap-2 rounded-full bg-electric-indigo px-4 text-[13px] font-medium text-white transition-colors hover:bg-deep-violet">New task <ArrowRight className="size-4" /></Link>
+            <Link href="/board" className="mt-6 inline-flex h-9 w-fit items-center gap-2 rounded-full bg-electric-indigo px-4 text-[13px] font-medium text-on-indigo transition-colors hover:bg-deep-violet">New task <ArrowRight className="size-4" /></Link>
           </div>
 
           <div className="flex flex-col justify-between rounded-3xl border border-line bg-paper-white p-5">
@@ -134,7 +134,7 @@ export function Overview() {
                   <span>Task</span><span>Status</span><span className="text-right">Updated</span>
                 </div>
                 {tasks.slice(0, 6).map((t) => (
-                  <Link key={t.id} href={`/board/${t.id}`} className="grid grid-cols-[1fr_auto_auto] items-center gap-x-4 border-b border-line py-3 last:border-0 hover:bg-black/[0.01]">
+                  <Link key={t.id} href={`/board/${t.id}`} className="grid grid-cols-[1fr_auto_auto] items-center gap-x-4 border-b border-line py-3 last:border-0 hover:bg-veil">
                     <div className="flex min-w-0 items-center gap-2.5">
                       <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-mist-lavender text-electric-indigo"><Columns3 className="size-4" /></span>
                       <span className="truncate text-[13px] text-charcoal">{t.title}</span>

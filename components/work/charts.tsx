@@ -11,7 +11,7 @@ import type { ReactNode } from "react";
 
 export function ChartCard({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
   return (
-    <section className="rounded-2xl border border-line bg-white/60 p-4">
+    <section className="rounded-2xl border border-line bg-raise/60 p-4">
       <header className="mb-3 flex items-baseline gap-2">
         <h2 className="text-[13px] font-semibold text-charcoal">{title}</h2>
         {hint && <span className="text-[11px] text-pebble">{hint}</span>}
@@ -23,7 +23,7 @@ export function ChartCard({ title, hint, children }: { title: string; hint?: str
 
 export function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className="rounded-2xl border border-line bg-white/60 p-4">
+    <div className="rounded-2xl border border-line bg-raise/60 p-4">
       <p className="text-[11px] text-pebble">{label}</p>
       <p className="mt-1 font-serif text-2xl text-charcoal">{value}</p>
       {hint && <p className="mt-0.5 text-[11px] text-pebble">{hint}</p>}
@@ -89,7 +89,7 @@ export function Breakdown({ data, total }: { data: Array<{ key: string; label?: 
           <span className="w-[92px] shrink-0 truncate text-[11.5px] capitalize text-bark-grey" title={row.label ?? row.key}>
             {(row.label ?? row.key).replace(/_/g, " ")}
           </span>
-          <span className="h-2 min-w-[2px] flex-1 overflow-hidden rounded-full bg-black/[.05]">
+          <span className="h-2 min-w-[2px] flex-1 overflow-hidden rounded-full bg-veil">
             <span className="block h-full rounded-full bg-electric-indigo/60" style={{ width: `${(row.count / sum) * 100}%` }} />
           </span>
           <span className="w-6 shrink-0 text-right text-[11px] text-pebble">{row.count}</span>
@@ -135,7 +135,7 @@ export function ProgressBar({ completed, total }: { completed: number; total: nu
   const percent = total ? Math.round((completed / total) * 100) : 0;
   return (
     <div className="flex items-center gap-2">
-      <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/[.06]">
+      <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-veil-strong">
         <span className="block h-full rounded-full bg-electric-indigo transition-[width]" style={{ width: `${percent}%` }} />
       </span>
       <span className="shrink-0 text-[11px] tabular-nums text-pebble">{completed}/{total}</span>

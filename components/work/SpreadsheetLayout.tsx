@@ -52,7 +52,7 @@ export function SpreadsheetLayout({ groups, data, onOpen }: { groups: IssueGroup
         </thead>
         <tbody>
           {rows.map((issue) => (
-            <tr key={issue.id} onClick={() => onOpen(issue)} className="cursor-pointer hover:bg-black/[.03]">
+            <tr key={issue.id} onClick={() => onOpen(issue)} className="cursor-pointer hover:bg-veil">
               <td className="border-b border-line px-2 py-1.5">
                 <span className="mr-1.5 font-mono text-[10px] text-pebble">{issue.ref}</span>
                 <span className="text-charcoal">{issue.title}</span>

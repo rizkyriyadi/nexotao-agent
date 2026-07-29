@@ -175,7 +175,7 @@ export function TeamRoom() {
 function Stat({ icon, label, value, accent, warn }: { icon: React.ReactNode; label: string; value: number; accent?: boolean; warn?: boolean }) {
   return (
     <div className="flex items-center gap-2.5 bg-warm-bone px-6 py-3">
-      <span className={`flex size-7 items-center justify-center rounded-lg ${accent ? "bg-electric-indigo/12 text-electric-indigo" : warn ? "bg-amber/12 text-amber" : "bg-black/[0.04] text-pebble"}`}>
+      <span className={`flex size-7 items-center justify-center rounded-lg ${accent ? "bg-electric-indigo/12 text-electric-indigo" : warn ? "bg-amber/12 text-amber" : "bg-veil text-pebble"}`}>
         {icon}
       </span>
       <div>
@@ -191,7 +191,7 @@ function SectionTitle({ icon, title, count, warn }: { icon: React.ReactNode; tit
     <div className="flex items-center gap-2 text-[12px] font-medium uppercase tracking-wide text-pebble">
       <span className={warn && count > 0 ? "text-amber" : ""}>{icon}</span>
       <span>{title}</span>
-      <span className="rounded-full bg-black/[0.05] px-1.5 py-0.5 text-[10.5px] font-semibold text-bark-grey">{count}</span>
+      <span className="rounded-full bg-veil px-1.5 py-0.5 text-[10.5px] font-semibold text-bark-grey">{count}</span>
     </div>
   );
 }
@@ -229,7 +229,7 @@ function AgentCard({ agent, index, onOpen }: { agent: TeamRoomAgent; index: numb
       </div>
 
       {agent.current ? (
-        <div className="rounded-xl bg-black/[0.02] px-2.5 py-2">
+        <div className="rounded-xl bg-veil px-2.5 py-2">
           <div className="flex items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-wide text-electric-indigo">
             <Loader2 className="size-3 animate-spin" /> on task
           </div>

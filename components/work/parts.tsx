@@ -20,7 +20,7 @@ export type WorkData = {
 };
 
 export const PRIORITY_TONE: Record<string, string> = {
-  urgent: "bg-alarm-red", high: "bg-orange-500", medium: "bg-amber-400", low: "bg-pebble", none: "bg-line-strong",
+  urgent: "bg-alarm-red", high: "bg-amber", medium: "bg-amber", low: "bg-pebble", none: "bg-line-strong",
 };
 
 /** Statuses the board has no column for still need a word on the card: work in
@@ -44,7 +44,7 @@ export function LabelChip({ label }: { label: Label }) {
 export function StatusTag({ status }: { status: string }) {
   const word = OFF_COLUMN_STATUS[status];
   if (!word) return null;
-  const tone = word === "blocked" ? "bg-amber-500/12 text-amber-700" : "bg-black/[.05] text-pebble line-through";
+  const tone = word === "blocked" ? "bg-amber/12 text-amber" : "bg-veil text-pebble line-through";
   return <span className={`rounded px-1.5 py-px text-[10px] font-medium ${tone}`}>{word}</span>;
 }
 
@@ -82,7 +82,7 @@ export function Picker<T extends string>({ label, value, options, onChange }: {
         aria-label={label}
         value={value}
         onChange={(event) => onChange(event.target.value as T)}
-        className="rounded-lg border border-line bg-white/70 px-2 py-1 text-[11.5px] text-charcoal capitalize outline-none focus:border-line-strong"
+        className="rounded-lg border border-line bg-raise/70 px-2 py-1 text-[11.5px] text-charcoal capitalize outline-none focus:border-line-strong"
       >
         {options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
       </select>

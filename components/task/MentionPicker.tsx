@@ -127,7 +127,7 @@ export function MentionPicker({
             // click resolves — the row would look dead to the mouse.
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => onPick(candidate)}
-            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${i === index ? "bg-electric-indigo/[0.08]" : "hover:bg-black/[0.03]"}`}
+            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${i === index ? "bg-electric-indigo/[0.08]" : "hover:bg-veil"}`}
           >
             <FileText className="size-3.5 shrink-0 text-pebble" strokeWidth={1.8} />
             <span className="min-w-0 flex-1 truncate text-[12.5px]">

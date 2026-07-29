@@ -6,6 +6,7 @@ import {
   Scissors, LayoutGrid, Columns3, Boxes, Bot, Settings, CircleHelp, Inbox as InboxIcon, Share2, Store, Users, Table2,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "./ui/tooltip";
+import { ThemeToggle } from "./Theme";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "./ui/dialog";
 import { useInboxSignal } from "./inbox/useInboxSignal";
 
@@ -67,7 +68,7 @@ export function IconRail({ active }: { active: string }) {
                   href={n.href}
                   aria-label={label}
                   className={`relative flex size-10 items-center justify-center rounded-2xl transition-colors ${
-                    on ? "bg-electric-indigo text-white shadow-sm" : "text-pebble hover:bg-black/[0.04] hover:text-charcoal"
+                    on ? "bg-electric-indigo text-on-indigo shadow-sm" : "text-pebble hover:bg-veil hover:text-charcoal"
                   }`}
                 >
                   <Icon className="size-[18px]" strokeWidth={on ? 2 : 1.75} />
@@ -75,7 +76,7 @@ export function IconRail({ active }: { active: string }) {
                     <span
                       aria-hidden
                       className={`absolute -right-0.5 -top-0.5 flex min-w-[17px] items-center justify-center rounded-full px-1 text-[10px] font-semibold leading-[17px] ring-2 ring-warm-bone ${
-                        inbox.hasUnread ? "animate-pulse bg-electric-indigo text-white" : "bg-line-strong text-bark-grey"
+                        inbox.hasUnread ? "animate-pulse bg-electric-indigo text-on-indigo" : "bg-line-strong text-bark-grey"
                       }`}
                     >
                       {badge > 9 ? "9+" : badge}
@@ -90,13 +91,14 @@ export function IconRail({ active }: { active: string }) {
       </div>
 
       <div className="flex flex-col items-center gap-1.5">
+        <ThemeToggle />
         <Tooltip>
           <TooltipTrigger asChild>
             <Link
               href="/settings"
               aria-label="Settings"
               className={`flex size-10 items-center justify-center rounded-2xl transition-colors ${
-                active === "settings" ? "bg-black/[0.05] text-charcoal" : "text-pebble hover:bg-black/[0.04] hover:text-charcoal"
+                active === "settings" ? "bg-veil text-charcoal" : "text-pebble hover:bg-veil hover:text-charcoal"
               }`}
             >
               <Settings className="size-[18px]" strokeWidth={1.75} />
@@ -109,7 +111,7 @@ export function IconRail({ active }: { active: string }) {
             <button
               onClick={() => setHelp(true)}
               aria-label="Help and shortcuts"
-              className="flex size-10 items-center justify-center rounded-2xl text-pebble transition-colors hover:bg-black/[0.04] hover:text-charcoal"
+              className="flex size-10 items-center justify-center rounded-2xl text-pebble transition-colors hover:bg-veil hover:text-charcoal"
             >
               <CircleHelp className="size-[18px]" strokeWidth={1.75} />
             </button>

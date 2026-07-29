@@ -104,7 +104,7 @@ export function ControlPanel() {
           onClick={toggleDock}
           title="Show the workspace"
           aria-label="Show the workspace panel"
-          className="absolute right-4 top-4 flex size-8 items-center justify-center rounded-lg text-pebble transition-colors hover:bg-black/[0.04] hover:text-charcoal"
+          className="absolute right-4 top-4 flex size-8 items-center justify-center rounded-lg text-pebble transition-colors hover:bg-veil hover:text-charcoal"
         >
           <PanelRight className="size-4" strokeWidth={1.8} />
         </button>

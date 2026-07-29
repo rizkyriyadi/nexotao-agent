@@ -23,12 +23,12 @@ export function ListLayout({ groups, data, onOpen }: { groups: IssueGroup[]; dat
               <button
                 onClick={() => setCollapsed((current) => ({ ...current, [group.key]: !shut }))}
                 aria-expanded={!shut}
-                className="mb-1.5 flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left hover:bg-black/[.03]"
+                className="mb-1.5 flex w-full items-center gap-2 rounded-lg px-1 py-1 text-left hover:bg-veil"
               >
                 <ChevronRight className={`size-3.5 text-pebble transition-transform ${shut ? "" : "rotate-90"}`} />
                 {group.color && <span className="size-2 rounded-full" style={{ background: group.color }} />}
                 <span className="text-[12.5px] font-semibold capitalize text-charcoal">{group.label}</span>
-                <span className="rounded-full bg-black/[.05] px-1.5 text-[10px] text-pebble">{group.issues.length}</span>
+                <span className="rounded-full bg-veil px-1.5 text-[10px] text-pebble">{group.issues.length}</span>
               </button>
               {!shut && (
                 <div className="space-y-1.5">

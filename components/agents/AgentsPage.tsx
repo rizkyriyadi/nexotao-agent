@@ -25,7 +25,7 @@ type FormState = { name: string; title: string; avatar: string | null; scope: st
 
 const statusStyle: Record<Status, string> = {
   idle: "bg-line text-bark-grey", queued: "bg-mist-lavender text-deep-violet", running: "bg-mist-lavender text-deep-violet",
-  paused: "bg-amber-50 text-amber-700", error: "bg-red-50 text-alarm-red", terminated: "bg-charcoal/8 text-pebble",
+  paused: "bg-amber/12 text-amber", error: "bg-alarm-red/10 text-alarm-red", terminated: "bg-charcoal/8 text-pebble",
 };
 function ago(ts: number | null) {
   if (!ts) return "Never";
@@ -151,7 +151,7 @@ export function AgentsPage() {
           <div className="mx-auto max-w-5xl p-6">
             <TabsContent value="overview" className="space-y-5">
               <div className="grid gap-3 sm:grid-cols-3"><Metric label="Status" value={selected.status} capitalizeValue /><Metric label="Current task" value={selected.currentTask ?? "None"} /><Metric label="Last heartbeat" value={ago(selected.lastHeartbeatAt)} /></div>
-              {selected.errorReason && <div className="flex gap-3 rounded-xl border border-red-100 bg-red-50 p-4 text-[13px] text-alarm-red"><AlertTriangle className="size-4" />{selected.errorReason}</div>}
+              {selected.errorReason && <div className="flex gap-3 rounded-xl border border-alarm-red/25 bg-alarm-red/10 p-4 text-[13px] text-alarm-red"><AlertTriangle className="size-4" />{selected.errorReason}</div>}
               <Card title="Identity & hierarchy"><Details rows={[["Role", selected.role === "lead" ? "Lead" : "Specialist"], ["Reports to", agents.find((item) => item.id === selected.reportsTo)?.name ?? "—"], ["Title", selected.title || "—"], ["Scope", selected.scope || "—"], ["Capabilities", selected.capabilities.join(", ") || "—"]]} /></Card>
               <Card title="Configuration history">{selected.revisions.length ? <div className="space-y-2">{selected.revisions.slice(0, 8).map((revision) => <div key={revision.id} className="flex items-center justify-between rounded-xl border border-line px-3 py-2"><span className="text-[12.5px]">Revision {revision.revision} · {ago(revision.createdAt)}</span><Button size="sm" variant="ghost" disabled={busy !== null || selected.status === "terminated"} onClick={() => void action("restore_revision", { revision: revision.revision })}><RotateCcw /> Restore</Button></div>)}</div> : <Empty text="No revisions yet" />}</Card>
             </TabsContent>

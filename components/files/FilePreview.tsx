@@ -11,6 +11,7 @@ import { Check, Eye, FileQuestion, Loader2, Pencil, RotateCcw } from "lucide-rea
 import { Markdown } from "@/components/ui/markdown";
 import { CopyButton } from "@/components/task/tool-atoms";
 import { FileEditor } from "./FileEditor";
+import { CodeText } from "./CodeText";
 import type { FilePreview as Preview } from "@/lib/workspace-files";
 
 function humanSize(bytes: number) {
@@ -31,7 +32,7 @@ function editable(preview: Preview): preview is Extract<Preview, { kind: "text" 
 function Code({ text, language }: { text: string; language: string }) {
   const lines = text.split("\n");
   return (
-    <div className="scroll-thin overflow-auto rounded-xl border border-line bg-[#faf9f7]">
+    <div className="scroll-thin overflow-auto rounded-xl border border-line bg-code-surface/60">
       <div className="flex items-center justify-between border-b border-line bg-code-surface px-3 py-1">
         <span className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-pebble">{language}</span>
         <span className="text-[10.5px] text-pebble">{`${lines.length} lines`}</span>
@@ -40,7 +41,9 @@ function Code({ text, language }: { text: string; language: string }) {
         <div aria-hidden className="select-none border-r border-line px-2.5 py-3 text-right text-pebble/70">
           {lines.map((_, i) => <div key={i}>{i + 1}</div>)}
         </div>
-        <pre className="flex-1 overflow-x-auto px-3 py-3 text-charcoal">{text}</pre>
+        <pre className="flex-1 overflow-x-auto px-3 py-3 text-charcoal">
+          <CodeText text={text} language={language} />
+        </pre>
       </div>
     </div>
   );
@@ -49,7 +52,7 @@ function Code({ text, language }: { text: string; language: string }) {
 function Body({ preview }: { preview: Preview }) {
   if (preview.kind === "markdown") {
     return (
-      <div className="rounded-xl border border-line bg-white/70 px-5 py-4">
+      <div className="rounded-xl border border-line bg-raise/70 px-5 py-4">
         <Markdown>{preview.text}</Markdown>
       </div>
     );
@@ -67,9 +70,9 @@ function Body({ preview }: { preview: Preview }) {
   }
   if (preview.kind === "pdf") {
     return (
-      <div className="rounded-xl border border-line bg-white/70 px-5 py-4">
+      <div className="rounded-xl border border-line bg-raise/70 px-5 py-4">
         {!preview.ok && (
-          <p className="mb-3 rounded-lg bg-amber-500/10 px-3 py-2 text-[12px] text-amber-700">
+          <p className="mb-3 rounded-lg bg-amber/12 px-3 py-2 text-[12px] text-amber">
             No text could be extracted — this looks like a scanned PDF.
           </p>
         )}
@@ -165,7 +168,7 @@ export function FilePreviewPane({
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-medium text-charcoal">
             {preview?.name ?? path.split("/").pop()}
-            {dirty && <span className="ml-1.5 text-[11px] font-normal text-amber-700">· unsaved</span>}
+            {dirty && <span className="ml-1.5 text-[11px] font-normal text-amber">· unsaved</span>}
           </p>
           {!compact && <p className="truncate text-[11px] text-pebble">{path}</p>}
         </div>
@@ -200,7 +203,7 @@ export function FilePreviewPane({
               disabled={!dirty || saving}
               title="Save (⌘S)"
               aria-label="Save this file"
-              className="flex shrink-0 items-center gap-1 rounded-lg bg-electric-indigo px-2.5 py-1.5 text-[12px] font-medium text-white transition-opacity disabled:opacity-40"
+              className="flex shrink-0 items-center gap-1 rounded-lg bg-electric-indigo px-2.5 py-1.5 text-[12px] font-medium text-on-indigo transition-opacity disabled:opacity-40"
             >
               {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" strokeWidth={2.2} />} Save
             </button>
@@ -231,7 +234,7 @@ export function FilePreviewPane({
           ) : (
             <>
               {"truncated" in preview && preview.truncated && (
-                <p className="mb-2 rounded-lg bg-amber-500/10 px-3 py-1.5 text-[11.5px] text-amber-700">
+                <p className="mb-2 rounded-lg bg-amber/12 px-3 py-1.5 text-[11.5px] text-amber">
                   Showing the first 512 KB — this file is larger than that, so it can be read here but not edited.
                 </p>
               )}

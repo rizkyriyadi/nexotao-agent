@@ -7,6 +7,7 @@ import {
   KeyRound, FolderOpen, Sparkles, Check, ArrowRight, ArrowLeft, Folder, Lock,
   Loader2, Cpu, ChevronUp,
 } from "lucide-react";
+import { ThemeToggle } from "@/components/Theme";
 import { LEAD_PP } from "@/lib/avatars";
 import { Wordmark } from "@/components/ui";
 import { Button } from "@/components/ui/button";
@@ -88,7 +89,10 @@ export function OnboardingFlow() {
   }
 
   return (
-    <div className="flex min-h-full items-center justify-center bg-canvas px-4 py-12">
+    <div className="relative flex min-h-full items-center justify-center bg-canvas px-4 py-12">
+      {/* Onboarding is the one surface with no icon rail, and it is also the
+          first thing a dark-mode user ever sees. */}
+      <div className="absolute right-3 top-3"><ThemeToggle /></div>
       <div className="w-full max-w-[560px]">
         <div className="mb-8 flex flex-col items-center text-center">
           <Wordmark />
@@ -111,7 +115,7 @@ export function OnboardingFlow() {
                   <span className={cn(
                     "flex size-[22px] items-center justify-center rounded-full font-mono text-[11px] transition-colors",
                     active && "bg-charcoal text-warm-bone",
-                    done && "bg-electric-indigo text-white",
+                    done && "bg-electric-indigo text-on-indigo",
                     !active && !done && "border border-line-strong text-pebble",
                   )}>
                     {done ? <Check className="size-3" strokeWidth={3} /> : i + 1}
@@ -256,7 +260,7 @@ export function OnboardingFlow() {
                         <button
                           key={dir.path}
                           onClick={() => browse(dir.path)}
-                          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left font-mono text-[12.5px] text-bark-grey transition-colors hover:bg-black/[0.03] hover:text-charcoal"
+                          className="flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left font-mono text-[12.5px] text-bark-grey transition-colors hover:bg-veil hover:text-charcoal"
                         >
                           <Folder className="size-4 shrink-0 text-pebble" /> <span className="truncate">{dir.name}</span>
                         </button>

@@ -26,7 +26,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
-const selectClass = "w-full rounded-lg border border-line bg-white/70 px-2 py-1 text-[12px] text-charcoal capitalize outline-none focus:border-line-strong";
+const selectClass = "w-full rounded-lg border border-line bg-raise/70 px-2 py-1 text-[12px] text-charcoal capitalize outline-none focus:border-line-strong";
 
 export function IssuePeek({ issue, data, onClose, onPatch }: {
   issue: Issue;
@@ -46,8 +46,8 @@ export function IssuePeek({ issue, data, onClose, onPatch }: {
   const dateValue = (value: number | null) => (value == null ? "" : new Date(value).toISOString().slice(0, 10));
 
   return (
-    <aside className="scroll-thin flex w-[340px] shrink-0 flex-col overflow-y-auto border-l border-line bg-white/60">
-      <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-white/90 px-3 py-2 backdrop-blur">
+    <aside className="scroll-thin flex w-[340px] shrink-0 flex-col overflow-y-auto border-l border-line bg-raise/60">
+      <header className="sticky top-0 z-10 flex items-center gap-2 border-b border-line bg-raise/90 px-3 py-2 backdrop-blur">
         <span className="font-mono text-[11px] text-pebble">{issue.ref}</span>
         <StatusTag status={issue.status} />
         <Link

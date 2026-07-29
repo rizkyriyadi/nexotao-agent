@@ -239,7 +239,7 @@ export function TaskView({ id }: { id: string }) {
     <div className="flex h-full min-w-0 flex-1">
     <div className="flex h-full min-w-0 flex-1 flex-col bg-gradient-to-b from-mist-lavender/40 via-canvas to-warm-bone">
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line/70 bg-paper-white/70 px-5 backdrop-blur">
-        <button onClick={() => router.push("/board")} className="flex size-8 shrink-0 items-center justify-center rounded-lg text-pebble transition-colors hover:bg-black/[0.04] hover:text-charcoal" title="Back to control panel">
+        <button onClick={() => router.push("/board")} className="flex size-8 shrink-0 items-center justify-center rounded-lg text-pebble transition-colors hover:bg-veil hover:text-charcoal" title="Back to control panel">
           <ArrowLeft className="size-4" />
         </button>
         <img src={avatar} alt="Hutao" className="size-8 shrink-0 rounded-xl object-cover ring-1 ring-line" />
@@ -263,7 +263,7 @@ export function TaskView({ id }: { id: string }) {
             onClick={toggleDock}
             title="Show the workspace"
             aria-label="Show the workspace panel"
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-pebble transition-colors hover:bg-black/[0.04] hover:text-charcoal"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-pebble transition-colors hover:bg-veil hover:text-charcoal"
           >
             <PanelRight className="size-4" strokeWidth={1.8} />
           </button>
@@ -348,7 +348,7 @@ export function TaskView({ id }: { id: string }) {
 function UserBubble({ text }: { text: string }) {
   return (
     <div className="flex justify-end">
-      <div className="max-w-[80%] rounded-3xl rounded-br-lg bg-electric-indigo px-4 py-2.5 text-[14px] leading-relaxed text-white shadow-sm">
+      <div className="max-w-[80%] rounded-3xl rounded-br-lg bg-electric-indigo px-4 py-2.5 text-[14px] leading-relaxed text-on-indigo shadow-sm">
         <p className="whitespace-pre-wrap break-words">{text}</p>
       </div>
     </div>
@@ -413,7 +413,7 @@ function SubTasks({
       <div className="flex items-center gap-2">
         <GitBranch className="size-4 text-bark-grey" />
         <p className="text-[13px] font-medium text-charcoal">Sub-tasks</p>
-        <span className="rounded-md bg-black/[0.05] px-1.5 py-px font-mono text-[10.5px] text-bark-grey">
+        <span className="rounded-md bg-veil px-1.5 py-px font-mono text-[10.5px] text-bark-grey">
           {outstanding > 0 ? `${outstanding} of ${tasks.length} open` : `${tasks.length} done`}
         </span>
       </div>
@@ -425,7 +425,7 @@ function SubTasks({
               key={child.id}
               type="button"
               onClick={() => onOpen(child.id)}
-              className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-black/[0.035]"
+              className="flex w-full items-center gap-2 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-veil"
             >
               <span className={`size-[6px] shrink-0 rounded-full ${statusDot(child.status)}`} />
               <span className="shrink-0 font-mono text-[11px] text-electric-indigo">{child.ref}</span>
@@ -473,7 +473,7 @@ function PlanActions({
                       key={opt}
                       type="button"
                       onClick={() => onPick(i, opt)}
-                      className={`rounded-full border px-3 py-1 text-[12.5px] transition-colors ${on ? "border-electric-indigo bg-electric-indigo text-white" : "border-line-strong bg-paper-white text-bark-grey hover:border-charcoal hover:text-charcoal"}`}
+                      className={`rounded-full border px-3 py-1 text-[12.5px] transition-colors ${on ? "border-electric-indigo bg-electric-indigo text-on-indigo" : "border-line-strong bg-paper-white text-bark-grey hover:border-charcoal hover:text-charcoal"}`}
                     >
                       {opt}
                     </button>
@@ -482,7 +482,7 @@ function PlanActions({
                 <button
                   type="button"
                   onClick={() => onOther(i)}
-                  className={`rounded-full border px-3 py-1 text-[12.5px] transition-colors ${othering[i] ? "border-electric-indigo bg-electric-indigo text-white" : "border-line-strong bg-paper-white text-bark-grey hover:border-charcoal hover:text-charcoal"}`}
+                  className={`rounded-full border px-3 py-1 text-[12.5px] transition-colors ${othering[i] ? "border-electric-indigo bg-electric-indigo text-on-indigo" : "border-line-strong bg-paper-white text-bark-grey hover:border-charcoal hover:text-charcoal"}`}
                 >
                   Other…
                 </button>

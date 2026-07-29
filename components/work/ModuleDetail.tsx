@@ -40,7 +40,7 @@ export function ModuleDetail({ id }: { id: string }) {
     await load();
   };
 
-  if (error) return <p className="rounded-2xl border border-line bg-white/60 p-8 text-center text-sm text-pebble">{error}</p>;
+  if (error) return <p className="rounded-2xl border border-line bg-raise/60 p-8 text-center text-sm text-pebble">{error}</p>;
   if (!data) return <p className="text-sm text-pebble">Loading module…</p>;
 
   const { module: record, issues, progress } = data;
@@ -61,7 +61,7 @@ export function ModuleDetail({ id }: { id: string }) {
             Close module
           </button>
         )}
-        {record.completedAt && <span className="ml-auto rounded bg-black/[.05] px-1.5 py-px text-[10px] text-pebble">closed {shortDate(record.completedAt)}</span>}
+        {record.completedAt && <span className="ml-auto rounded bg-veil px-1.5 py-px text-[10px] text-pebble">closed {shortDate(record.completedAt)}</span>}
       </div>
 
       {record.description && <p className="text-[12.5px] leading-relaxed text-bark-grey">{record.description}</p>}
@@ -76,7 +76,7 @@ export function ModuleDetail({ id }: { id: string }) {
         <Breakdown data={byStatus} total={progress.total} />
       </ChartCard>
 
-      <section className="rounded-2xl border border-line bg-white/60 p-4">
+      <section className="rounded-2xl border border-line bg-raise/60 p-4">
         <header className="mb-3 flex items-center gap-2">
           <h2 className="text-[13px] font-semibold text-charcoal">Work in this module</h2>
           <span className="min-w-[120px] flex-1"><ProgressBar completed={progress.completed} total={progress.total} /></span>
@@ -89,7 +89,7 @@ export function ModuleDetail({ id }: { id: string }) {
               <Link href={`/board/${issue.id}`} className="min-w-0 flex-1 truncate text-[12.5px] text-charcoal hover:text-electric-indigo">{issue.title}</Link>
               <StatusTag status={issue.status} />
               <span className="font-mono text-[10px] text-pebble">{issue.ref}</span>
-              {issue.estimatePoint != null && <span className="rounded bg-black/[.05] px-1 text-[10px] text-bark-grey">{issue.estimatePoint}</span>}
+              {issue.estimatePoint != null && <span className="rounded bg-veil px-1 text-[10px] text-bark-grey">{issue.estimatePoint}</span>}
             </li>
           ))}
         </ul>

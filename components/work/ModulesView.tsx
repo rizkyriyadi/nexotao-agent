@@ -53,14 +53,14 @@ export function ModulesView() {
     <div className="space-y-4">
       <form
         onSubmit={(event) => { event.preventDefault(); void create(); }}
-        className="flex flex-wrap items-end gap-2 rounded-2xl border border-line bg-white/60 p-3"
+        className="flex flex-wrap items-end gap-2 rounded-2xl border border-line bg-raise/60 p-3"
       >
         <label className="flex flex-col gap-1 text-[11px] text-pebble">
           Name
           <input
             value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })}
             placeholder="Billing" aria-label="Module name"
-            className="w-48 rounded-lg border border-line bg-white px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong"
+            className="w-48 rounded-lg border border-line bg-raise px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong"
           />
         </label>
         <label className="flex flex-col gap-1 text-[11px] text-pebble">
@@ -68,14 +68,14 @@ export function ModulesView() {
           <select
             value={draft.leadAgentId} onChange={(event) => setDraft({ ...draft, leadAgentId: event.target.value })}
             aria-label="Module lead"
-            className="rounded-lg border border-line bg-white px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong"
+            className="rounded-lg border border-line bg-raise px-2 py-1 text-[12.5px] text-charcoal outline-none focus:border-line-strong"
           >
             <option value="">No lead</option>
             {agents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}</option>)}
           </select>
         </label>
         <button type="submit" disabled={!draft.name.trim()}
-          className="rounded-lg bg-electric-indigo px-3 py-1.5 text-[12px] text-white disabled:opacity-40">
+          className="rounded-lg bg-electric-indigo px-3 py-1.5 text-[12px] text-on-indigo disabled:opacity-40">
           Add module
         </button>
       </form>
@@ -85,10 +85,10 @@ export function ModulesView() {
       <ul className="grid gap-2 sm:grid-cols-2">
         {rows.map((record) => (
           <li key={record.id}>
-            <Link href={`/work/modules/${record.id}`} className="block rounded-2xl border border-line bg-white/60 p-3.5 transition-colors hover:border-line-strong">
+            <Link href={`/work/modules/${record.id}`} className="block rounded-2xl border border-line bg-raise/60 p-3.5 transition-colors hover:border-line-strong">
               <div className="flex items-center gap-2">
                 <h2 className="min-w-0 flex-1 truncate text-[13.5px] font-semibold text-charcoal">{record.name}</h2>
-                {record.completedAt && <span className="rounded bg-black/[.05] px-1.5 py-px text-[10px] text-pebble">completed</span>}
+                {record.completedAt && <span className="rounded bg-veil px-1.5 py-px text-[10px] text-pebble">completed</span>}
               </div>
               <p className="mt-0.5 text-[11px] text-pebble">
                 {agents.find((agent) => agent.id === record.leadAgentId)?.name ?? "No lead"}

@@ -356,7 +356,7 @@ export function GraphView() {
             onClick={build}
             disabled={building || !data?.project}
             title={data?.project ? "Rebuild the knowledge graph from the project's full history" : "Open a project first"}
-            className="flex h-8 items-center gap-1.5 rounded-full bg-electric-indigo px-3.5 text-[12.5px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="flex h-8 items-center gap-1.5 rounded-full bg-electric-indigo px-3.5 text-[12.5px] font-medium text-on-indigo transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             <Boxes className={`size-4 ${building ? "animate-pulse" : ""}`} strokeWidth={2} />
             {building ? "Building…" : "Build graph"}
@@ -412,7 +412,7 @@ export function GraphView() {
               <button
                 onClick={install}
                 disabled={installing}
-                className="h-6 rounded-full border border-line-strong bg-white px-2.5 text-[11.5px] font-medium text-charcoal transition-colors hover:border-charcoal disabled:opacity-50"
+                className="h-6 rounded-full border border-line-strong bg-raise px-2.5 text-[11.5px] font-medium text-charcoal transition-colors hover:border-charcoal disabled:opacity-50"
               >
                 {installing ? "Installing…" : "Install code index"}
               </button>
@@ -438,7 +438,7 @@ export function GraphView() {
                 onClick={() => toggleKind(k)}
                 aria-pressed={on}
                 className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors ${
-                  on ? "border-line-strong bg-white text-charcoal" : "border-line bg-transparent text-pebble line-through"
+                  on ? "border-line-strong bg-raise text-charcoal" : "border-line bg-transparent text-pebble line-through"
                 }`}
               >
                 <span className="size-2 rounded-full" style={{ background: kindColor(k) }} />
@@ -624,7 +624,7 @@ function NodeDetail({
             <li key={i}>
               <button
                 onClick={() => onSelect(otherId)}
-                className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[12px] hover:bg-black/[0.03]"
+                className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[12px] hover:bg-veil"
               >
                 <span className="text-pebble">{outgoing ? "→" : "←"}</span>
                 <span className="shrink-0 rounded bg-mist-lavender px-1.5 py-0.5 text-[10px] text-deep-violet">{e.rel}</span>
@@ -668,7 +668,7 @@ function NodeList({
               aria-label={`${nd.kind}: ${nd.label}`}
               aria-current={selected === nd.id}
               className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-[12.5px] transition-colors ${
-                selected === nd.id ? "bg-electric-indigo/10 text-charcoal" : "text-bark-grey hover:bg-black/[0.03]"
+                selected === nd.id ? "bg-electric-indigo/10 text-charcoal" : "text-bark-grey hover:bg-veil"
               }`}
             >
               <span className="size-2 shrink-0 rounded-full" style={{ background: kindColor(nd.kind) }} />
@@ -693,7 +693,7 @@ function EmptyState({
 }) {
   return (
     <div className="flex h-full items-center justify-center p-6">
-      <div className="max-w-md rounded-2xl border border-line bg-white px-6 py-7 text-center shadow-float">
+      <div className="max-w-md rounded-2xl border border-line bg-raise px-6 py-7 text-center shadow-float">
         <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-electric-indigo/12 text-electric-indigo">
           <Share2 className="size-5" strokeWidth={1.8} />
         </span>
@@ -707,7 +707,7 @@ function EmptyState({
             <button
               onClick={onBuild}
               disabled={building}
-              className="mx-auto mt-4 flex h-9 items-center gap-1.5 rounded-full bg-electric-indigo px-4 text-[13px] font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+              className="mx-auto mt-4 flex h-9 items-center gap-1.5 rounded-full bg-electric-indigo px-4 text-[13px] font-medium text-on-indigo transition-opacity hover:opacity-90 disabled:opacity-50"
             >
               <Boxes className={`size-4 ${building ? "animate-pulse" : ""}`} strokeWidth={2} />
               {building ? "Building…" : "Build knowledge graph"}

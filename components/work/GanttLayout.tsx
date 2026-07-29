@@ -58,7 +58,7 @@ export function GanttLayout({ groups, data, onOpen }: { groups: IssueGroup[]; da
       {!scheduled.length && <p className="rounded-xl border border-dashed border-line px-3 py-8 text-center text-xs text-pebble">No work has a start or target date yet.</p>}
 
       {scheduled.length > 0 && (
-        <div className="min-w-[640px] rounded-2xl border border-line bg-white/50 p-3">
+        <div className="min-w-[640px] rounded-2xl border border-line bg-raise/50 p-3">
           <div className="relative mb-2 h-4 border-b border-line">
             {Array.from({ length: days }, (_, index) => from + index * DAY_MS)
               // One tick a week keeps the axis readable on a long timeline.
@@ -77,7 +77,7 @@ export function GanttLayout({ groups, data, onOpen }: { groups: IssueGroup[]; da
                 <button
                   onClick={() => onOpen(issue)}
                   title={`${issue.ref} · ${shortDate(start)} → ${shortDate(end)}`}
-                  className="absolute top-0.5 flex h-6 min-w-[18px] items-center gap-1 overflow-hidden rounded-md border border-line bg-white px-1.5 text-left text-[10.5px] text-charcoal hover:border-line-strong"
+                  className="absolute top-0.5 flex h-6 min-w-[18px] items-center gap-1 overflow-hidden rounded-md border border-line bg-raise px-1.5 text-left text-[10.5px] text-charcoal hover:border-line-strong"
                   style={{ left: `${percent(start)}%`, width: `${Math.max(percent(end + DAY_MS) - percent(start), 1.5)}%` }}
                 >
                   <span className={`size-1.5 shrink-0 rounded-full ${PRIORITY_TONE[issue.priority] ?? PRIORITY_TONE.none}`} />
@@ -94,7 +94,7 @@ export function GanttLayout({ groups, data, onOpen }: { groups: IssueGroup[]; da
           <h3 className="mb-1.5 text-[11px] font-semibold text-pebble">Unscheduled · {undated.length}</h3>
           <div className="flex flex-wrap gap-1.5">
             {undated.map((issue) => (
-              <button key={issue.id} onClick={() => onOpen(issue)} className="flex items-center gap-1.5 rounded-lg border border-line bg-white/70 px-2 py-1 text-[11px] text-charcoal hover:border-line-strong">
+              <button key={issue.id} onClick={() => onOpen(issue)} className="flex items-center gap-1.5 rounded-lg border border-line bg-raise/70 px-2 py-1 text-[11px] text-charcoal hover:border-line-strong">
                 <PriorityDot value={issue.priority} />{issue.title}
               </button>
             ))}

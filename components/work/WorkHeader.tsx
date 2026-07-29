@@ -61,7 +61,7 @@ export function WorkHeader({ config, total, data, onConfig, onCreate }: {
       <div className="mt-4"><WorkNav /></div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <div className="flex rounded-xl border border-line bg-white/60 p-0.5">
+        <div className="flex rounded-xl border border-line bg-raise/60 p-0.5">
           {LAYOUTS.map(({ value, label, icon: Icon }) => (
             <button
               key={value}
@@ -70,7 +70,7 @@ export function WorkHeader({ config, total, data, onConfig, onCreate }: {
               title={label}
               onClick={() => onConfig({ layout: value })}
               className={`flex items-center gap-1 rounded-[10px] px-2 py-1 text-[11.5px] transition-colors ${
-                config.layout === value ? "bg-electric-indigo text-white" : "text-pebble hover:text-charcoal"
+                config.layout === value ? "bg-electric-indigo text-on-indigo" : "text-pebble hover:text-charcoal"
               }`}
             >
               <Icon className="size-3.5" /><span className="hidden md:inline">{label}</span>
@@ -81,7 +81,7 @@ export function WorkHeader({ config, total, data, onConfig, onCreate }: {
         <Picker label="Group by" value={config.groupBy} options={GROUPS} onChange={(groupBy) => onConfig({ groupBy })} />
         <Picker label="Order by" value={config.orderBy} options={ORDERS} onChange={(orderBy) => onConfig({ orderBy })} />
 
-        <label className="flex items-center gap-1.5 rounded-lg border border-line bg-white/70 px-2 py-1">
+        <label className="flex items-center gap-1.5 rounded-lg border border-line bg-raise/70 px-2 py-1">
           <Search className="size-3.5 text-pebble" />
           <input
             aria-label="Search work items"
@@ -92,7 +92,7 @@ export function WorkHeader({ config, total, data, onConfig, onCreate }: {
           />
         </label>
 
-        <label className="flex items-center gap-1.5 rounded-lg border border-line bg-white/70 px-2 py-1">
+        <label className="flex items-center gap-1.5 rounded-lg border border-line bg-raise/70 px-2 py-1">
           <Plus className="size-3.5 text-pebble" />
           <input
             aria-label="New work item"

@@ -78,7 +78,7 @@ export function PageDetail({ id }: { id: string }) {
     toast.success(`${payload.issue.ref} created from selection`);
   };
 
-  if (error) return <p className="rounded-2xl border border-line bg-white/60 p-8 text-center text-sm text-pebble">{error}</p>;
+  if (error) return <p className="rounded-2xl border border-line bg-raise/60 p-8 text-center text-sm text-pebble">{error}</p>;
   if (!page) return <p className="text-sm text-pebble">Loading page…</p>;
 
   return (
@@ -100,7 +100,7 @@ export function PageDetail({ id }: { id: string }) {
           </button>
           {editing ? (
             <button onClick={() => void save()} disabled={saving}
-              className="rounded-lg bg-electric-indigo px-3 py-1.5 text-[12px] text-white disabled:opacity-40">
+              className="rounded-lg bg-electric-indigo px-3 py-1.5 text-[12px] text-on-indigo disabled:opacity-40">
               {saving ? "Saving…" : "Save"}
             </button>
           ) : (
@@ -112,7 +112,7 @@ export function PageDetail({ id }: { id: string }) {
       </div>
 
       {page.archivedAt && (
-        <p className="rounded-lg border border-line bg-black/[.03] px-3 py-1.5 text-[11.5px] text-pebble">
+        <p className="rounded-lg border border-line bg-veil px-3 py-1.5 text-[11.5px] text-pebble">
           This page is archived. It stays readable and can be brought back at any time.
         </p>
       )}
@@ -122,17 +122,17 @@ export function PageDetail({ id }: { id: string }) {
           <input
             value={title} onChange={(event) => setTitle(event.target.value)}
             aria-label="Page title"
-            className="w-full rounded-xl border border-line bg-white px-3 py-2 font-serif text-2xl text-charcoal outline-none focus:border-line-strong"
+            className="w-full rounded-xl border border-line bg-raise px-3 py-2 font-serif text-2xl text-charcoal outline-none focus:border-line-strong"
           />
           <textarea
             ref={editor} value={body} onChange={(event) => setBody(event.target.value)}
             aria-label="Page body" spellCheck={false}
             placeholder="Write in markdown. Headings, lists, tables and code fences all render."
-            className="scroll-thin min-h-[420px] w-full rounded-xl border border-line bg-white px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-charcoal outline-none focus:border-line-strong"
+            className="scroll-thin min-h-[420px] w-full rounded-xl border border-line bg-raise px-3 py-2.5 font-mono text-[12.5px] leading-relaxed text-charcoal outline-none focus:border-line-strong"
           />
         </div>
       ) : (
-        <article className="rounded-2xl border border-line bg-white/60 p-6">
+        <article className="rounded-2xl border border-line bg-raise/60 p-6">
           <h2 className="font-serif text-2xl text-charcoal">{page.title}</h2>
           <div className="mt-3">
             {page.body.trim()
