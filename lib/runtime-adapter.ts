@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type Anthropic from "@anthropic-ai/sdk";
-import { nexotao } from "./nexotao";
+import { nexotao, DEFAULT_MAX_TOKENS } from "./nexotao";
 
 export type AdapterMessage = { role: "user" | "assistant"; content: string };
 export type AdapterUsage = { inputTokens: number; outputTokens: number };
@@ -133,7 +133,7 @@ export class NexotaoGatewayAdapter implements RuntimeAdapter {
     try {
       const stream = await this.client.messages.create({
         model: request.model,
-        max_tokens: request.maxTokens ?? 8192,
+        max_tokens: request.maxTokens ?? DEFAULT_MAX_TOKENS,
         ...(request.system ? { system: request.system } : {}),
         messages: request.messages,
         stream: true,

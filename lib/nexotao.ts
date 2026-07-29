@@ -8,6 +8,18 @@ import Anthropic from "@anthropic-ai/sdk";
 export const NEXOTAO_BASE = "https://api.nexotao.com";
 export const DEFAULT_MODEL = "claude-opus-4-8";
 
+/** How many tokens one assistant turn may produce.
+ *
+ *  This is a ceiling, not a reservation: a turn that answers in 200 tokens
+ *  costs 200 either way, so the only thing a low value buys is being cut off.
+ *  The old 8192 was cheap to set and expensive to live with — asked for a
+ *  single-file React app, the model would narrate its plan, start the
+ *  `write_file` call, and hit the wall mid-argument. The file never landed and
+ *  the run said "Done". Probed against the gateway: every Claude model in the
+ *  catalog and the GPT 5.6 series accept 32000, so it is a real limit and not
+ *  an optimistic one. */
+export const DEFAULT_MAX_TOKENS = 32_000;
+
 export type Provider = "anthropic" | "openai";
 export type NexotaoModel = { id: string; name: string; ctx: number | null; tier: string; provider: Provider };
 

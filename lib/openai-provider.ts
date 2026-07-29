@@ -7,7 +7,7 @@
 // Anthropic-shaped request out, streams the response, and translates the reply
 // back into the same Anthropic blocks the tool loop already understands. That
 // keeps persistence, run events, and the UI provider-agnostic.
-import { NEXOTAO_BASE } from "./nexotao";
+import { NEXOTAO_BASE, DEFAULT_MAX_TOKENS } from "./nexotao";
 
 type Block = { type: string; [k: string]: any };
 type Msg = { role: "user" | "assistant"; content: string | Block[] };
@@ -150,7 +150,7 @@ export async function streamOpenAITurn(opts: {
   signal?: AbortSignal;
   onText?: (text: string) => void;
 }): Promise<AssistantTurn> {
-  const { apiKey, model, system, tools = [], messages, maxTokens = 8192, signal, onText } = opts;
+  const { apiKey, model, system, tools = [], messages, maxTokens = DEFAULT_MAX_TOKENS, signal, onText } = opts;
 
   const body: any = {
     model,

@@ -19,13 +19,60 @@ function baseSystem(root: string) {
  *  than silently passed off as a finished answer. */
 const DEFAULT_MAX_ITERS = 60;
 
+/** How many times in a row a turn may hit the output ceiling before the loop
+ *  gives up. Writing one large file legitimately takes two or three passes; a
+ *  model that is cut off every single turn is not making progress, and letting
+ *  that run to the step ceiling burns the user's balance to reach the same
+ *  answer. Reset by any turn that completes on its own. */
+const MAX_CONSECUTIVE_CUTOFFS = 4;
+
+/** What to do with a turn the model was cut off in the middle of.
+ *
+ *  When a turn ends on `max_tokens` the last content block is whatever was
+ *  in-flight when the ceiling hit. If that is a `tool_use`, its arguments are
+ *  half-parsed — we saw `write_file` arrive with a `path` and no `content` at
+ *  all, which would have written an empty file over the real one.
+ *
+ *  So *every* tool call in the turn is dropped, not just the truncated one. The
+ *  API rejects a `tool_use` with no matching `tool_result`, and this loop is
+ *  about to reply with a text nudge rather than results — so leaving an earlier,
+ *  fully-formed call in place would 400 the very next request and turn a
+ *  recoverable cutoff into a failed run. Nothing is lost: the model reissues the
+ *  calls when it continues, and it is told plainly that none of them ran.
+ *
+ *  The text placeholder covers the other half of the same rule: an assistant
+ *  message with no content at all is rejected too, which is what a turn that had
+ *  emitted nothing but its opening tool call would leave behind. */
+export function resumeAfterCutoff(content: any[]): { content: any[]; nudge: string } {
+  const blocks = content.filter((b) => b?.type !== "tool_use");
+  // The truncated call is always the last one: everything before it finished
+  // streaming before the ceiling was reached.
+  const droppedTools = content.filter((b) => b?.type === "tool_use").map((b) => String(b.name));
+  const cutOff = droppedTools[droppedTools.length - 1];
+
+  if (!blocks.length) blocks.push({ type: "text", text: "…" });
+
+  // Naming the calls matters more than it looks: told only "continue", the model
+  // would sometimes carry on as though its write had landed.
+  const dropped = droppedTools.length > 1
+    ? `your ${droppedTools.join(", ")} calls were discarded`
+    : `that ${cutOff} call was discarded`;
+
+  const nudge = cutOff
+    ? `Your reply hit the output size limit part-way through a ${cutOff} call, so ${dropped} — nothing ran and nothing was written. Pick up exactly where you left off. If you were writing a large file, do not try to emit it in one call: write the first section with write_file, then append the rest with further edit_file calls.`
+    : "Your reply hit the output size limit and was cut off mid-sentence. Continue from exactly where you stopped — do not start over or repeat what you already wrote.";
+
+  return { content: blocks, nudge };
+}
+
 /** What one agent loop produced. `completion` distinguishes an agent that
  *  stopped because it was finished from one that ran out of steps; the caller
  *  needs that difference to decide whether the task may be marked done. */
 export type LoopResult = { text: string; completion: RunCompletion };
 
-/** Core tool loop for one agent. Returns the final turn's text (its summary). */
-async function toolLoop(opts: {
+/** Core tool loop for one agent. Returns the final turn's text (its summary).
+ *  Exported for tests — see the `streamTurn` seam below. */
+export async function toolLoop(opts: {
   run: Run;
   apiKey: string;
   model: string;
@@ -40,12 +87,19 @@ async function toolLoop(opts: {
   onProgress?: (text: string) => void;
   beforeMutation?: (tool: { name: string; input: unknown }) => Promise<void>;
   maxIters?: number;
+  /** Seam for tests: how one assistant turn is produced. Defaults to the real
+   *  provider. The cutoff handling below is loop *sequencing* — which branch a
+   *  stop reason takes, and in what order — so it cannot be covered by testing
+   *  the helpers alone; a test has to be able to say "this turn came back
+   *  truncated" and watch what the loop does next. */
+  streamTurn?: typeof streamAssistantTurn;
 }): Promise<LoopResult> {
-  const { run, apiKey, model, system, convo, root, thread, approvalPolicy, toolDefs = TOOL_DEFS as any, extraTools = [], handlers = {}, onProgress, beforeMutation, maxIters = DEFAULT_MAX_ITERS } = opts;
+  const { run, apiKey, model, system, convo, root, thread, approvalPolicy, toolDefs = TOOL_DEFS as any, extraTools = [], handlers = {}, onProgress, beforeMutation, maxIters = DEFAULT_MAX_ITERS, streamTurn = streamAssistantTurn } = opts;
   let full = "";
+  let cutoffs = 0;
 
   for (let iter = 0; iter < maxIters; iter++) {
-    const turn = await streamAssistantTurn({
+    const turn = await streamTurn({
       apiKey,
       model,
       system,
@@ -56,6 +110,21 @@ async function toolLoop(opts: {
     });
     onProgress?.(full);
     run.push({ type: "usage", inputTokens: turn.usage.input_tokens, outputTokens: turn.usage.output_tokens, thread });
+
+    // A turn cut off at the output ceiling is not an answer, and — this is the
+    // bug users actually hit — it is not a stop either. The model was mid-write
+    // of a large file; asking it to continue is the whole fix. Checked before
+    // the tool_use branch below, because a truncated turn's trailing tool_use
+    // carries half-parsed arguments and must never be executed.
+    if (turn.stop_reason === "max_tokens") {
+      const { content, nudge } = resumeAfterCutoff(turn.content as any[]);
+      convo.push({ role: "assistant", content });
+      convo.push({ role: "user", content: nudge });
+      run.push({ type: "text", text: "\n", thread });
+      if (++cutoffs >= MAX_CONSECUTIVE_CUTOFFS) return { text: full, completion: "truncated" };
+      continue;
+    }
+    cutoffs = 0;
 
     convo.push({ role: "assistant", content: turn.content });
     const toolUses = (turn.content as any[]).filter((b) => b.type === "tool_use");

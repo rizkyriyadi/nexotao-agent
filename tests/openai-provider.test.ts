@@ -127,6 +127,26 @@ async function sentMessages(messages: any[]) {
   }
 }
 
+/* Why: the tool loop recovers a cut-off turn by matching on `max_tokens`. OpenAI
+   calls that same condition `length`, so if this translation drifts the recovery
+   silently stops applying to GPT models — and they go back to reporting a run as
+   Done with the file the user asked for never written. */
+test("a GPT turn cut off at the ceiling reports the cutoff the loop looks for", async () => {
+  const { fn } = sseFetch([
+    JSON.stringify({ choices: [{ delta: { content: "export default function App" }, finish_reason: null }] }),
+    JSON.stringify({ choices: [{ delta: {}, finish_reason: "length" }] }),
+    "[DONE]",
+  ]);
+  const original = globalThis.fetch;
+  globalThis.fetch = fn as any;
+  try {
+    const turn = await streamOpenAITurn({ apiKey: "k", model: "gpt-5.6-terra", messages: [{ role: "user", content: "build it" }] });
+    assert.equal(turn.stop_reason, "max_tokens");
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test("an assistant turn that said nothing is dropped rather than sent as a null turn", async () => {
   const msgs = await sentMessages([
     { role: "user", content: "hi" },

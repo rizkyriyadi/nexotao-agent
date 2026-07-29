@@ -3,7 +3,7 @@
 // `onText`, plus a final message with content blocks, a stop reason, and usage —
 // regardless of whether the model is a Claude (Anthropic Messages API) or a GPT
 // (OpenAI Chat Completions API) behind the Nexotao gateway.
-import { nexotao, providerForModel } from "./nexotao";
+import { nexotao, providerForModel, DEFAULT_MAX_TOKENS } from "./nexotao";
 import { streamOpenAITurn, type AssistantTurn } from "./openai-provider";
 
 export type { AssistantTurn };
@@ -69,7 +69,7 @@ export async function streamAssistantTurn(opts: {
   signal?: AbortSignal;
   onText?: (text: string) => void;
 }): Promise<AssistantTurn> {
-  const { apiKey, model, system, tools = [], messages, maxTokens = 8192, signal, onText } = opts;
+  const { apiKey, model, system, tools = [], messages, maxTokens = DEFAULT_MAX_TOKENS, signal, onText } = opts;
 
   return withStallTimeout(TURN_STALL_TIMEOUT_MS, signal, async (turnSignal, progress) => {
     // Counts as progress even when the caller isn't listening for text, so a

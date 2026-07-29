@@ -36,8 +36,9 @@ export const TASK_DELEGATED_EVENT_TYPE = "task_delegated";
 export const RUN_INTEGRATION_EVENT_TYPE = "integration";
 
 /** How a run's agent loop ended. `complete` — the agent stopped on its own;
- * `truncated` — it was still working when it hit the step ceiling. The
- * difference decides whether the task may be called done. */
+ * `truncated` — it was still working when it ran into a ceiling, either the
+ * step limit or its output size limit too many turns in a row. The difference
+ * decides whether the task may be called done. */
 export type RunCompletion = "complete" | "truncated";
 
 /** The chip that closes out a run section. Kept here, next to the completion
