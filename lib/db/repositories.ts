@@ -165,6 +165,9 @@ export class ControlPlaneRepositories {
   listWorkspaces(projectId?: string) {
     return this.database.read((db) => db.select().from(gitWorkspaces).where(projectId ? eq(gitWorkspaces.projectId, projectId) : undefined).orderBy(asc(gitWorkspaces.createdAt)).all());
   }
+  listWorkspacesForIssue(issueId: string) {
+    return this.database.read((db) => db.select().from(gitWorkspaces).where(eq(gitWorkspaces.issueId, issueId)).orderBy(asc(gitWorkspaces.createdAt)).all());
+  }
   assignWorkspace(input: {
     id: string; projectId: string; issueId: string; runId: string; repositoryPath: string; workspacePath: string;
     branch: string; targetBranch: string; baseCommit: string;

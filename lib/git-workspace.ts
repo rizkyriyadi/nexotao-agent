@@ -213,6 +213,37 @@ export class GitWorkspaceManager {
     if (!email) await git(repositoryPath, "config", "user.email", "agent@nexotao.local");
   }
 
+  /** The commit a new run on this issue should branch from.
+   *
+   *  Normally that is the repository's HEAD. But a run's work only reaches HEAD
+   *  if `integrate` fast-forwarded it, and integration is legitimately refused
+   *  whenever the user is mid-edit, on another branch, or the branch diverged.
+   *  The commit still exists on `nexotao/<ref>/<runId>`; it is simply not on
+   *  HEAD yet.
+   *
+   *  Branching the follow-up from HEAD in that case hands the agent an empty
+   *  worktree. It then reports, accurately, that it has written nothing — which
+   *  a user who just watched it write four files reads as the agent forgetting
+   *  its own work. Continuing from the previous run's commit is what makes a
+   *  follow-up a continuation rather than a restart.
+   *
+   *  Only ever moves *forward*: the prior commit is used solely when HEAD is
+   *  already an ancestor of it, so this can never rewind past work the user has
+   *  since committed themselves. Anything unreadable falls back to HEAD. */
+  private async continuationBase(issueId: string, repositoryPath: string) {
+    const head = (await git(repositoryPath, "rev-parse", "HEAD")).stdout;
+    const prior = this.repositories.issues.get(issueId);
+    const candidate = prior?.workspaceCommit;
+    if (!candidate || candidate === head) return head;
+    // The commit has to still be reachable in *this* repository: a worktree
+    // released by `nexotao uninstall`, a pruned branch, or a project pointed at
+    // a different checkout all leave a recorded sha that no longer resolves.
+    const exists = await git(repositoryPath, "cat-file", "-e", `${candidate}^{commit}`).then(() => true).catch(() => false);
+    if (!exists) return head;
+    const ahead = await git(repositoryPath, "merge-base", "--is-ancestor", head, candidate).then(() => true).catch(() => false);
+    return ahead ? candidate : head;
+  }
+
   private async provisionLocked(input: { projectId: string; issueId: string; identifier: string; runId: string; repositoryPath: string }) {
     const repositoryPath = await fs.realpath(path.resolve(input.repositoryPath));
     await this.ensureRepository(repositoryPath);
@@ -229,7 +260,7 @@ export class GitWorkspaceManager {
       );
     }
     const targetBranch = (await git(repositoryPath, "symbolic-ref", "--short", "HEAD")).stdout;
-    const baseCommit = (await git(repositoryPath, "rev-parse", "HEAD")).stdout;
+    const baseCommit = await this.continuationBase(input.issueId, repositoryPath);
     const repoKey = createHash("sha256").update(repositoryPath).digest("hex").slice(0, 16);
     const runKey = safePart(input.runId, randomUUID().slice(0, 8));
     const branch = `nexotao/${safePart(input.identifier, "issue")}/${runKey}`;
@@ -420,7 +451,23 @@ export class GitWorkspaceManager {
       return result(false, `you are on ${branch || "a different branch"} rather than ${assignment.targetBranch}, so the work was left on ${assignment.branch}`);
     }
     let source = assignment.branch;
-    if (head !== assignment.baseCommit) {
+    // A continuation run branches from the *previous* run's commit, which is by
+    // definition ahead of a HEAD that never received it. There is nothing to
+    // replay — the base already contains everything HEAD has, so the merge below
+    // fast-forwards on its own. Refusing here would reject every follow-up to a
+    // task whose first run was refused, piling the work up on branches the user
+    // never sees.
+    //
+    // "HEAD is an ancestor of the base" alone does NOT establish that: a user
+    // who resets their branch mid-run produces exactly the same shape, and
+    // fast-forwarding there would silently restore commits they deliberately
+    // dropped. The distinguishing fact is recorded, not inferred — the base has
+    // to be a commit an earlier run *on this issue* actually produced.
+    const continuation = head !== assignment.baseCommit
+      && this.repositories.listWorkspacesForIssue(assignment.issueId)
+        .some((w) => w.runId !== assignment.runId && w.commitSha === assignment.baseCommit)
+      && await git(assignment.repositoryPath, "merge-base", "--is-ancestor", head, assignment.baseCommit).then(() => true).catch(() => false);
+    if (head !== assignment.baseCommit && !continuation) {
       // Two teammates working at once both branch from the same base, and the
       // first to finish moves it. Refusing here would strand every sub-task but
       // one on a branch of its own — which is exactly what a user delegating work

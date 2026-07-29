@@ -545,3 +545,138 @@ test("integration refuses to merge into a working tree the user is mid-edit on",
     await assert.rejects(access(path.join(f.repositoryPath, "later.txt")));
   } finally { await cleanup(f); }
 });
+
+test("a follow-up run continues from the work the previous run left behind", async () => {
+  const f = await fixture();
+  try {
+    // First run writes a file and commits it, but integration is refused —
+    // the user was mid-edit, which is the ordinary case when they are watching
+    // the folder while the agent works.
+    const first = await activate(f, "rewound");
+    const one = await f.manager.provision({
+      projectId: "project", issueId: "issue-rewound", identifier: "NEXA-11", runId: first, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(one.workspacePath, "App.jsx"), "export default function App() {}\n");
+    await f.manager.finalizeCommit("issue-rewound", first, "NEXA-11");
+    await writeFile(path.join(f.repositoryPath, "shared.txt"), "user is typing\n");
+    const refusal = await f.manager.integrate(first);
+    assert.equal(refusal.integrated, false);
+
+    // The user asks a follow-up on the same task. Its worktree is fresh, so
+    // branching from the repository's HEAD would show the agent an empty folder
+    // and it would truthfully report having written nothing — which is exactly
+    // what a user who watched it write four files reads as amnesia.
+    new IssueLifecycleService(f.database).release({ issueId: "issue-rewound", agentId: "agent-rewound", runId: first, reason: "done" });
+    const second = await activate(f, "rewound");
+    const two = await f.manager.provision({
+      projectId: "project", issueId: "issue-rewound", identifier: "NEXA-11", runId: second, repositoryPath: f.repositoryPath,
+    });
+    assert.notEqual(two.workspacePath, one.workspacePath);
+    assert.equal(
+      await readFile(path.join(two.workspacePath, "App.jsx"), "utf8"),
+      "export default function App() {}\n",
+      "the follow-up run must see the previous run's work",
+    );
+  } finally { await cleanup(f); }
+});
+
+test("a continued run still lands both runs' work once the folder is clean again", async () => {
+  const f = await fixture();
+  try {
+    // Run one is refused because the user was mid-edit.
+    const first = await activate(f, "clash");
+    const one = await f.manager.provision({
+      projectId: "project", issueId: "issue-clash", identifier: "NEXA-12", runId: first, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(one.workspacePath, "first.txt"), "run one\n");
+    await f.manager.finalizeCommit("issue-clash", first, "NEXA-12");
+    await writeFile(path.join(f.repositoryPath, "shared.txt"), "user is typing\n");
+    assert.equal((await f.manager.integrate(first)).integrated, false);
+
+    // The user tidies up, then asks a follow-up. Run two continues from run
+    // one's commit, so its base is deliberately *ahead* of the repository's
+    // HEAD. Integration must recognise that as the continuation it is rather
+    // than mistaking it for a divergence — otherwise every follow-up on a task
+    // that was once refused is refused forever, and the work piles up on
+    // branches the user never sees.
+    await git(f.repositoryPath, "checkout", "--", "shared.txt");
+    new IssueLifecycleService(f.database).release({ issueId: "issue-clash", agentId: "agent-clash", runId: first, reason: "done" });
+    const second = await activate(f, "clash");
+    const two = await f.manager.provision({
+      projectId: "project", issueId: "issue-clash", identifier: "NEXA-12", runId: second, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(two.workspacePath, "second.txt"), "run two\n");
+    await f.manager.finalizeCommit("issue-clash", second, "NEXA-12");
+    const outcome = await f.manager.integrate(second);
+
+    assert.equal(outcome.integrated, true, outcome.reason ?? "integration was refused");
+    assert.equal(await readFile(path.join(f.repositoryPath, "first.txt"), "utf8"), "run one\n");
+    assert.equal(await readFile(path.join(f.repositoryPath, "second.txt"), "utf8"), "run two\n");
+  } finally { await cleanup(f); }
+});
+
+test("a rewind that lands on a prior run's commit is still refused", async () => {
+  const f = await fixture();
+  try {
+    // The continuation path keys off a base that an earlier run on this issue
+    // produced. A user who resets their branch backwards creates the same graph
+    // shape — HEAD an ancestor of the base — so shape alone cannot tell the two
+    // apart. Here the user's rewind is *deliberate* and the run's base is its
+    // own first commit, which makes this the case where guessing from the graph
+    // would fast-forward commits they had just thrown away.
+    await writeFile(path.join(f.repositoryPath, "history.txt"), "keeping\n");
+    await git(f.repositoryPath, "add", "history.txt");
+    await git(f.repositoryPath, "commit", "-m", "feat(app): a commit to rewind past");
+
+    const run = await activate(f, "moved");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-moved", identifier: "NEXA-8", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(assignment.workspacePath, "agent.txt"), "agent work\n");
+    await f.manager.finalizeCommit("issue-moved", run, "NEXA-8");
+    await git(f.repositoryPath, "reset", "--hard", "HEAD~1");
+    const userHead = await git(f.repositoryPath, "rev-parse", "HEAD");
+
+    const outcome = await f.manager.integrate(run);
+    assert.equal(outcome.integrated, false, "a deliberate rewind must not be mistaken for a continuation");
+    assert.match(outcome.reason ?? "", /diverged/);
+    assert.equal(await git(f.repositoryPath, "rev-parse", "HEAD"), userHead, "the user's branch stays where they put it");
+    assert.equal(await readFile(path.join(f.repositoryPath, "history.txt"), "utf8").catch(() => null), null);
+  } finally { await cleanup(f); }
+});
+
+test("continuing never drops commits the user made in the meantime", async () => {
+  const f = await fixture();
+  try {
+    // Run one is refused, so its commit lives only on its own branch.
+    const first = await activate(f, "idle");
+    const one = await f.manager.provision({
+      projectId: "project", issueId: "issue-idle", identifier: "NEXA-9", runId: first, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(one.workspacePath, "agent.txt"), "run one\n");
+    await f.manager.finalizeCommit("issue-idle", first, "NEXA-9");
+    await writeFile(path.join(f.repositoryPath, "shared.txt"), "user is typing\n");
+    assert.equal((await f.manager.integrate(first)).integrated, false);
+    await git(f.repositoryPath, "checkout", "--", "shared.txt");
+
+    // Now the user commits something of their own. HEAD is no longer contained
+    // in the previous run's commit, so continuing from that commit would hand
+    // the follow-up a tree with the user's work missing — and the agent would
+    // edit files as if it were never written. Correctness beats continuity
+    // here: fall back to HEAD and let integration replay the run's work on top.
+    await writeFile(path.join(f.repositoryPath, "mine.txt"), "hand written\n");
+    await git(f.repositoryPath, "add", "mine.txt");
+    await git(f.repositoryPath, "commit", "-m", "feat(app): work the user did themselves");
+
+    new IssueLifecycleService(f.database).release({ issueId: "issue-idle", agentId: "agent-idle", runId: first, reason: "done" });
+    const second = await activate(f, "idle");
+    const two = await f.manager.provision({
+      projectId: "project", issueId: "issue-idle", identifier: "NEXA-9", runId: second, repositoryPath: f.repositoryPath,
+    });
+    assert.equal(
+      await readFile(path.join(two.workspacePath, "mine.txt"), "utf8"),
+      "hand written\n",
+      "the follow-up must see the user's own commit",
+    );
+  } finally { await cleanup(f); }
+});
