@@ -189,14 +189,28 @@ export async function readTree(root: string): Promise<{ tree: TreeNode[]; trunca
   return { tree: await walk(root, ""), truncated };
 }
 
-/** Every folder the panel can show: the project itself, plus a live worktree
- *  for each run currently holding one.
+/** Runs whose agent is still at the keyboard. Anything else — succeeded, failed,
+ *  cancelled — has stopped writing, and its worktree is history rather than a
+ *  place to look. The same pair `validate` and `detectOrphans` use, so all three
+ *  agree on what "in flight" means. */
+const LIVE_RUN_STATUS = new Set(["running", "waiting"]);
+
+/** Every folder the panel can show: the project itself, plus a worktree for each
+ *  run *currently* writing into one.
  *
  *  Both are offered because neither alone is honest. The project folder is the
  *  one the user recognises, but while a run is in flight the agent is writing
  *  into a worktree, so the project folder shows yesterday's files and the user
  *  concludes nothing was written — the exact confusion this panel exists to
- *  clear up. The worktree shows the truth but only until the run ends. */
+ *  clear up. The worktree shows the truth but only until the run ends.
+ *
+ *  Liveness is read from the run's heartbeat, never from the workspace row's
+ *  own state. That state is set to `active` when the worktree is provisioned and
+ *  only advances when a run *commits*, so every run that failed, was cancelled,
+ *  or never reached a commit stayed `active` for good — and the picker grew one
+ *  permanent "working copy" entry per task ever attempted, all of them pointing
+ *  at abandoned checkouts of a folder the user had long since moved past. The
+ *  heartbeat is the record of whether anyone is actually writing there. */
 export async function listRoots(): Promise<WorkspaceRoot[]> {
   const project = await getActiveProject();
   if (!project) return [];
@@ -207,7 +221,8 @@ export async function listRoots(): Promise<WorkspaceRoot[]> {
     const database = await getDatabase();
     const repositories = new ControlPlaneRepositories(database);
     for (const workspace of repositories.listWorkspaces(project.id)) {
-      if (workspace.state !== "active") continue;
+      const heartbeat = repositories.getHeartbeat(workspace.runId);
+      if (!heartbeat || !LIVE_RUN_STATUS.has(heartbeat.status)) continue;
       if (!(await fs.stat(workspace.workspacePath).then((s) => s.isDirectory()).catch(() => false))) continue;
       const issue = repositories.issues.get(workspace.issueId);
       const reference = issue?.identifier || workspace.branch.split("/")[1] || "run";

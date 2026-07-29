@@ -28,11 +28,25 @@ function flatten(nodes: TreeNode[], out: string[] = []) {
   return out;
 }
 
-/** Fetch the tree for one root, re-fetching on an interval while a run is live.
+/** How often the tree is re-read. A run writing files changes it several times a
+ *  second, so a live run is polled briskly; the rest of the time it still moves
+ *  — a finishing run merges its work into the project folder, the user edits in
+ *  their own editor, a build drops files — just far more slowly. */
+const LIVE_INTERVAL = 4_000;
+const IDLE_INTERVAL = 15_000;
+
+/** Fetch the tree for one root, re-reading it on an interval.
  *
- *  `live` is the honest trigger: a run writing files is the only thing that
- *  changes this tree without the user touching anything, and polling a folder
- *  nobody is writing to is pure cost. */
+ *  Polling used to stop the moment a run settled, on the reasoning that only a
+ *  running agent changes these files. That is the one moment it is most wrong:
+ *  a run's last act is to fast-forward its work into the project folder, so the
+ *  files appear *after* the run stops being live. The panel would sit there
+ *  showing the folder as it looked before the work landed, which reads as the
+ *  agent having written nothing.
+ *
+ *  Idle polling is paused while the tab is hidden and re-read on the way back —
+ *  a background tab walking the tree every fifteen seconds buys nobody
+ *  anything, and returning to a stale panel is the thing being fixed. */
 export function useWorkspace({ live = false }: { live?: boolean } = {}): WorkspaceState {
   const [roots, setRoots] = useState<WorkspaceRoot[]>([]);
   const [root, setRoot] = useState<WorkspaceRoot | null>(null);
@@ -64,10 +78,21 @@ export function useWorkspace({ live = false }: { live?: boolean } = {}): Workspa
       }
     };
     void read(false);
-    // A quiet refresh while the agent works: the tree updates under the user
-    // without a spinner flashing over a panel they are reading.
-    const timer = live ? setInterval(() => void read(true), 4000) : null;
-    return () => { stale = true; if (timer) clearInterval(timer); };
+    // A quiet refresh either way: the tree updates under the user without a
+    // spinner flashing over a panel they are reading.
+    const timer = setInterval(() => {
+      if (!live && document.visibilityState === "hidden") return;
+      void read(true);
+    }, live ? LIVE_INTERVAL : IDLE_INTERVAL);
+    // Coming back to the tab is the one moment a stale tree is certain and
+    // waiting out the rest of the interval is most visible.
+    const onVisible = () => { if (document.visibilityState === "visible") void read(true); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stale = true;
+      clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [wanted, nonce, live]);
 
   const paths = useMemo(() => flatten(tree), [tree]);
