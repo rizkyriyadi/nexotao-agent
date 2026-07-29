@@ -28,7 +28,10 @@ export type ToolPresentation = {
 };
 
 const str = (v: unknown) => (typeof v === "string" ? v : v == null ? "" : String(v));
-export const basename = (p: string) => p.split("/").filter(Boolean).pop() || p;
+// Split on both separators: paths reach here from `rel()`, which uses the host's
+// separator, so on Windows a `src\app\page.tsx` was shown whole where every
+// other platform showed `page.tsx`.
+export const basename = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() || p;
 
 /** Fallback for tools added to lib/tools.ts that nobody taught the UI about —
  *  a generic row beats a crash or a raw JSON dump. */

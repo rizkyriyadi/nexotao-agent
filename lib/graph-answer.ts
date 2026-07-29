@@ -57,8 +57,15 @@ async function projectFor(root: string, deps?: AnswerDeps): Promise<string | nul
 // search_graph reports repo-relative paths; get_code_snippet reports absolute
 // ones. Two shapes for one symbol invites the model to paste a machine-specific
 // path into a file it writes, so both are normalised to repo-relative here.
-const relativize = (file: string, base: string) =>
-  base && file.startsWith(`${base}/`) ? file.slice(base.length + 1) : file;
+// Compared separator-insensitively: on Windows the base is `D:\…` while the
+// indexer reports `D:/…`, so a literal prefix test matched neither and left an
+// absolute machine-specific path in the answer.
+const relativize = (file: string, base: string) => {
+  if (!base) return file;
+  const norm = (value: string) => value.replace(/\\/g, "/");
+  const prefix = `${norm(base)}/`;
+  return norm(file).startsWith(prefix) ? norm(file).slice(prefix.length) : file;
+};
 
 const location = (hit: { file: string; startLine: number; endLine: number }, base = "") => {
   const file = relativize(hit.file, base);

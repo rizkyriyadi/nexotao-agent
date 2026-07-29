@@ -281,12 +281,18 @@ export type DelegateFn = (input: { title: string; detail?: string; assignee?: st
  *  while their folder holds none. Asking the model nicely is not enough when the
  *  failure is this quiet, so the path is rewritten on the way out. */
 export function relativizeWorkspacePaths(detail: string, root: string): string {
-  const trimmed = root.replace(/\/+$/, "");
+  const trimmed = root.replace(/[\\/]+$/, "");
   if (!trimmed) return detail;
-  // Longest-first so a trailing-slash form is consumed before the bare root.
-  return detail
-    .split(`${trimmed}/`).join("")
-    .split(trimmed).join(".");
+  // On Windows the root arrives as `D:\…\worktrees\nx-12-<runId>` while the
+  // model, told to write POSIX paths, may echo either separator back — so both
+  // spellings of the same root are stripped. Matching only `/` left every
+  // Windows path untouched, which is the failure this function exists to stop.
+  const spellings = new Set([trimmed, trimmed.replace(/\//g, "\\"), trimmed.replace(/\\/g, "/")]);
+  let out = detail;
+  // Longest-first so a trailing-separator form is consumed before the bare root.
+  for (const spelling of spellings) out = out.split(`${spelling}/`).join("").split(`${spelling}\\`).join("");
+  for (const spelling of spellings) out = out.split(spelling).join(".");
+  return out;
 }
 
 /** Tool definition for handing work to a teammate. Only offered when the project

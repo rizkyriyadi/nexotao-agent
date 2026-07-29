@@ -20,11 +20,18 @@ const SKIP = new Set(["node_modules", ".git", ".next", ".cache"]);
  *  buy nothing, because nobody scrolls that far. When the walk hits the cap the
  *  response says so rather than pretending the tree ended there. */
 const NODE_BUDGET = 6_000;
+/** Ceiling on what a single `git` invocation may hand back. Well above any
+ *  real repository's ignore or status listing, and short of anything that
+ *  threatens the process. */
+const GIT_OUTPUT_LIMIT = 8 * 1024 * 1024;
 
 /** Text is capped well below what a browser will render happily; images are
  *  inlined as data URLs, so their cap is about response size, not readability. */
 const TEXT_LIMIT = 512 * 1024;
 const IMAGE_LIMIT = 6 * 1024 * 1024;
+/** PDFs are decompressed and re-copied by the extractor, so the ceiling is lower
+ *  than the raw bytes suggest. */
+const PDF_LIMIT = 12 * 1024 * 1024;
 
 export type TreeNode = {
   name: string;
@@ -82,8 +89,14 @@ const MARKDOWN = new Set([".md", ".markdown", ".mdx"]);
 function run(cmd: string, args: string[], cwd: string) {
   return new Promise<string>((resolve) => {
     const child = spawn(cmd, args, { cwd, stdio: ["ignore", "pipe", "ignore"] });
+    // Capped like every other spawn in the app. Git's output here is normally
+    // tens of kilobytes, but "normally" is doing the work in that sentence: a
+    // repo with no .gitignore and a generated build tree is the case where this
+    // is read at all, and an unbounded accumulator has no answer for it.
     let out = "";
-    child.stdout.on("data", (chunk) => { out += chunk; });
+    child.stdout.on("data", (chunk) => {
+      if (out.length < GIT_OUTPUT_LIMIT) out += String(chunk).slice(0, GIT_OUTPUT_LIMIT - out.length);
+    });
     child.on("error", () => resolve(""));
     child.on("close", () => resolve(out));
   });
@@ -352,6 +365,10 @@ export async function readPreview(root: string, sub: string): Promise<FilePrevie
   }
 
   if (extension === ".pdf") {
+    // Gated like the image branch above. Without this a PDF was read whole into
+    // memory and then handed to the extractor, which builds its own copy — the
+    // one preview path with no ceiling at all.
+    if (stat.size > PDF_LIMIT) return { kind: "binary", ...base, reason: `PDF is ${humanSize(stat.size)} — too large to preview.` };
     const bytes = await fs.readFile(abs);
     const result = await extractFileText(name, new Uint8Array(bytes));
     return { kind: "pdf", ...base, text: result.text.slice(0, TEXT_LIMIT), ok: result.ok };

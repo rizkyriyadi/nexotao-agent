@@ -3,6 +3,7 @@ import { existsSync } from "fs";
 import path from "path";
 import { spawn } from "child_process";
 import { resolveWithin, rel } from "./paths";
+import { killTree } from "./process-tree";
 import { webFetch, webSearch } from "./websearch";
 import { getConfig } from "./config";
 import { extractFileText } from "./extract";
@@ -244,10 +245,9 @@ export function runCommand(command: string, root: string, signal?: AbortSignal, 
     const append = (chunk: Buffer) => { if (output.length < 2_000_000) output += chunk.toString("utf8").slice(0, 2_000_000 - output.length); };
     child.stdout?.on("data", append);
     child.stderr?.on("data", append);
-    const stop = () => {
-      if (!child.pid) return;
-      try { process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGTERM"); } catch { try { child.kill("SIGTERM"); } catch {} }
-    };
+    // A build or dev server started here spawns its own children; on Windows a
+    // bare pid left them running after the timeout. See lib/process-tree.
+    const stop = () => killTree(child.pid, () => child.kill("SIGTERM"));
     const timer = setTimeout(stop, timeoutMs);
     const abort = () => stop();
     signal?.addEventListener("abort", abort, { once: true });

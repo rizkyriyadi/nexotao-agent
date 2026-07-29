@@ -236,3 +236,30 @@ test("the mention corpus is every file and no folders", async () => {
   assert.ok(!paths.includes("src"), "a folder is not a mentionable file");
   assert.ok(!paths.includes("dist"), "nor is an ignored one");
 });
+
+/* Why: every other preview branch has a ceiling — text truncates, images refuse
+   past their cap — and the PDF branch had none. It read the whole file into a
+   Buffer and handed it to an extractor that builds its own copy, so a large PDF
+   sitting in a repository was a way to make the panel allocate twice its size
+   with nothing to stop it. The user who reported the crash had a machine that
+   ran out of committed memory; this is one of the paths that spends it. */
+test("a PDF too large to preview is refused rather than read whole", async () => {
+  const dir = await repository();
+  // Not a real PDF — the size gate is checked before a byte is read, which is
+  // the entire point. Anything past the cap must never reach readFile.
+  await writeFile(path.join(dir, "manual.pdf"), Buffer.alloc(13 * 1024 * 1024));
+
+  const preview = await readPreview(dir, "manual.pdf");
+  assert.equal(preview.kind, "binary", "refused, not parsed");
+  assert.match(preview.kind === "binary" ? preview.reason : "", /too large to preview/);
+});
+
+/* Why: a PDF under the cap must still be previewed. A gate that refuses
+   everything would "fix" the memory path by removing the feature. */
+test("a PDF within the cap is still previewed", async () => {
+  const dir = await repository();
+  await writeFile(path.join(dir, "small.pdf"), "%PDF-1.4\n% not really\n");
+
+  const preview = await readPreview(dir, "small.pdf");
+  assert.equal(preview.kind, "pdf", "a normal PDF is unaffected by the ceiling");
+});

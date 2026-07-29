@@ -25,6 +25,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expandHome } from "./paths";
+import { killTree } from "./process-tree";
 
 /** npm package providing the CLI. Never a dependency of this app — see the
  *  packaging test in tests/code-memory.test.ts. */
@@ -95,11 +96,8 @@ function spawnCli(bin: string): CliExec {
       child.stdout?.on("data", (c: Buffer) => cap(c, "out"));
       child.stderr?.on("data", (c: Buffer) => cap(c, "err"));
       // The indexer forks workers; killing only the direct child orphans them.
-      const stop = () => {
-        if (!child.pid) return;
-        try { process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGTERM"); }
-        catch { try { child.kill("SIGTERM"); } catch { /* already gone */ } }
-      };
+      // On Windows a bare pid did exactly that — see lib/process-tree.
+      const stop = () => killTree(child.pid, () => child.kill("SIGTERM"));
       const timer = setTimeout(stop, opts.timeoutMs);
       opts.signal?.addEventListener("abort", stop, { once: true });
       // ENOENT (binary absent) is the normal state on a fresh install, so it

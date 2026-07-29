@@ -156,6 +156,28 @@ test("a delegated brief never carries the lead's own workspace path", () => {
   assert.match(brief, /update docs\/index\.md/);
 });
 
+/* Why: the guard above matched a `/`-delimited root only, so on Windows — where
+ * the root arrives as `D:\…\worktrees\…` — it stripped nothing and every
+ * delegated brief carried the lead's absolute path. That is the failure this
+ * whole function exists to prevent, reappearing on the one platform where the
+ * user reporting it was working. The model is told to write POSIX paths and
+ * often does, so both spellings of the same root have to go. */
+test("a Windows workspace path is stripped in either spelling", () => {
+  const root = "D:\\platform vendore\\devi ardiani\\vendora\\.nexotao\\worktrees\\nx-1-9b7ddca6";
+  const posix = root.replace(/\\/g, "/");
+  // Both spellings appear in one brief because that is what actually happens:
+  // the root is handed to us backslashed by the host, while the model — told to
+  // write POSIX paths — echoes it back with forward slashes.
+  const brief = relativizeWorkspacePaths(
+    `Create ${root}\\ROUTING.md and update ${posix}/docs/index.md.`,
+    root,
+  );
+  assert.ok(!brief.includes(root), "the backslashed root is gone");
+  assert.ok(!brief.includes(posix), "and so is the same root written with forward slashes");
+  assert.match(brief, /Create ROUTING\.md/);
+  assert.match(brief, /update docs\/index\.md/);
+});
+
 test("relativizing leaves a brief that never mentioned the workspace alone", () => {
   const root = "/home/user/.nexotao/worktrees/abc123/nx-12-9b7ddca6";
   const brief = "Create ROUTING.md in the repo root. Cover redirects and 404s.";
