@@ -148,6 +148,19 @@ body {
   animation: nx-blink 1s step-end infinite;
 }
 
+/* Backdrop for image previews. A transparent PNG on a plain white panel is
+   indistinguishable from an opaque white one; the checkerboard is the
+   convention that tells you which you are looking at. */
+.nx-checker {
+  background-image:
+    linear-gradient(45deg, var(--color-code-surface) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--color-code-surface) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--color-code-surface) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--color-code-surface) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+}
+
 .diff-add { background: color-mix(in srgb, var(--color-lichen-green) 8%, transparent); }
 .diff-del { background: color-mix(in srgb, var(--color-alarm-red) 6%, transparent); }
 
