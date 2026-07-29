@@ -8,16 +8,18 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TreeNode, WorkspaceRoot } from "@/lib/workspace-files";
 
+export type WorkspaceNotice = { reference: string; branch: string; reason: string };
+
 export type WorkspaceState = {
-  roots: WorkspaceRoot[];
   root: WorkspaceRoot | null;
   tree: TreeNode[];
   paths: string[];
   truncated: boolean;
+  /** Set when a finished run's work never reached the project folder. */
+  notice: WorkspaceNotice | null;
   loading: boolean;
   error: string | null;
   reload: () => void;
-  choose: (id: string) => void;
 };
 
 function flatten(nodes: TreeNode[], out: string[] = []) {
@@ -35,7 +37,14 @@ function flatten(nodes: TreeNode[], out: string[] = []) {
 const LIVE_INTERVAL = 4_000;
 const IDLE_INTERVAL = 15_000;
 
-/** Fetch the tree for one root, re-reading it on an interval.
+/** Fetch the tree for the one folder the server picks, re-reading it on an
+ *  interval.
+ *
+ *  There is no folder to choose any more. The server follows the work — a live
+ *  run's worktree while it writes, the project folder once it lands — so the
+ *  handover happens inside a poll the user never sees. Polling is what makes
+ *  that possible: without it the panel would sit on a folder the run has
+ *  finished with.
  *
  *  Polling used to stop the moment a run settled, on the reasoning that only a
  *  running agent changes these files. That is the one moment it is most wrong:
@@ -48,13 +57,12 @@ const IDLE_INTERVAL = 15_000;
  *  a background tab walking the tree every fifteen seconds buys nobody
  *  anything, and returning to a stale panel is the thing being fixed. */
 export function useWorkspace({ live = false }: { live?: boolean } = {}): WorkspaceState {
-  const [roots, setRoots] = useState<WorkspaceRoot[]>([]);
   const [root, setRoot] = useState<WorkspaceRoot | null>(null);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [truncated, setTruncated] = useState(false);
+  const [notice, setNotice] = useState<WorkspaceNotice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [wanted, setWanted] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
@@ -62,15 +70,15 @@ export function useWorkspace({ live = false }: { live?: boolean } = {}): Workspa
     const read = async (quiet: boolean) => {
       if (!quiet) setLoading(true);
       try {
-        const response = await fetch(`/api/files${wanted ? `?root=${encodeURIComponent(wanted)}` : ""}`, { cache: "no-store" });
+        const response = await fetch("/api/files", { cache: "no-store" });
         const body = await response.json();
         if (stale) return;
         if (body.error) { setError(body.error); return; }
         setError(null);
-        setRoots(body.roots ?? []);
         setRoot(body.root ?? null);
         setTree(body.tree ?? []);
         setTruncated(Boolean(body.truncated));
+        setNotice(body.notice ?? null);
       } catch (cause) {
         if (!stale) setError(String(cause));
       } finally {
@@ -93,11 +101,10 @@ export function useWorkspace({ live = false }: { live?: boolean } = {}): Workspa
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [wanted, nonce, live]);
+  }, [nonce, live]);
 
   const paths = useMemo(() => flatten(tree), [tree]);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
-  const choose = useCallback((id: string) => setWanted(id), []);
 
-  return { roots, root, tree, paths, truncated, loading, error, reload, choose };
+  return { root, tree, paths, truncated, notice, loading, error, reload };
 }

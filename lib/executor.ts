@@ -267,6 +267,13 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
         // integration was even attempted), the board reads the issue summary, and
         // the answer text is what a follow-up run sees as the prior turn.
         if (integration.reason && integration.commit) {
+          // A fourth reader, and the only one that outlives the run: the files
+          // panel. The three below are all transcript-shaped — they answer "what
+          // happened in this run?" — but the user's next question is "where are
+          // my files?", asked from a folder view that has no run attached. That
+          // needs the refusal recorded on the workspace itself, where a later
+          // read can find it without replaying events.
+          await repositories.markWorkspaceState(runId, "rejected", integration.reason).catch(() => {});
           await heartbeat.emit(RUN_INTEGRATION_EVENT_TYPE, {
             branch: integration.branch, reason: integration.reason, thread: "lead",
           });

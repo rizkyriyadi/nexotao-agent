@@ -89,6 +89,22 @@ function run(cmd: string, args: string[], cwd: string) {
   });
 }
 
+/** Whether `commit` is already contained in the repository's current HEAD.
+ *
+ *  `run` above resolves with whatever reached stdout and ignores the exit code,
+ *  which is right for commands read for their output and useless for one asked a
+ *  yes/no question — `merge-base --is-ancestor` answers only in its exit status
+ *  and prints nothing either way. A repository that has gone missing, or a
+ *  commit garbage-collected out of it, exits non-zero too; "not merged" is the
+ *  safe reading, since the worst it does is show a notice pointing at a branch. */
+function isAncestor(repository: string, commit: string) {
+  return new Promise<boolean>((resolve) => {
+    const child = spawn("git", ["merge-base", "--is-ancestor", commit, "HEAD"], { cwd: repository, stdio: "ignore" });
+    child.on("error", () => resolve(false));
+    child.on("close", (code) => resolve(code === 0));
+  });
+}
+
 /** Resolve `sub` inside `root`, refusing anything that escapes it.
  *
  *  `resolveWithin` compares the *lexical* path, which a symlink defeats: a link
@@ -195,22 +211,25 @@ export async function readTree(root: string): Promise<{ tree: TreeNode[]; trunca
  *  agree on what "in flight" means. */
 const LIVE_RUN_STATUS = new Set(["running", "waiting"]);
 
-/** Every folder the panel can show: the project itself, plus a worktree for each
- *  run *currently* writing into one.
+/** Work a run finished that never reached the project folder, and where to find
+ *  it. `integrate` refuses rather than forcing a merge when the user's own tree
+ *  has uncommitted changes or has moved on, which is right — but it leaves the
+ *  files somewhere the folder view cannot see. */
+export type WorkspaceNotice = { reference: string; branch: string; reason: string };
+
+/** Every folder the panel *could* show: the project itself, plus a worktree for
+ *  each run currently writing into one.
  *
- *  Both are offered because neither alone is honest. The project folder is the
- *  one the user recognises, but while a run is in flight the agent is writing
- *  into a worktree, so the project folder shows yesterday's files and the user
- *  concludes nothing was written — the exact confusion this panel exists to
- *  clear up. The worktree shows the truth but only until the run ends.
+ *  Not what the panel displays — `activeRoot` picks that. This list exists so a
+ *  preview or save request naming a worktree still resolves while the run that
+ *  owns it is finishing, instead of failing the moment the panel moves on.
  *
  *  Liveness is read from the run's heartbeat, never from the workspace row's
  *  own state. That state is set to `active` when the worktree is provisioned and
  *  only advances when a run *commits*, so every run that failed, was cancelled,
- *  or never reached a commit stayed `active` for good — and the picker grew one
- *  permanent "working copy" entry per task ever attempted, all of them pointing
- *  at abandoned checkouts of a folder the user had long since moved past. The
- *  heartbeat is the record of whether anyone is actually writing there. */
+ *  or never reached a commit stayed `active` for good — one dead entry per task
+ *  ever attempted, all pointing at abandoned checkouts. The heartbeat is the
+ *  record of whether anyone is actually writing there. */
 export async function listRoots(): Promise<WorkspaceRoot[]> {
   const project = await getActiveProject();
   if (!project) return [];
@@ -241,10 +260,63 @@ export async function listRoots(): Promise<WorkspaceRoot[]> {
   return roots;
 }
 
+/** The one folder the panel shows, chosen rather than asked about.
+ *
+ *  Offering both the project and a per-run working copy made the user pick
+ *  between two folders to answer one question — "where are my files?" — and the
+ *  answer changed every task, so the panel read as a different folder per task.
+ *  It is not: there is one project, and a worktree is a temporary place the
+ *  agent writes so a half-finished run cannot disturb the folder the user has
+ *  open. That is an implementation detail, and the panel now keeps it as one.
+ *
+ *  A live run wins because during it the project folder is genuinely stale — the
+ *  agent is writing elsewhere, and showing yesterday's files while the user
+ *  watches it write is the confusion this panel exists to remove. The moment the
+ *  run settles its work has been fast-forwarded into the project, so the project
+ *  folder becomes the truthful answer again and the panel returns on its own.
+ *  The newest live run is taken when several exist, so the folder tracks the
+ *  work the user is watching rather than an older run still winding down. */
+export async function activeRoot(): Promise<WorkspaceRoot | null> {
+  const roots = await listRoots();
+  if (!roots.length) return null;
+  const live = roots.filter((r) => r.kind === "worktree");
+  return live.length ? live[live.length - 1] : roots[0];
+}
+
+/** Whether a finished run's work is still sitting on its branch, unmerged.
+ *
+ *  Recorded at the moment of refusal by the executor, then confirmed here
+ *  against git before it is shown. The record alone would go stale the instant
+ *  the user merges by hand and would nag about work that has long since landed;
+ *  asking git whether the commit is an ancestor of HEAD is exact, cheap, and
+ *  self-clearing. Only reported while the project folder is on screen — during a
+ *  run the panel is showing the worktree, where the files are plainly visible. */
+export async function pendingWork(): Promise<WorkspaceNotice | null> {
+  try {
+    const project = await getActiveProject();
+    if (!project) return null;
+    const database = await getDatabase();
+    const repositories = new ControlPlaneRepositories(database);
+    const rejected = repositories.listWorkspaces(project.id).filter((w) => w.state === "rejected" && w.commitSha);
+    for (const workspace of rejected.reverse()) {
+      if (await isAncestor(workspace.repositoryPath, workspace.commitSha!)) continue;
+      const issue = repositories.issues.get(workspace.issueId);
+      return {
+        reference: issue?.identifier || workspace.branch.split("/")[1] || "this run",
+        branch: workspace.branch,
+        reason: workspace.recoveryNote || "your project folder had changes of its own",
+      };
+    }
+  } catch {
+    // A folder view that cannot reach the control plane is still a folder view.
+  }
+  return null;
+}
+
 export async function resolveRoot(id: string | null): Promise<WorkspaceRoot | null> {
   const roots = await listRoots();
   if (!roots.length) return null;
-  return roots.find((r) => r.id === id) ?? roots[0];
+  return roots.find((r) => r.id === id) ?? (await activeRoot());
 }
 
 /** Heuristic that decides whether a file can be shown as text. A NUL byte in

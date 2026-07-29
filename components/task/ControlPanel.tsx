@@ -159,14 +159,13 @@ export function ControlPanel() {
 
     {dock && (
       <WorkspaceDock
-        roots={workspace.roots}
         root={workspace.root}
         tree={workspace.tree}
         truncated={workspace.truncated}
+        notice={workspace.notice}
         loading={workspace.loading}
         error={workspace.error}
         onReload={workspace.reload}
-        onChoose={workspace.choose}
         onClose={toggleDock}
       />
     )}

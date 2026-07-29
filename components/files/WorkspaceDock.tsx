@@ -14,6 +14,7 @@ import { FileTree } from "./FileTree";
 import { FilePreviewPane } from "./FilePreview";
 import { DOCK_MIN, useDockWidth } from "./useDockWidth";
 import type { TreeNode, WorkspaceRoot } from "@/lib/workspace-files";
+import type { WorkspaceNotice } from "./use-workspace";
 
 /** Top-level folders start open. Landing on a wall of collapsed folders makes a
  *  small project look empty, which is the impression this panel exists to fix. */
@@ -22,16 +23,15 @@ function initialExpansion(tree: TreeNode[]) {
 }
 
 export function WorkspaceDock({
-  roots, root, tree, truncated, loading, error, onReload, onChoose, onClose,
+  root, tree, truncated, notice, loading, error, onReload, onClose,
 }: {
-  roots: WorkspaceRoot[];
   root: WorkspaceRoot | null;
   tree: TreeNode[];
   truncated: boolean;
+  notice: WorkspaceNotice | null;
   loading: boolean;
   error: string | null;
   onReload: () => void;
-  onChoose: (id: string) => void;
   onClose: () => void;
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -65,7 +65,7 @@ export function WorkspaceDock({
     return n;
   }, [tree]);
 
-  if (!loading && !roots.length) {
+  if (!loading && !root) {
     return (
       <Shell width={width} dragging={dragging} startDrag={startDrag} nudge={nudge}>
         <DockHeader onClose={onClose} />
@@ -113,20 +113,7 @@ export function WorkspaceDock({
       <DockHeader onClose={onClose} />
 
       <div className="shrink-0 space-y-2 px-3 pb-2">
-        {roots.length > 1 ? (
-          <label className="block">
-            <span className="sr-only">Folder to browse</span>
-            <select
-              value={root?.id ?? ""}
-              onChange={(event) => { setSelected(null); onChoose(event.target.value); }}
-              className="w-full rounded-lg border border-line bg-raise px-2 py-1.5 text-[12px] text-charcoal outline-none focus:border-line-strong"
-            >
-              {roots.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select>
-          </label>
-        ) : (
-          <p className="truncate px-1 text-[12.5px] font-medium text-charcoal" title={root?.detail}>{root?.label ?? "Files"}</p>
-        )}
+        <p className="truncate px-1 text-[12.5px] font-medium text-charcoal" title={root?.detail}>{root?.label ?? "Files"}</p>
 
         <div className="flex items-center gap-1.5">
           <div className="relative min-w-0 flex-1">
@@ -156,6 +143,21 @@ export function WorkspaceDock({
             : `${fileCount.toLocaleString()} file${fileCount === 1 ? "" : "s"}`}
           {root?.kind === "worktree" && <span className="ml-1 text-amber">· live run copy</span>}
         </p>
+
+        {/* Work that finished but never reached this folder. Without this the
+            files simply are not here and nothing says why — the user watched the
+            agent write them, so the only available conclusion is that it lied. */}
+        {notice && (
+          <div className="rounded-lg border border-amber/30 bg-amber/5 px-2 py-1.5">
+            <p className="text-[10.5px] leading-relaxed text-charcoal">
+              <span className="font-medium">{notice.reference}</span>&rsquo;s work is not in this folder — {notice.reason}.
+            </p>
+            <p className="mt-1 text-[10.5px] text-pebble">
+              It is saved on <code className="break-all font-mono text-[10px] text-charcoal">{notice.branch}</code>. Bring it in with{" "}
+              <code className="break-all font-mono text-[10px] text-charcoal">git merge {notice.branch}</code>.
+            </p>
+          </div>
+        )}
       </div>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-auto px-2 pb-4">
