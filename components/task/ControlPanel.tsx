@@ -3,9 +3,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Sparkles, Loader2, ArrowUpRight, History } from "lucide-react";
+import { Sparkles, Loader2, ArrowUpRight, History, PanelRight } from "lucide-react";
 import { Composer, type RunMode } from "./Composer";
 import { STATUS_LABEL, statusDot, ago } from "./transcript";
+import { WorkspaceDock } from "../files/WorkspaceDock";
+import { useWorkspace } from "../files/use-workspace";
 import { agentAvatar } from "@/lib/avatars";
 
 const SUGGESTIONS = [
@@ -40,7 +42,19 @@ export function ControlPanel() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [leadAvatar, setLeadAvatar] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [dock, setDock] = useState(true);
   const poller = useRef<ReturnType<typeof setInterval> | null>(null);
+  const workspace = useWorkspace();
+
+  // Shares the preference with the task view — the same panel, so the same
+  // answer to "did I ask for this to be hidden?".
+  useEffect(() => { setDock(localStorage.getItem("nexotao.dock") !== "closed"); }, []);
+  const toggleDock = useCallback(() => {
+    setDock((open) => {
+      localStorage.setItem("nexotao.dock", open ? "closed" : "open");
+      return !open;
+    });
+  }, []);
 
   const poll = useCallback(async () => {
     try {
@@ -83,7 +97,18 @@ export function ControlPanel() {
   const recent = tasks.filter((t) => !ACTIVE.has(t.status));
 
   return (
-    <div className="scroll-thin flex h-full min-w-0 flex-1 flex-col items-center overflow-y-auto px-8 py-10">
+    <div className="flex h-full min-w-0 flex-1">
+    <div className="scroll-thin relative flex h-full min-w-0 flex-1 flex-col items-center overflow-y-auto px-8 py-10">
+      {!dock && (
+        <button
+          onClick={toggleDock}
+          title="Show the workspace"
+          aria-label="Show the workspace panel"
+          className="absolute right-4 top-4 flex size-8 items-center justify-center rounded-lg text-pebble transition-colors hover:bg-black/[0.04] hover:text-charcoal"
+        >
+          <PanelRight className="size-4" strokeWidth={1.8} />
+        </button>
+      )}
       <div className="w-full max-w-[600px]">
         <div className="text-center">
           <span className="mx-auto flex size-11 items-center justify-center rounded-2xl bg-mist-lavender text-electric-indigo"><Sparkles className="size-5" /></span>
@@ -100,6 +125,7 @@ export function ControlPanel() {
             onModelChange={setModel}
             onSubmit={(m) => start(input, m)}
             disabled={submitting}
+            mentionPaths={workspace.paths}
             autoFocus
           />
         </div>
@@ -129,6 +155,21 @@ export function ControlPanel() {
           </div>
         </div>
       )}
+    </div>
+
+    {dock && (
+      <WorkspaceDock
+        roots={workspace.roots}
+        root={workspace.root}
+        tree={workspace.tree}
+        truncated={workspace.truncated}
+        loading={workspace.loading}
+        error={workspace.error}
+        onReload={workspace.reload}
+        onChoose={workspace.choose}
+        onClose={toggleDock}
+      />
+    )}
     </div>
   );
 }

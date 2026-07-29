@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Ban, GitBranch, Loader2, Play, Plus, Sparkles } from "lucide-react";
+import { ArrowLeft, Ban, GitBranch, Loader2, PanelRight, Play, Plus, Sparkles } from "lucide-react";
 import { Button } from "../ui/button";
 import { Composer, type RunMode } from "./Composer";
 import { Transcript, STATUS_LABEL, statusDot, TOOL_LABEL, type RunPhase } from "./transcript";
 import { useRunStream } from "./use-run-stream";
+import { WorkspaceDock } from "../files/WorkspaceDock";
+import { useWorkspace } from "../files/use-workspace";
 import { agentAvatar } from "@/lib/avatars";
 
 type Issue = {
@@ -75,10 +77,22 @@ export function TaskView({ id }: { id: string }) {
   const [cancelling, setCancelling] = useState(false);
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [othering, setOthering] = useState<Record<number, boolean>>({});
+  const [dock, setDock] = useState(true);
   const poller = useRef<ReturnType<typeof setInterval> | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const modeTouched = useRef(false);
   const modelTouched = useRef(false);
+
+  // Whether the workspace is docked is a workspace-wide preference, not a
+  // per-task one: hiding it on one task and finding it back on the next reads
+  // as the panel ignoring you.
+  useEffect(() => { setDock(localStorage.getItem("nexotao.dock") !== "closed"); }, []);
+  const toggleDock = useCallback(() => {
+    setDock((open) => {
+      localStorage.setItem("nexotao.dock", open ? "closed" : "open");
+      return !open;
+    });
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -105,6 +119,10 @@ export function TaskView({ id }: { id: string }) {
   const streaming = issue ? STREAMING.has(issue.status) : false;
   const pending = issue ? PENDING.has(issue.status) : false;
   const occupied = issue ? OCCUPIED.has(issue.status) : false;
+
+  // The dock polls only while a run is streaming — that is the one thing that
+  // changes these files without the user touching anything.
+  const workspace = useWorkspace({ live: streaming });
 
   const avatar = useMemo(() => {
     const assignee = detail?.agents.find((a) => a.id === issue?.assigneeAgentId);
@@ -218,6 +236,7 @@ export function TaskView({ id }: { id: string }) {
   };
 
   return (
+    <div className="flex h-full min-w-0 flex-1">
     <div className="flex h-full min-w-0 flex-1 flex-col bg-gradient-to-b from-mist-lavender/40 via-canvas to-warm-bone">
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-line/70 bg-paper-white/70 px-5 backdrop-blur">
         <button onClick={() => router.push("/board")} className="flex size-8 shrink-0 items-center justify-center rounded-lg text-pebble transition-colors hover:bg-black/[0.04] hover:text-charcoal" title="Back to control panel">
@@ -239,6 +258,16 @@ export function TaskView({ id }: { id: string }) {
           </Button>
         )}
         <Button variant="outline" size="sm" className="gap-1.5 rounded-lg" onClick={() => router.push("/board")}><Plus className="size-3.5" /> New task</Button>
+        {!dock && (
+          <button
+            onClick={toggleDock}
+            title="Show the workspace"
+            aria-label="Show the workspace panel"
+            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-pebble transition-colors hover:bg-black/[0.04] hover:text-charcoal"
+          >
+            <PanelRight className="size-4" strokeWidth={1.8} />
+          </button>
+        )}
       </header>
 
       <div ref={scroller} className="scroll-thin min-h-0 flex-1 overflow-y-auto">
@@ -289,6 +318,7 @@ export function TaskView({ id }: { id: string }) {
             onModelChange={(next) => { modelTouched.current = true; setModel(next); }}
             onSubmit={send}
             disabled={sending}
+            mentionPaths={workspace.paths}
             placeholder={occupied ? "Queue a follow-up — Hutao picks it up next…" : "Reply to continue this task…"}
             hint={streaming ? "A run is in progress — your message will be queued."
               : pending ? "This task is queued — your message will be picked up with it."
@@ -296,6 +326,21 @@ export function TaskView({ id }: { id: string }) {
           />
         </div>
       </div>
+    </div>
+
+    {dock && (
+      <WorkspaceDock
+        roots={workspace.roots}
+        root={workspace.root}
+        tree={workspace.tree}
+        truncated={workspace.truncated}
+        loading={workspace.loading}
+        error={workspace.error}
+        onReload={workspace.reload}
+        onChoose={workspace.choose}
+        onClose={toggleDock}
+      />
+    )}
     </div>
   );
 }

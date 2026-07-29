@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { readPreview, readTree, type TreeNode } from "../lib/workspace-files";
+import { flattenPaths, readPreview, readTree, writeFile as saveFile, type TreeNode } from "../lib/workspace-files";
 
 const exec = promisify(execFile);
 
@@ -141,4 +141,98 @@ test("a folder that is not a git repository still shows its files", async () => 
   assert.equal(tree.length, 1);
   assert.equal(find(tree, "notes/todo.md")?.name, "todo.md");
   assert.equal(find(tree, "notes/todo.md")?.status, undefined, "no git means no status, not a crash");
+});
+
+/* Why: an agent run writes into the same tree the editor reads. Someone opens a
+   config file, the agent rewrites it mid-read, and a save built on the stale
+   buffer erases that work with no diff, no conflict marker, and no trace that
+   anything was lost. The version echo is the only thing standing between the
+   two writers. */
+test("a file that changed on disk since it was opened is not overwritten", async () => {
+  const dir = await repository();
+  const opened = await readPreview(dir, "src/app.ts");
+  const version = { size: opened.size, mtimeMs: opened.mtimeMs };
+
+  // The agent writes while the file sits open in the editor.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  await writeFile(path.join(dir, "src", "app.ts"), "export const x = 99; // agent\n");
+
+  const refused = await saveFile(dir, "src/app.ts", "export const x = 2; // me\n", version);
+  assert.equal(refused.ok, false);
+  assert.match(refused.ok === false ? refused.conflict : "", /changed on disk/i);
+  assert.equal(
+    await readFile(path.join(dir, "src", "app.ts"), "utf8"),
+    "export const x = 99; // agent\n",
+    "the agent's write is still there — the stale buffer never landed",
+  );
+
+  // Re-reading yields the current version, and saving against that succeeds.
+  const reopened = await readPreview(dir, "src/app.ts");
+  const saved = await saveFile(dir, "src/app.ts", "export const x = 2; // me\n", { size: reopened.size, mtimeMs: reopened.mtimeMs });
+  assert.equal(saved.ok, true);
+  assert.equal(await readFile(path.join(dir, "src", "app.ts"), "utf8"), "export const x = 2; // me\n");
+});
+
+/* Why: a preview past the cap holds the first 512 KB only. Saving that buffer
+   would write those bytes as the whole file and silently delete the rest — a
+   save that reports success while destroying most of the document. */
+test("a file too large to have been read whole cannot be saved", async () => {
+  const dir = await repository();
+  const line = "x".repeat(99) + "\n";
+  await writeFile(path.join(dir, "huge.log"), line.repeat(8_000)); // ~800 KB
+
+  const result = await saveFile(dir, "huge.log", "oops", null);
+  assert.equal(result.ok, false);
+  assert.match(result.ok === false ? result.conflict : "", /truncate/i);
+  assert.ok((await readFile(path.join(dir, "huge.log"), "utf8")).length > 512 * 1024, "the file is untouched");
+});
+
+/* Why: this endpoint takes a path and a string from an HTTP body. Without the
+   same containment the reader has, it is an arbitrary-file-write on the user's
+   machine — strictly worse than the read it mirrors. */
+test("saving cannot write outside the workspace", async () => {
+  const dir = await repository();
+  const outside = await mkdtemp(path.join(tmpdir(), "nexotao-outside-"));
+  await writeFile(path.join(outside, "secret.txt"), "not yours\n");
+  await symlink(outside, path.join(dir, "escape"));
+
+  await assert.rejects(() => saveFile(dir, "escape/secret.txt", "owned", null), /escapes the workspace/i);
+  await assert.rejects(() => saveFile(dir, "../outside.txt", "owned", null), /escapes/i);
+  assert.equal(await readFile(path.join(outside, "secret.txt"), "utf8"), "not yours\n");
+});
+
+/* Why: the preview for a PDF is its *extracted text*, and for an image a data
+   URL. Accepting a save on either would replace the document with a transcript
+   of itself, or the picture with a base64 string. */
+test("only text files can be written back", async () => {
+  const dir = await repository();
+  const png = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  await writeFile(path.join(dir, "pixel.png"), png);
+
+  const refused = await saveFile(dir, "pixel.png", "not a png", null);
+  assert.equal(refused.ok, false);
+  assert.deepEqual(await readFile(path.join(dir, "pixel.png")), png, "the image bytes are intact");
+
+  // A dotfile with no extension at all is still text and still editable — .env
+  // is one of the files people most want to fix by hand.
+  await writeFile(path.join(dir, ".env"), "KEY=old\n");
+  const saved = await saveFile(dir, ".env", "KEY=new\n", null);
+  assert.equal(saved.ok, true);
+  assert.equal(await readFile(path.join(dir, ".env"), "utf8"), "KEY=new\n");
+});
+
+/* Why: the `@` picker searches this list. A folder in it is a mention the agent
+   cannot read, and a missing file is one the user cannot name. */
+test("the mention corpus is every file and no folders", async () => {
+  const dir = await repository();
+  const { tree } = await readTree(dir);
+  const paths = flattenPaths(tree);
+
+  assert.ok(paths.includes("src/app.ts"), "nested files are reachable by their full path");
+  assert.ok(paths.includes("README.md"));
+  assert.ok(!paths.includes("src"), "a folder is not a mentionable file");
+  assert.ok(!paths.includes("dist"), "nor is an ignored one");
 });

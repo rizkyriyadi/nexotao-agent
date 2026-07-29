@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUp, Check, ChevronUp, CircleHelp, Cpu, List, Sparkles } from "lucide-react";
 import { Button } from "../ui/button";
 import { useModels } from "./use-models";
+import { MentionPicker, mentionAt } from "./MentionPicker";
 
 export type RunMode = "agent" | "plan" | "ask";
 
@@ -39,6 +40,7 @@ export function Composer({
   autoFocus,
   placeholder = "Ask, plan, or build anything in this project…",
   hint,
+  mentionPaths,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -55,12 +57,17 @@ export function Composer({
   /** Optional low-emphasis note folded into the bottom bar, right of the mode
    *  selector — keeps helper copy inside the card instead of floating below. */
   hint?: string;
+  /** Every file path in the open workspace, for `@` mentions. Empty disables the
+   *  picker entirely, so a surface with no workspace behaves exactly as before. */
+  mentionPaths?: string[];
 }) {
   const [open, setOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const [modelUp, setModelUp] = useState(true);
+  const [mention, setMention] = useState<{ start: number; query: string } | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const modelRef = useRef<HTMLDivElement>(null);
+  const areaRef = useRef<HTMLTextAreaElement>(null);
   const models = useModels();
   const active = RUN_MODES.find((m) => m.id === mode) ?? RUN_MODES[0];
   const ActiveIcon = active.icon;
@@ -97,14 +104,61 @@ export function Composer({
 
   const submit = () => { if (value.trim() && !disabled) onSubmit(mode); };
 
+  const mentionsOn = Boolean(mentionPaths?.length);
+
+  /** Re-read the caret after any change to it. The picker has to open, retarget
+   *  and close purely from where the caret sits, because `@` can be typed,
+   *  pasted, or arrowed into from either side. */
+  const syncMention = () => {
+    if (!mentionsOn) return;
+    const element = areaRef.current;
+    if (!element || element.selectionStart !== element.selectionEnd) { setMention(null); return; }
+    setMention(mentionAt(element.value, element.selectionStart));
+  };
+
+  /** Replace the partial `@frag` with the chosen path and drop a trailing space,
+   *  so the next word starts cleanly instead of extending the mention. */
+  const pickMention = (chosen: string) => {
+    if (!mention) return;
+    const element = areaRef.current;
+    const caret = element?.selectionStart ?? value.length;
+    const next = `${value.slice(0, mention.start)}@${chosen} ${value.slice(caret)}`;
+    const cursor = mention.start + chosen.length + 2;
+    onChange(next);
+    setMention(null);
+    requestAnimationFrame(() => {
+      element?.focus();
+      if (element) element.selectionStart = element.selectionEnd = cursor;
+    });
+  };
+
   return (
-    <div className="rounded-2xl border border-line-strong bg-paper-white p-2 shadow-float focus-within:border-electric-indigo/60">
+    <div className="relative rounded-2xl border border-line-strong bg-paper-white p-2 shadow-float focus-within:border-electric-indigo/60">
+      {mention && mentionsOn && (
+        <MentionPicker
+          paths={mentionPaths!}
+          query={mention.query}
+          onPick={pickMention}
+          onDismiss={() => setMention(null)}
+        />
+      )}
       <textarea
+        ref={areaRef}
         rows={1}
         autoFocus={autoFocus}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+        onChange={(e) => { onChange(e.target.value); requestAnimationFrame(syncMention); }}
+        onKeyUp={syncMention}
+        onClick={syncMention}
+        onBlur={() => setMention(null)}
+        onKeyDown={(e) => {
+          // No picker guard here on purpose. While the picker has matches it
+          // ends those keystrokes in the capture phase, so this handler never
+          // sees them; when it has none, Enter should send the prompt as usual.
+          // A guard on `mention` alone would swallow Enter for anyone who typed
+          // an `@` that matches nothing — the prompt would simply refuse to send.
+          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+        }}
         placeholder={placeholder}
         aria-label="Prompt the lead agent"
         className="scroll-thin max-h-56 min-h-[44px] w-full resize-none bg-transparent px-2.5 py-2 text-[15px] leading-relaxed text-charcoal outline-none placeholder:text-pebble"

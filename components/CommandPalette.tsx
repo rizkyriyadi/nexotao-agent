@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   LayoutGrid, Columns3, Boxes, Bot, Settings, Plus, FolderPlus,
-  Table2, CalendarRange, Layers, FileText, Inbox, ChartNoAxesColumn, FolderTree,
+  Table2, CalendarRange, Layers, FileText, Inbox, ChartNoAxesColumn,
 } from "lucide-react";
 import {
   CommandDialog, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandShortcut,
@@ -35,7 +35,6 @@ export function CommandPalette() {
         <CommandGroup heading="Go to">
           <CommandItem onSelect={() => go("/")}><LayoutGrid className="size-4 text-pebble" /> Overview</CommandItem>
           <CommandItem onSelect={() => go("/board")}><Columns3 className="size-4 text-pebble" /> Control Panel</CommandItem>
-          <CommandItem onSelect={() => go("/files")}><FolderTree className="size-4 text-pebble" /> Workspace Files</CommandItem>
           <CommandItem onSelect={() => go("/agents")}><Bot className="size-4 text-pebble" /> Agents</CommandItem>
           <CommandItem onSelect={() => go("/projects")}><Boxes className="size-4 text-pebble" /> Projects</CommandItem>
           <CommandItem onSelect={() => go("/settings")}><Settings className="size-4 text-pebble" /> Settings</CommandItem>

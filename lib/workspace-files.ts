@@ -47,12 +47,22 @@ export type WorkspaceRoot = {
   kind: "project" | "worktree";
 };
 
+/** Identity of the bytes we read, echoed back on save.
+ *
+ *  An agent may be writing the same file while it sits open in the editor. Size
+ *  and mtime together are enough to notice that: if either moved, the buffer on
+ *  screen is no longer an edit of what is on disk, and saving it would silently
+ *  drop whatever landed in between. */
+export type FileVersion = { size: number; mtimeMs: number };
+
+type PreviewBase = { path: string; name: string; size: number; mtimeMs: number };
+
 export type FilePreview =
-  | { kind: "text"; path: string; name: string; size: number; language: string; text: string; truncated: boolean }
-  | { kind: "markdown"; path: string; name: string; size: number; text: string; truncated: boolean }
-  | { kind: "image"; path: string; name: string; size: number; dataUrl: string }
-  | { kind: "pdf"; path: string; name: string; size: number; text: string; ok: boolean }
-  | { kind: "binary"; path: string; name: string; size: number; reason: string };
+  | ({ kind: "text"; language: string; text: string; truncated: boolean } & PreviewBase)
+  | ({ kind: "markdown"; text: string; truncated: boolean } & PreviewBase)
+  | ({ kind: "image"; dataUrl: string } & PreviewBase)
+  | ({ kind: "pdf"; text: string; ok: boolean } & PreviewBase)
+  | ({ kind: "binary"; reason: string } & PreviewBase);
 
 const IMAGE_TYPES: Record<string, string> = {
   ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
@@ -244,7 +254,7 @@ export async function readPreview(root: string, sub: string): Promise<FilePrevie
   const stat = await fs.stat(abs);
   const name = path.basename(abs);
   const extension = path.extname(abs).toLowerCase();
-  const base = { path: sub, name, size: stat.size };
+  const base = { path: sub, name, size: stat.size, mtimeMs: stat.mtimeMs };
 
   if (stat.isDirectory()) return { kind: "binary", ...base, reason: "This is a folder." };
 
@@ -276,4 +286,73 @@ export async function readPreview(root: string, sub: string): Promise<FilePrevie
   const truncated = stat.size > TEXT_LIMIT;
   if (MARKDOWN.has(extension)) return { kind: "markdown", ...base, text, truncated };
   return { kind: "text", ...base, language: LANGUAGES[extension] ?? (extension ? extension.slice(1) : "text"), text, truncated };
+}
+
+/** Save an edited text file back to disk.
+ *
+ *  Two things can go wrong that the user cannot see, so both are refused rather
+ *  than handled optimistically:
+ *
+ *  - **The file changed underneath.** An agent run writes into the same tree the
+ *    editor is reading. If size or mtime moved since the preview was taken, the
+ *    buffer on screen is an edit of bytes that no longer exist, and writing it
+ *    would erase the agent's work with no trace. The caller sends back the
+ *    version it read and gets a conflict instead.
+ *  - **The file was only partially read.** A file past `TEXT_LIMIT` is previewed
+ *    truncated. Saving that buffer would delete everything past the cap, which
+ *    looks like a successful save right up until the missing half is noticed.
+ *
+ *  Only files that were previewable as text can be written: this endpoint exists
+ *  to edit code, config and notes, not to let arbitrary bytes be POSTed over a
+ *  PDF or a PNG. */
+export async function writeFile(
+  root: string,
+  sub: string,
+  text: string,
+  expected: FileVersion | null,
+): Promise<{ ok: true; version: FileVersion } | { ok: false; conflict: string }> {
+  const abs = await safeResolve(root, sub);
+  const stat = await fs.stat(abs);
+  if (stat.isDirectory()) return { ok: false, conflict: "That is a folder, not a file." };
+  if (stat.size > TEXT_LIMIT) {
+    return { ok: false, conflict: `This file is ${humanSize(stat.size)} — only the first ${humanSize(TEXT_LIMIT)} was read, so saving would truncate it.` };
+  }
+
+  const extension = path.extname(abs).toLowerCase();
+  if (IMAGE_TYPES[extension] || extension === ".pdf") {
+    return { ok: false, conflict: "Only text files can be edited here." };
+  }
+
+  if (expected && (expected.size !== stat.size || Math.abs(expected.mtimeMs - stat.mtimeMs) > 1)) {
+    return { ok: false, conflict: "This file changed on disk since you opened it — reload it before saving, or your edit would overwrite that change." };
+  }
+
+  // Written through a temporary file in the same directory and renamed into
+  // place: a half-written source file is worse than an unsaved one, and a crash
+  // mid-write is exactly how you get one. `rename` within a directory is atomic.
+  const temporary = path.join(path.dirname(abs), `.${path.basename(abs)}.nexotao-${process.pid}.tmp`);
+  try {
+    await fs.writeFile(temporary, text, "utf8");
+    await fs.rename(temporary, abs);
+  } catch (cause) {
+    await fs.rm(temporary, { force: true }).catch(() => {});
+    throw cause;
+  }
+  const after = await fs.stat(abs);
+  return { ok: true, version: { size: after.size, mtimeMs: after.mtimeMs } };
+}
+
+/** Every file path in a tree, flattened — the corpus the `@` mention picker
+ *  searches. Directories are dropped: mentioning a folder tells the agent
+ *  nothing it can read. */
+export function flattenPaths(tree: TreeNode[]): string[] {
+  const out: string[] = [];
+  const walk = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      if (node.type === "dir") walk(node.children ?? []);
+      else out.push(node.path);
+    }
+  };
+  walk(tree);
+  return out;
 }

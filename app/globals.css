@@ -119,6 +119,12 @@ body {
   background-clip: padding-box;
 }
 
+/* The editor's line-number gutter scrolls in step with the textarea beside it.
+   Its own scrollbar would be a second one tracking the same content, so it is
+   hidden rather than styled. */
+.hide-scrollbar { scrollbar-width: none; }
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+
 @keyframes nx-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
 .nx-pulse { animation: nx-pulse 1.5s ease-in-out infinite; }
 

@@ -2,18 +2,28 @@
 
 /* The reading half of the workspace panel. Each file kind gets the presentation
    it deserves: markdown rendered, code with line numbers, images on a checker
-   backdrop, PDFs as their extracted text — the same text the agent reads. */
+   backdrop, PDFs as their extracted text — the same text the agent reads.
+   Text files can be switched into an editor and saved back. */
 
-import { useEffect, useState } from "react";
-import { FileQuestion, Loader2 } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Check, Eye, FileQuestion, Loader2, Pencil, RotateCcw } from "lucide-react";
 import { Markdown } from "@/components/ui/markdown";
 import { CopyButton } from "@/components/task/tool-atoms";
+import { FileEditor } from "./FileEditor";
 import type { FilePreview as Preview } from "@/lib/workspace-files";
 
 function humanSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Text kinds are the ones an edit makes sense on. A PDF's preview is extracted
+ *  text, not the file — saving it would replace the document with its own
+ *  transcript. */
+function editable(preview: Preview): preview is Extract<Preview, { kind: "text" | "markdown" }> {
+  return (preview.kind === "text" || preview.kind === "markdown") && !preview.truncated;
 }
 
 /** Code with a gutter. Line numbers are a separate column rather than part of
@@ -75,13 +85,25 @@ function Body({ preview }: { preview: Preview }) {
   );
 }
 
-export function FilePreviewPane({ root, path }: { root: string; path: string | null }) {
+export function FilePreviewPane({
+  root, path, compact, onSaved,
+}: {
+  root: string;
+  path: string | null;
+  /** Tighter chrome for the dock beside the composer, where horizontal room is
+   *  scarce — the same component rather than a second, drifting copy. */
+  compact?: boolean;
+  onSaved?: () => void;
+}) {
   const [preview, setPreview] = useState<Preview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [nonce, setNonce] = useState(0);
 
   useEffect(() => {
-    if (!path) { setPreview(null); setError(null); return; }
+    if (!path) { setPreview(null); setError(null); setDraft(null); return; }
     // A fast click through the tree can land responses out of order; the flag
     // makes each effect discard its own result once a newer one has started.
     let stale = false;
@@ -93,11 +115,36 @@ export function FilePreviewPane({ root, path }: { root: string; path: string | n
         if (stale) return;
         if (body.error) { setError(body.error); setPreview(null); }
         else { setPreview(body as Preview); setError(null); }
+        // Switching files always leaves the editor. Carrying a draft across a
+        // selection change would offer to save one file's text into another.
+        setDraft(null);
       })
       .catch((cause) => { if (!stale) setError(String(cause)); })
       .finally(() => { if (!stale) setLoading(false); });
     return () => { stale = true; };
-  }, [root, path]);
+  }, [root, path, nonce]);
+
+  const save = useCallback(async () => {
+    if (!preview || draft === null || saving) return;
+    setSaving(true);
+    try {
+      const response = await fetch("/api/files/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ root, path: preview.path, text: draft, version: { size: preview.size, mtimeMs: preview.mtimeMs } }),
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.error || "Couldn't save");
+      toast.success(`Saved ${preview.name}`);
+      setDraft(null);
+      setNonce((n) => n + 1);
+      onSaved?.();
+    } catch (cause: any) {
+      toast.error(String(cause?.message ?? cause));
+    } finally {
+      setSaving(false);
+    }
+  }, [preview, draft, saving, root, onSaved]);
 
   if (!path) {
     return (
@@ -109,20 +156,63 @@ export function FilePreviewPane({ root, path }: { root: string; path: string | n
     );
   }
 
+  const editing = draft !== null;
+  const dirty = editing && preview && "text" in preview && draft !== preview.text;
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b border-line px-5 py-3">
+      <header className={`flex shrink-0 items-center gap-2 border-b border-line ${compact ? "px-3 py-2" : "px-5 py-3"}`}>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-medium text-charcoal">{preview?.name ?? path.split("/").pop()}</p>
-          <p className="truncate text-[11px] text-pebble">{path}</p>
+          <p className="truncate text-[13px] font-medium text-charcoal">
+            {preview?.name ?? path.split("/").pop()}
+            {dirty && <span className="ml-1.5 text-[11px] font-normal text-amber-700">· unsaved</span>}
+          </p>
+          {!compact && <p className="truncate text-[11px] text-pebble">{path}</p>}
         </div>
-        {preview && <span className="shrink-0 text-[11px] text-pebble">{humanSize(preview.size)}</span>}
-        {preview && (preview.kind === "text" || preview.kind === "markdown" || preview.kind === "pdf") && (
+        {preview && !editing && <span className="shrink-0 text-[11px] text-pebble">{humanSize(preview.size)}</span>}
+
+        {preview && editable(preview) && !editing && (
+          <button
+            type="button"
+            onClick={() => setDraft(preview.text)}
+            title="Edit this file"
+            aria-label="Edit this file"
+            className="shrink-0 rounded-lg border border-line p-1.5 text-pebble transition-colors hover:text-charcoal"
+          >
+            <Pencil className="size-3.5" strokeWidth={1.8} />
+          </button>
+        )}
+
+        {editing && (
+          <>
+            <button
+              type="button"
+              onClick={() => setDraft(null)}
+              title="Discard changes"
+              aria-label="Discard changes and go back to reading"
+              className="shrink-0 rounded-lg border border-line p-1.5 text-pebble transition-colors hover:text-charcoal"
+            >
+              {dirty ? <RotateCcw className="size-3.5" strokeWidth={1.8} /> : <Eye className="size-3.5" strokeWidth={1.8} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => void save()}
+              disabled={!dirty || saving}
+              title="Save (⌘S)"
+              aria-label="Save this file"
+              className="flex shrink-0 items-center gap-1 rounded-lg bg-electric-indigo px-2.5 py-1.5 text-[12px] font-medium text-white transition-opacity disabled:opacity-40"
+            >
+              {saving ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" strokeWidth={2.2} />} Save
+            </button>
+          </>
+        )}
+
+        {preview && !editing && (preview.kind === "text" || preview.kind === "markdown" || preview.kind === "pdf") && (
           <CopyButton text={preview.text} label="Copy file contents" />
         )}
       </header>
 
-      <div className="scroll-thin min-h-0 flex-1 overflow-auto p-4">
+      <div className={`scroll-thin flex min-h-0 flex-1 flex-col overflow-auto ${compact ? "p-2.5" : "p-4"}`}>
         {loading && !preview && (
           <div className="flex items-center gap-2 px-1 py-6 text-[12.5px] text-pebble">
             <Loader2 className="size-3.5 animate-spin" /> Reading…
@@ -130,14 +220,24 @@ export function FilePreviewPane({ root, path }: { root: string; path: string | n
         )}
         {error && <p className="rounded-xl border border-alarm-red/25 bg-alarm-red/5 px-3 py-2.5 text-[12.5px] text-alarm-red">{error}</p>}
         {preview && !error && (
-          <>
-            {"truncated" in preview && preview.truncated && (
-              <p className="mb-2 rounded-lg bg-amber-500/10 px-3 py-1.5 text-[11.5px] text-amber-700">
-                Showing the first 512 KB — this file is larger than that.
-              </p>
-            )}
-            <Body preview={preview} />
-          </>
+          editing ? (
+            <FileEditor
+              value={draft}
+              onChange={setDraft}
+              language={preview.kind === "text" ? preview.language : "markdown"}
+              onSave={() => void save()}
+              saving={saving}
+            />
+          ) : (
+            <>
+              {"truncated" in preview && preview.truncated && (
+                <p className="mb-2 rounded-lg bg-amber-500/10 px-3 py-1.5 text-[11.5px] text-amber-700">
+                  Showing the first 512 KB — this file is larger than that, so it can be read here but not edited.
+                </p>
+              )}
+              <Body preview={preview} />
+            </>
+          )
         )}
       </div>
     </div>
