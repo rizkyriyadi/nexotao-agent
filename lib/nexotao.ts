@@ -8,14 +8,19 @@ import Anthropic from "@anthropic-ai/sdk";
 export const NEXOTAO_BASE = "https://api.nexotao.com";
 export const DEFAULT_MODEL = "claude-opus-4-8";
 
-/** The model ids the Nexotao gateway serves and this app supports today: Claude
- *  on the Anthropic transport plus the GPT 5.6 series. Kept as an explicit
- *  allow-list so a hardcoded id that the gateway has stopped serving is caught
- *  by a test rather than by a user whose every run 404s. Must track the filter
- *  in `fetchModels`. */
+/** The model ids the Nexotao gateway serves and this app supports today: the
+ *  Claude Opus series on the Anthropic transport, plus GPT-5.6 Sol.
+ *
+ *  This list is what `fetchModels` filters the live catalog by, and that is
+ *  deliberate. The filter used to test `m.provider === "azure-anthropic"`, a
+ *  field the gateway owns and duly renamed to `anthropic` — at which point every
+ *  Claude model vanished from the picker with nothing failing anywhere: the
+ *  catalog still returned them, the request still succeeded, and the filter
+ *  quietly matched none of them. Selecting by id couples us to the one thing a
+ *  model cannot change without becoming a different model. */
 export const AVAILABLE_MODEL_IDS: readonly string[] = [
-  "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
-  "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna",
+  "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6",
+  "gpt-5.6-sol",
 ];
 
 /** How many tokens one assistant turn may produce.
@@ -56,14 +61,18 @@ export function nexotao(apiKey: string) {
 // Ordering for the picker: Claude first (default coding models), then GPT.
 const TIER_ORDER = ["opus", "sonnet", "gpt"];
 
-/** Live catalog, filtered to the models this app supports today: every Claude
- * model plus the GPT 5.6 series (served over the OpenAI-compatible endpoint). */
+/** Live catalog, narrowed to {@link AVAILABLE_MODEL_IDS}.
+ *
+ * Intersected with the live response rather than returned from the constant, so
+ * an id the gateway stops serving disappears on its own instead of sitting in
+ * the picker until someone notices the 404s. */
 export async function fetchModels(): Promise<NexotaoModel[]> {
   const res = await fetch(`${NEXOTAO_BASE}/models`, { cache: "no-store" });
   if (!res.ok) throw new Error(`models ${res.status}`);
   const data = (await res.json()) as { models: any[] };
+  const supported = new Set(AVAILABLE_MODEL_IDS);
   return (data.models ?? [])
-    .filter((m) => m.provider === "azure-anthropic" || /^gpt-5\.6/i.test(m.model))
+    .filter((m) => supported.has(m.model))
     .map((m) => ({
       id: m.model,
       name: m.display_name,

@@ -196,31 +196,71 @@ test("a tool result whose call is absent is dropped", async () => {
   assert.equal(msgs.filter((m) => m.role === "tool").length, 0);
 });
 
-test("fetchModels includes the GPT 5.6 series alongside Claude", async () => {
+/** The catalog exactly as the gateway serves it today, `provider` values and
+ *  all. Every test below reads from this so the shape can only drift in one
+ *  place. */
+const CATALOG = [
+  { model: "claude-opus-5", display_name: "Claude Opus 5", tier: "opus", provider: "anthropic", context_window: 350000 },
+  { model: "claude-opus-4-8", display_name: "Claude Opus 4.8", tier: "opus", provider: "anthropic", context_window: 350000 },
+  { model: "claude-sonnet-4-6", display_name: "Claude Sonnet 4.6", tier: "sonnet", provider: "anthropic", context_window: 350000 },
+  { model: "gpt-5.6-sol", display_name: "GPT-5.6 Sol", tier: "gpt", provider: "openai", context_window: null },
+  { model: "gpt-5.6-terra", display_name: "GPT-5.6 Terra", tier: "gpt", provider: "openai", context_window: null },
+  { model: "gpt-5-mini", display_name: "GPT-5 Mini", tier: "gpt", provider: "openai", context_window: null },
+  { model: "grok-4.3", display_name: "Grok 4.3", tier: "grok", provider: "openai", context_window: null },
+  { model: "DeepSeek-V4-Pro", display_name: "DeepSeek V4 Pro", tier: "deepseek", provider: "openai", context_window: 131072 },
+];
+
+async function withCatalog<T>(models: unknown[], body: () => Promise<T>): Promise<T> {
   const original = globalThis.fetch;
-  globalThis.fetch = (async () => ({
-    ok: true,
-    json: async () => ({
-      models: [
-        { model: "claude-opus-4-8", display_name: "Claude Opus 4.8", tier: "opus", provider: "azure-anthropic", context_window: 350000 },
-        { model: "gpt-5.6-terra", display_name: "GPT-5.6 Terra", tier: "gpt", provider: "azure-openai", context_window: null },
-        { model: "gpt-5-mini", display_name: "GPT-5 Mini", tier: "gpt", provider: "azure-openai", context_window: null },
-        { model: "grok-4.3", display_name: "Grok 4.3", tier: "grok", provider: "azure-openai", context_window: null },
-      ],
-    }),
-  })) as any;
-  try {
-    const models = await fetchModels();
-    const ids = models.map((m) => m.id);
-    assert.ok(ids.includes("claude-opus-4-8"));
-    assert.ok(ids.includes("gpt-5.6-terra"));
-    // Non-5.6 GPT and other providers are excluded for now.
-    assert.ok(!ids.includes("gpt-5-mini"));
-    assert.ok(!ids.includes("grok-4.3"));
-    // Claude sorts ahead of GPT.
-    assert.ok(ids.indexOf("claude-opus-4-8") < ids.indexOf("gpt-5.6-terra"));
-    assert.equal(models.find((m) => m.id === "gpt-5.6-terra")?.provider, "openai");
-  } finally {
-    globalThis.fetch = original;
+  globalThis.fetch = (async () => ({ ok: true, json: async () => ({ models }) })) as any;
+  try { return await body(); } finally { globalThis.fetch = original; }
+}
+
+test("fetchModels serves the supported ids and nothing else", async () => {
+  await withCatalog(CATALOG, async () => {
+    const ids = (await fetchModels()).map((m) => m.id);
+    assert.deepEqual(ids, ["claude-opus-5", "claude-opus-4-8", "gpt-5.6-sol"], "Claude Opus first, then Sol");
+    // Served by the gateway but deliberately not offered.
+    for (const excluded of ["claude-sonnet-4-6", "gpt-5.6-terra", "gpt-5-mini", "grok-4.3", "DeepSeek-V4-Pro"]) {
+      assert.ok(!ids.includes(excluded), `${excluded} is not one of ours`);
+    }
+  });
+});
+
+/* ── the picker that lost every Claude model ──────────────────────────────────
+ * The filter used to select on `m.provider === "azure-anthropic"`. The gateway
+ * renamed that field's value to `anthropic` and every Claude model disappeared
+ * from the picker — silently, because nothing here failed: the catalog request
+ * still succeeded and the filter simply matched none of them. The old test
+ * could not catch it, since its own fixture spelled the provider the old way.
+ *
+ * `provider` is the gateway's field to rename. A model id is not: changing it
+ * makes it a different model. So the filter selects by id, and this test holds
+ * the line by describing the exact break that happened. */
+test("a renamed provider field cannot empty the picker", async () => {
+  for (const provider of ["anthropic", "azure-anthropic", "bedrock-anthropic", "", undefined]) {
+    await withCatalog(
+      [{ model: "claude-opus-5", display_name: "Claude Opus 5", tier: "opus", provider, context_window: 350000 }],
+      async () => {
+        const ids = (await fetchModels()).map((m) => m.id);
+        assert.deepEqual(ids, ["claude-opus-5"], `provider=${JSON.stringify(provider)} must not hide a supported model`);
+      },
+    );
   }
+});
+
+test("a model the gateway stops serving leaves the picker on its own", async () => {
+  await withCatalog(CATALOG.filter((m) => m.model !== "claude-opus-5"), async () => {
+    const ids = (await fetchModels()).map((m) => m.id);
+    assert.ok(!ids.includes("claude-opus-5"), "the allow-list narrows the catalog, it does not stand in for it");
+    assert.ok(ids.includes("claude-opus-4-8"), "the rest are unaffected");
+  });
+});
+
+test("transport is decided by the model id, not the catalog's provider field", async () => {
+  await withCatalog(CATALOG, async () => {
+    const models = await fetchModels();
+    assert.equal(models.find((m) => m.id === "claude-opus-5")?.provider, "anthropic");
+    assert.equal(models.find((m) => m.id === "gpt-5.6-sol")?.provider, "openai");
+  });
 });
