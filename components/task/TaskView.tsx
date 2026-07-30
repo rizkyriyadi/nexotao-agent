@@ -398,8 +398,8 @@ function RunSection({
 }
 
 /** Every sub-task this one was split into, with live status. Answers "what am I
- *  actually waiting for?" — before this, delegated work was invisible here and
- *  the parent just sat there looking stalled. */
+ *  actually waiting for?" — before this, sub-tasks were invisible here and the
+ *  parent just sat there looking stalled. */
 function SubTasks({
   tasks, agents, onOpen,
 }: {

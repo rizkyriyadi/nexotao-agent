@@ -1,11 +1,11 @@
 /**
  * Run summaries derived from the raw issue board.
  *
- * A "run" is a root issue (no parent) together with every issue delegated
- * beneath it. This groups the flat issue list into runs and works out, for
- * each one, whether it is currently executing and which node holds the live
- * transcript to jump to. Shared by the orchestrator view and the always-visible
- * active-run indicator so both agree on what "running" means.
+ * A "run" is a root issue (no parent) together with every sub-task beneath it.
+ * This groups the flat issue list into runs and works out, for each one, whether
+ * it is currently executing and which node holds the live transcript to jump to.
+ * Shared by the board and the always-visible active-run indicator so both agree
+ * on what "running" means.
  */
 
 export type RunIssue = {
@@ -25,7 +25,7 @@ export type RunSummary = {
   updatedAt: number; // most recent activity anywhere in the run
   active: boolean; // something in the run is still executing or queued
   runningCount: number; // nodes currently in_progress
-  taskCount: number; // delegated nodes below the root
+  taskCount: number; // sub-tasks below the root
   liveNodeId: string; // node whose transcript to open ("jump to live")
   liveRunId: string | null;
 };
@@ -64,7 +64,7 @@ export function summarizeRuns(issues: RunIssue[]): RunSummary[] {
     const root = byId.get(rootId);
     if (!root) continue;
     const running = members.filter((m) => m.status === "in_progress");
-    // Prefer a running delegate (that's the interesting live transcript),
+    // Prefer a running sub-task (that's the interesting live transcript),
     // then a running root, then the root itself when nothing is executing.
     const live = running.find((m) => m.id !== rootId) ?? running[0] ?? root;
     summaries.push({

@@ -499,10 +499,10 @@ export class GitWorkspaceManager {
         .some((w) => w.runId !== assignment.runId && w.commitSha === assignment.baseCommit)
       && await git(assignment.repositoryPath, "merge-base", "--is-ancestor", head, assignment.baseCommit).then(() => true).catch(() => false);
     if (head !== assignment.baseCommit && !continuation) {
-      // Two teammates working at once both branch from the same base, and the
-      // first to finish moves it. Refusing here would strand every sub-task but
-      // one on a branch of its own — which is exactly what a user delegating work
-      // would experience as "only one of the three files showed up".
+      // Consecutive runs on the same task branch from the same base, and the
+      // first to finish moves it. Refusing here would strand every later run on
+      // a branch of its own — which the user would experience as "only one of the
+      // three files showed up".
       //
       // Replaying is only safe if the target is strictly ahead of the base: then
       // no existing commit is being rewritten, only the run's own work is moved.
