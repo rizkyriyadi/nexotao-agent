@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { LogItem } from "./transcript";
 import {
-  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
+  RUN_EXCLUSION_EVENT_TYPE, RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
   TEXT_DELTA_EVENT_TYPES, runOutcomeChip,
 } from "@/lib/run-transcript";
 
@@ -84,6 +84,13 @@ export function useRunStream(runId: string | null | undefined, opts?: { live?: b
         const branch = String(e.branch ?? "").trim();
         const reason = String(e.reason ?? "").trim();
         if (branch && reason) setLog((prev) => prev.some((i) => i.kind === "integration") ? prev : [...prev, { kind: "integration", branch, reason }]);
+      }
+      // Also written after the agent stopped. Sits above the integration block:
+      // "these files were held back" is about the commit, which is the thing the
+      // integration block then reports on the fate of.
+      else if (type === RUN_EXCLUSION_EVENT_TYPE) {
+        const files = Array.isArray(e.files) ? e.files.map(String).filter(Boolean) : [];
+        if (files.length) setLog((prev) => prev.some((i) => i.kind === "exclusion") ? prev : [...prev, { kind: "exclusion", files }]);
       }
       else if (type === "approval_wait" || type === "approval") setApproval({ runId, id: e.id, name: e.name, input: e.input });
       else if (type === "tool_call" || type === "tool_use")

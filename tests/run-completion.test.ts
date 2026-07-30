@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
+  RUN_EXCLUSION_EVENT_TYPE, RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
   TEXT_DELTA_EVENT_TYPES, runOutcomeChip, settledIssueStatus,
 } from "../lib/run-transcript";
 import { relativizeWorkspacePaths } from "../lib/agent";
@@ -76,6 +76,31 @@ test("the notice is emitted for a refusal and withheld for a clean merge", () =>
   assert.ok(shouldNotify({ commit: "abc123", reason: "your working tree has uncommitted changes" }));
   assert.ok(!shouldNotify({ commit: "abc123" }));
   assert.ok(!shouldNotify({ commit: null, reason: "the run made no changes" }));
+});
+
+/* ── files held back from the commit ─────────────────────────────────────────
+ * Agent-instruction Markdown is excluded rather than committed, which is right,
+ * but it used to be excluded in silence. The gap the last test describes is the
+ * reason: the integration notice needs a commit to point at, and a run whose
+ * every changed path was excluded produces none. So the one case where the user
+ * has the least to go on — a folder that never changed — was the case nothing
+ * was reported for. */
+
+test("held-back files are reported independently of integration", () => {
+  // Its own event for the same reason the integration notice is: it is decided
+  // after the agent has stopped, so text added then never reaches the transcript.
+  assert.ok(!TEXT_DELTA_EVENT_TYPES.has(RUN_EXCLUSION_EVENT_TYPE));
+  for (const other of [RUN_INTEGRATION_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, RUN_RESULT_EVENT_TYPE]) {
+    assert.notEqual(RUN_EXCLUSION_EVENT_TYPE, other);
+  }
+
+  // The executor's rule: exclusions are reported whenever there are any. It is
+  // deliberately NOT conditioned on the commit, which is what made the
+  // everything-excluded run silent.
+  const shouldReport = (i: { excluded: string[]; commit: string | null }) => i.excluded.length > 0;
+  assert.ok(shouldReport({ excluded: ["AGENTS.md"], commit: null }), "no commit is exactly when it matters");
+  assert.ok(shouldReport({ excluded: ["AGENTS.md"], commit: "abc123" }), "and it still matters alongside one");
+  assert.ok(!shouldReport({ excluded: [], commit: "abc123" }));
 });
 
 /* ── text that points into a folder that is gone ─────────────────────────────

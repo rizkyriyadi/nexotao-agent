@@ -30,6 +30,16 @@ export const RUN_SUMMARY_EVENT_TYPE = "summary";
  * but never the transcript the user is reading. Payload: `{ branch, reason }`. */
 export const RUN_INTEGRATION_EVENT_TYPE = "integration";
 
+/** Files the run wrote that were deliberately kept out of the commit, because
+ * agent-instruction Markdown is local-only. Its own event for the same reason
+ * `integration` is one — it is decided after the agent has stopped talking — and
+ * separate from `integration` because the two are independent: a run can be
+ * integrated *and* have held files back, and a run whose every changed path was
+ * excluded produces no commit at all, which is exactly the case `integration`
+ * cannot describe (it reports "the run made no changes"). Payload:
+ * `{ files: string[] }`. */
+export const RUN_EXCLUSION_EVENT_TYPE = "exclusion";
+
 /** How a run's agent loop ended. `complete` — the agent stopped on its own;
  * `truncated` — it was still working when it ran into a ceiling, either the
  * step limit or its output size limit too many turns in a row. The difference

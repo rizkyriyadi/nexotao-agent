@@ -77,6 +77,10 @@ async function git(cwd: string, ...args: string[]) {
   return command("git", [...GIT_PLATFORM_ARGS, ...args], cwd);
 }
 
+/** Directories whose *own* Markdown is harness instruction rather than project
+ *  content. Only files sitting directly inside one count — see below. */
+const AGENT_DIRECTORIES = new Set([".agents", ".agent", ".claude"]);
+
 /** The agent-instruction files that must stay out of a user's history.
  *
  *  Deliberately an exact list rather than a word match. The rule used to be
@@ -85,14 +89,24 @@ async function git(cwd: string, ...args: string[]) {
  *  `travel-agent.md`, `docs/instructions.md`, `blog/prompt-engineering.md` and
  *  `RUNBOOK.md` are all a user's own content, and every one of them tripped it.
  *  These file names are a convention with a fixed spelling; matching them by
- *  substring buys nothing and claims files we have no business claiming. */
+ *  substring buys nothing and claims files we have no business claiming.
+ *
+ *  The directory rule is bounded to *immediate* children for the same reason.
+ *  Matching `.claude` anywhere in the path made the whole subtree ours, and that
+ *  subtree is where projects keep material they curate on purpose: a knowledge
+ *  base under `.claude/kb/`, shared commands, skills. A user who asked for
+ *  `.claude/kb/guides/testing.md` had every file they requested silently held
+ *  back from the commit, then read "the run made no changes" about a run that
+ *  wrote several — the folder looked untouched with no explanation anywhere.
+ *  What the harness actually drops is a file directly in the directory, and that
+ *  is all this claims. */
 export function isProhibitedAgentMarkdown(file: string) {
   const normalized = file.replace(/\\/g, "/").toLowerCase();
   const parts = normalized.split("/");
   const base = parts.at(-1) ?? "";
   if (!base.endsWith(".md")) return false;
   if (["agents.md", "agent.md", "claude.md", "codex.md"].includes(base)) return true;
-  return parts.slice(0, -1).some((part) => [".agents", ".agent", ".claude"].includes(part));
+  return AGENT_DIRECTORIES.has(parts.at(-2) ?? "");
 }
 
 export function assertProfessionalCommit(message: string) {

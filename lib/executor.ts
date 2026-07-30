@@ -16,7 +16,7 @@ import { getDatabase } from "./db/database";
 import { ControlPlaneRepositories, type ClaimedHeartbeat, type WakeupReason } from "./db/repositories";
 import { RunEventDomainError } from "./run-events";
 import {
-  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
+  RUN_EXCLUSION_EVENT_TYPE, RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
   settledIssueStatus,
 } from "./run-transcript";
 import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runtime";
@@ -216,8 +216,22 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
         // user sees the agent's own summary, not a raw commit hash — but the files
         // are not: a run that reports "done" while the project folder is untouched
         // is indistinguishable from one that did nothing.
-        await workspaceManager.finalizeCommit(issueId, runId, issue.ref);
+        const finalized = await workspaceManager.finalizeCommit(issueId, runId, issue.ref);
         const integration = await workspaceManager.integrate(runId);
+        // Held-back files are the one outcome the integration notice below cannot
+        // describe. It is gated on a commit, and a run whose *every* changed path
+        // was excluded produces none — so the user was told nothing at all: no
+        // notice, no branch to merge, a folder that never changed, and a summary
+        // claiming the files were written. Reported before integration because it
+        // is true regardless of what integration then decides.
+        if (finalized.excluded.length) {
+          const files = finalized.excluded.join(", ");
+          const notice = `\n\n> Left out of the commit — agent instruction files stay local and are not committed: ${files}. `
+            + `They are still on disk in the working copy.`;
+          await heartbeat.emit(RUN_EXCLUSION_EVENT_TYPE, { files: finalized.excluded, thread: "lead" });
+          result.text += notice;
+          if (result.summary) result.summary += notice;
+        }
         // A refusal is not a failed run: the work is committed and recoverable, so
         // the only thing at stake is that the user knows where it is. Three places
         // need telling, because each is read by a different surface and none of

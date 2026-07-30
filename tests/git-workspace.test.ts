@@ -429,6 +429,32 @@ test("a stray AGENTS.md is left out of the commit instead of failing the run", a
   } finally { await cleanup(f); }
 });
 
+/* The case that produced no commit at all, and so had nothing to report through
+ * the integration notice: every path the run changed was excluded. `excluded`
+ * is the only record that the run did anything, which is why the executor emits
+ * it as its own event rather than folding it into the integration block. */
+test("a run whose every change was excluded still reports what it held back", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "rewound");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-rewound", identifier: "NEXA-11", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(assignment.workspacePath, "AGENTS.md"), "harness instructions\n");
+
+    const finalized = await f.manager.finalizeCommit("issue-rewound", run, "NEXA-11");
+    assert.deepEqual(finalized.excluded, ["AGENTS.md"]);
+    assert.deepEqual(finalized.changedPaths, [], "nothing was committed");
+    assert.equal(finalized.commit, assignment.baseCommit);
+
+    // Integration has nothing to say here — which is exactly why `excluded` has
+    // to be reported on its own.
+    const outcome = await f.manager.integrate(run);
+    assert.equal(outcome.commit, null);
+    assert.equal(outcome.reason, "the run made no changes");
+  } finally { await cleanup(f); }
+});
+
 /* Why an exact list and not a word match: the rule used to be
  * `/(?:agent|prompt|instruction|runbook)/` over the basename, which claims a
  * pile of files that are plainly the user's own. On a portfolio or docs site
@@ -444,6 +470,56 @@ test("a user's own Markdown is never mistaken for agent instructions", () => {
     "AGENTS.md", "CLAUDE.md", "agent.md", "codex.md",
     ".agents/runtime.md", ".claude/notes.md", "sub/.agent/brief.md",
   ]) assert.equal(isProhibitedAgentMarkdown(file), true, `${file} is ours`);
+});
+
+/* ── the knowledge base that never reached the user's folder ──────────────────
+ * A user asked for a knowledge base under `.claude/kb/`. The agent wrote every
+ * guide, and every one was held back: the rule matched `.claude` anywhere in the
+ * path, so the entire subtree was treated as harness instruction. Because those
+ * files were the run's *only* work, the commit equalled the base, `integrate`
+ * reported "the run made no changes", and the executor's notice — gated on a
+ * commit — never fired. The user watched files being written, then found their
+ * folder untouched and nothing anywhere saying why.
+ *
+ * A `.claude` directory holds a project's curated material as well as the
+ * harness's own drop. Only the latter is ours, and only it sits at the top. */
+test("a curated .claude subtree is the user's, not the harness's", () => {
+  for (const file of [
+    ".claude/kb/guides/testing.md", ".claude/kb/guides/server-kernel.md",
+    ".claude/skills/deploy/SKILL.md", ".claude/commands/review.md",
+    ".agents/docs/architecture.md",
+  ]) assert.equal(isProhibitedAgentMarkdown(file), false, `${file} is the user's own content`);
+
+  // Still ours: what the harness actually drops, directly in the directory.
+  for (const file of [".claude/notes.md", ".claude/CLAUDE.md", "sub/.agent/brief.md"]) {
+    assert.equal(isProhibitedAgentMarkdown(file), true, `${file} is ours`);
+  }
+});
+
+test("a knowledge base written under .claude/kb reaches the user's folder", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "held");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-held", identifier: "NEXA-10", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await mkdir(path.join(assignment.workspacePath, ".claude/kb/guides"), { recursive: true });
+    await writeFile(path.join(assignment.workspacePath, ".claude/kb/guides/testing.md"), "# Testing Guide\n");
+    await writeFile(path.join(assignment.workspacePath, ".claude/kb/guides/server-kernel.md"), "# Server kernel\n");
+    // The harness's own drop, in the same run: excluded, without taking the rest with it.
+    await writeFile(path.join(assignment.workspacePath, "CLAUDE.md"), "harness instructions\n");
+
+    const finalized = await f.manager.finalizeCommit("issue-held", run, "NEXA-10");
+    assert.deepEqual(finalized.excluded, ["CLAUDE.md"]);
+    assert.notEqual(finalized.commit, assignment.baseCommit, "the knowledge base is committed");
+
+    const outcome = await f.manager.integrate(run);
+    assert.equal(outcome.integrated, true, outcome.reason);
+    assert.equal(
+      await readFile(path.join(f.repositoryPath, ".claude/kb/guides/testing.md"), "utf8"), "# Testing Guide\n",
+      "the file the user asked for is in their own folder",
+    );
+  } finally { await cleanup(f); }
 });
 
 // The isolation is only half the contract. Committing the agent's work to

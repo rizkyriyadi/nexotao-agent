@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronRight, CircleSlash, Clock, Flag, GitBranch, PauseCircle, TriangleAlert } from "lucide-react";
+import { Check, ChevronRight, CircleSlash, Clock, FileMinus, Flag, GitBranch, PauseCircle, TriangleAlert } from "lucide-react";
 import { Markdown } from "../ui/markdown";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { ToolCall } from "./ToolCall";
@@ -17,12 +17,15 @@ export type LogItem =
   | { kind: "summary"; text: string }
   // The run's commit could not be fast-forwarded into the user's branch, so the
   // work is sitting somewhere they have to be told about.
-  | { kind: "integration"; branch: string; reason: string };
+  | { kind: "integration"; branch: string; reason: string }
+  // Files the run wrote that were held back from the commit on purpose.
+  | { kind: "exclusion"; files: string[] };
 
 export type ToolItem = Extract<LogItem, { kind: "tool" }>;
 type EventItem = Extract<LogItem, { kind: "event" }>;
 type SummaryItem = Extract<LogItem, { kind: "summary" }>;
 type IntegrationItem = Extract<LogItem, { kind: "integration" }>;
+type ExclusionItem = Extract<LogItem, { kind: "exclusion" }>;
 
 /** How the surrounding run is doing — drives which of the three end-of-run
  *  presentations the transcript shows. `queued` deliberately does NOT get the
@@ -63,7 +66,8 @@ type Block =
   | { kind: "tools"; items: ToolItem[] }
   | EventItem
   | SummaryItem
-  | IntegrationItem;
+  | IntegrationItem
+  | ExclusionItem;
 /** Inside a tool block, consecutive calls to the SAME tool collapse together. */
 type Run = { name: string; items: ToolItem[] };
 
@@ -71,7 +75,7 @@ function toBlocks(log: LogItem[]): Block[] {
   const blocks: Block[] = [];
   for (const it of log) {
     if (it.kind === "text") { blocks.push({ kind: "text", text: it.text }); continue; }
-    if (it.kind === "event" || it.kind === "summary" || it.kind === "integration") { blocks.push(it); continue; }
+    if (it.kind === "event" || it.kind === "summary" || it.kind === "integration" || it.kind === "exclusion") { blocks.push(it); continue; }
     const last = blocks[blocks.length - 1];
     if (last && last.kind === "tools") last.items.push(it);
     else blocks.push({ kind: "tools", items: [it] });
@@ -191,6 +195,31 @@ function IntegrationBlock({ item }: { item: IntegrationItem }) {
   );
 }
 
+/** Agent-instruction Markdown the run wrote but did not commit. The file is
+ *  still in the working copy — only history was kept clean — so this is a note,
+ *  not a warning. It exists because the alternative was silence: these files
+ *  simply never appeared in the user's folder, and when they were the *only*
+ *  thing the run wrote there was no commit for the integration block to talk
+ *  about either. */
+function ExclusionBlock({ item }: { item: ExclusionItem }) {
+  return (
+    <div className="rounded-xl border border-line-strong bg-veil px-3.5 py-3">
+      <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-bark-grey">
+        <FileMinus className="size-3" /> Kept out of the commit
+      </p>
+      <p className="text-[13px] leading-relaxed text-charcoal">
+        Agent instruction files stay local, so {item.files.length === 1 ? "this one was" : "these were"} left
+        uncommitted. {item.files.length === 1 ? "It is" : "They are"} still in the working copy.
+      </p>
+      <ul className="mt-2 space-y-1">
+        {item.files.map((file) => (
+          <li key={file} className="overflow-x-auto rounded-lg bg-mist-lavender/30 px-2 py-1 font-mono text-[11.5px] text-charcoal">{file}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 /* ── terminal state ──────────────────────────────────────────── */
 
 const TERMINAL: Record<string, { icon: typeof Check; className: string }> = {
@@ -287,6 +316,7 @@ export function Transcript({
         if (block.kind === "tools") return <ToolBlock key={index} items={block.items} />;
         if (block.kind === "summary") return <SummaryBlock key={index} text={block.text} />;
         if (block.kind === "integration") return <IntegrationBlock key={index} item={block} />;
+        if (block.kind === "exclusion") return <ExclusionBlock key={index} item={block} />;
         return TERMINAL_LABELS.has(block.label)
           ? <TerminalChip key={index} event={block} />
           : <EventNote key={index} event={block} />;
