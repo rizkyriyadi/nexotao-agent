@@ -78,7 +78,7 @@ export function OnboardingFlow() {
           apiKey,
           model,
           onboarded: true,
-          project: { name: projectName, path: projectPath, mode: "single", agents: [] },
+          project: { name: projectName, path: projectPath },
         }),
       });
       router.push("/");

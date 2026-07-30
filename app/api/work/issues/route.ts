@@ -26,7 +26,7 @@ export async function GET(req: Request) {
       listCycles(project.id), listModules(project.id),
     ]);
     let agents = await listAgents(project.id);
-    if (!agents.length) agents = await seedAgents(project.id, project.agents ?? []);
+    if (!agents.length) agents = await seedAgents(project.id);
     const view = buildView(issues, config, { states, labels, cycles, modules, agents });
     return NextResponse.json({ projectId: project.id, view, issues, states, labels, cycles, modules, agents });
   } catch (error) { return workError(error); }

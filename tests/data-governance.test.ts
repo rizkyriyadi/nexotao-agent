@@ -5,7 +5,6 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { openDatabase } from "../lib/db/database";
 import { ControlPlaneRepositories } from "../lib/db/repositories";
-import { AgentLifecycleService, type AgentConfigInput } from "../lib/agent-lifecycle";
 import {
   applyRetention, configActivityDiff, deleteProjectData, DataControlError, exportProjectData,
   INTEGRITY_REQUIRED_ACTIONS, planRetention,
@@ -17,11 +16,12 @@ import { eq } from "drizzle-orm";
 const SECRET = `sk-${"z".repeat(40)}`;
 const DAY = 86_400_000;
 
-const config = (name: string, role: "lead" | "worker", reportsTo: string | null = null): AgentConfigInput => ({
-  name, role, reportsTo, title: "Engineer", scope: "Build", capabilities: ["coding"],
+/** An agent row carrying a secret in its adapter config — the shape governance
+ *  has to redact on the way out. */
+const agentRow = (id: string) => ({
+  id, projectId: "p", name: "Builder", role: "lead" as const, scope: "Build",
   adapterType: "nexotao", adapterConfig: { model: "nexotao-test", apiKey: SECRET },
-  runtimeConfig: {}, permissions: { shell: false }, instructions: "Work carefully",
-  projectAccess: ["p"], concurrency: 1,
+  instructions: "Work carefully", createdAt: 2, updatedAt: 2,
 });
 
 /** Artifact purge that touches nothing: no graph directory, no CLI spawn. */
@@ -30,7 +30,7 @@ const quiet = { graphDir: () => path.join(tmpdir(), "nexotao-absent-graph-dir"),
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-governance-"));
   const database = await openDatabase(path.join(dir, "db.sqlite"), { migrateJson: false });
-  await database.write((db) => db.insert(projects).values({ id: "p", name: "Governance", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+  await database.write((db) => db.insert(projects).values({ id: "p", name: "Governance", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run());
   return { dir, database };
 }
 
@@ -64,29 +64,6 @@ test("planRetention is deterministic and never prunes integrity-required audit r
   assert.deepEqual(keepAll, { runEvents: [], activity: [], keptForIntegrity: 0 });
 });
 
-test("config-change audit records a redacted before/after summary without secrets", async () => {
-  const { dir, database } = await fixture();
-  try {
-    const service = new AgentLifecycleService(database);
-    const agent = await service.create("p", config("Builder", "lead"));
-    // Change permissions and adapter config (which carries a secret).
-    await service.update(agent.id, { permissions: { shell: true }, adapterConfig: { model: "nexotao-2", apiKey: SECRET } });
-
-    const rows = database.read((db) => db.select().from(activityLog).where(eq(activityLog.entityId, agent.id)).all());
-    const updated = rows.find((row) => row.action === "agent.config_updated");
-    assert.ok(updated, "config update must be audited");
-    const summary = updated!.summary as { fields: string[]; before: Record<string, unknown>; after: Record<string, unknown> };
-    assert.ok(summary.fields.includes("permissions"), "permission changes are surfaced");
-    assert.ok(summary.fields.includes("adapterConfig"), "adapter config changes are surfaced");
-    // The secret must be masked everywhere in the audit summary.
-    assert.ok(!JSON.stringify(summary).includes(SECRET), "no secret in the audit summary");
-    assert.ok(!JSON.stringify(rows).includes(SECRET), "no secret anywhere in the activity feed");
-  } finally {
-    await database.close();
-    await rm(dir, { recursive: true, force: true });
-  }
-});
-
 test("configActivityDiff only reports changed fields and redacts secret-shaped values", () => {
   const before = { permissions: { shell: false }, concurrency: 1, adapterConfig: { apiKey: SECRET } };
   const after = { permissions: { shell: true }, concurrency: 1, adapterConfig: { apiKey: SECRET } };
@@ -99,8 +76,7 @@ test("export bundles project data with every secret redacted", async () => {
   const { dir, database } = await fixture();
   try {
     const repositories = new ControlPlaneRepositories(database);
-    const service = new AgentLifecycleService(database);
-    const agent = await service.create("p", config("Builder", "lead"));
+    const agent = await repositories.agents.insert(agentRow("a"));
     await repositories.issues.insert({ id: "i", projectId: "p", identifier: "NX-1", title: "Ship", status: "todo", assigneeAgentId: agent.id, createdAt: 3, updatedAt: 3 });
     await repositories.addComment({ issueId: "i", authorType: "user", body: `token ${SECRET} leaked in a comment` });
     await repositories.appendRunEvent({ runId: "run-1", seq: 1, type: "tool", redactedPayload: { note: "ok" }, createdAt: 5 });
@@ -158,8 +134,7 @@ test("delete removes eligible data, reports the outcome, retains audit, and leav
   const { dir, database } = await fixture();
   try {
     const repositories = new ControlPlaneRepositories(database);
-    const service = new AgentLifecycleService(database);
-    const agent = await service.create("p", config("Builder", "lead"));
+    const agent = await repositories.agents.insert(agentRow("a"));
     await repositories.issues.insert({ id: "i", projectId: "p", identifier: "NX-1", title: "Ship", status: "todo", assigneeAgentId: agent.id, createdAt: 3, updatedAt: 3 });
     const run = await repositories.createHeartbeat({ agentId: agent.id, issueId: "i", source: "assignment", status: "succeeded", startedAt: 4, finishedAt: 5 });
     await repositories.appendRunEvent({ runId: run.id, seq: 1, type: "tool", redactedPayload: { note: "ok" }, createdAt: 6 });
@@ -178,8 +153,8 @@ test("delete removes eligible data, reports the outcome, retains audit, and leav
     assert.equal(outcome.deleted.runEvents, 1);
     assert.equal(outcome.deleted.documents, 1);
     assert.equal(outcome.deleted.documentRevisions, 1);
-    // Scoped audit = agent.created + the note, both retained after deletion.
-    assert.equal(outcome.retained.activityLog, 2, "audit activity is retained after deletion");
+    // Scoped audit = the note, retained after the rows it describes are gone.
+    assert.equal(outcome.retained.activityLog, 1, "audit activity is retained after deletion");
     assert.ok(outcome.integrityNote.length > 0);
     assert.ok(!JSON.stringify(outcome).includes(SECRET), "deletion report carries no secret");
 

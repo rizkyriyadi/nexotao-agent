@@ -14,7 +14,7 @@ export async function GET() {
   const project = await getActiveProject();
   if (!project) return NextResponse.json({ issues: [], agents: [] });
   let agents = await listAgents(project.id);
-  if (agents.length === 0) agents = await seedAgents(project.id, project.agents ?? []);
+  if (agents.length === 0) agents = await seedAgents(project.id);
   const issues = await listIssues(project.id);
   return NextResponse.json({ issues, agents, projectId: project.id });
 }
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
   if (!cfg.apiKey) return NextResponse.json({ error: "No Nexotao API key. Finish onboarding first." }, { status: 400 });
   const project = await getActiveProject();
   if (!project) return NextResponse.json({ error: "No active project." }, { status: 400 });
-  await seedAgents(project.id, project.agents ?? []);
+  await seedAgents(project.id);
   // An unknown id resolves to null rather than erroring, so the run falls back
   // to the configured default instead of failing on a stale picker selection.
   const model = await resolveModel(body.model);

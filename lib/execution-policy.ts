@@ -15,7 +15,7 @@ export type ExecutionPolicy = "ask" | "allow" | "deny";
  *  existing server-side import keeps working. */
 export { AGENT_MODES, DEFAULT_MODE, type AgentMode } from "./agent-mode";
 import type { AgentMode } from "./agent-mode";
-export type PolicyAction = "read" | "write" | "exec" | "network" | "destructive" | "control";
+export type PolicyAction = "read" | "write" | "exec" | "network" | "destructive";
 export type PolicyRisk = "low" | "medium" | "high";
 export type PolicyDetails = { action: PolicyAction; target: string; risk: PolicyRisk; preview: string };
 
@@ -60,7 +60,6 @@ export function describeToolAction(name: string, input: unknown): PolicyDetails 
   }
   if (name === "web_search") return { action: "network", target: clipped(value.query, 500), risk: "medium", preview: clipped(value.query) };
   if (name === "web_fetch") return { action: "network", target: clipped(value.url, 500), risk: "medium", preview: clipped(value.url) };
-  if (name === "delegate") return { action: "control", target: name, risk: "low", preview: clipped(input) };
   if (["list_dir", "read_file", "grep"].includes(name)) return { action: "read", target: clipped(value.path ?? name, 500), risk: "low", preview: clipped(input) };
   // The graph tools only query an index built from the project's own history —
   // they touch neither the working tree nor the network. Classifying them by the
@@ -72,7 +71,7 @@ export function describeToolAction(name: string, input: unknown): PolicyDetails 
 }
 
 export function evaluateExecutionPolicy(policy: ExecutionPolicy, details: PolicyDetails): "allow" | "deny" | "ask" {
-  if (details.action === "read" || details.action === "control") return "allow";
+  if (details.action === "read") return "allow";
   // Looking something up changes nothing in the user's project, and Ask mode's
   // own directive names web_search and web_fetch as tools the agent may use — so
   // denying them contradicted the instructions the same run was given. A policy

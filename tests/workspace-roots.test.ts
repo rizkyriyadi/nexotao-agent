@@ -26,7 +26,7 @@ const { activeRoot, listRoots, pendingWork } = await import("../lib/workspace-fi
 
 const projectPath = path.join(dir, "project");
 await mkdir(projectPath, { recursive: true });
-const project = await addProject({ name: "Nexotao", path: projectPath, mode: "multi", agents: [] });
+const project = await addProject({ name: "Nexotao", path: projectPath });
 await saveConfig({ activeProjectId: project.id });
 
 const database = await getDatabase();

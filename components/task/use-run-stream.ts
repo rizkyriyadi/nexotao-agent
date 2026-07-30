@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import type { LogItem } from "./transcript";
 import {
-  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, TASK_DELEGATED_EVENT_TYPE,
+  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
   TEXT_DELTA_EVENT_TYPES, runOutcomeChip,
 } from "@/lib/run-transcript";
 
@@ -85,10 +85,6 @@ export function useRunStream(runId: string | null | undefined, opts?: { live?: b
         const reason = String(e.reason ?? "").trim();
         if (branch && reason) setLog((prev) => prev.some((i) => i.kind === "integration") ? prev : [...prev, { kind: "integration", branch, reason }]);
       }
-      else if (type === TASK_DELEGATED_EVENT_TYPE)
-        setLog((prev) => prev.some((i) => i.kind === "task" && i.id === e.id) ? prev : [...prev, {
-          kind: "task", id: String(e.id), ref: String(e.ref ?? ""), title: String(e.title ?? ""), assignee: String(e.assignee ?? ""),
-        }]);
       else if (type === "approval_wait" || type === "approval") setApproval({ runId, id: e.id, name: e.name, input: e.input });
       else if (type === "tool_call" || type === "tool_use")
         setLog((prev) => prev.some((item) => item.kind === "tool" && item.id === e.id) ? prev : [...prev, { kind: "tool", id: e.id, name: e.name, target: tgt(e.name, e.input), input: e.input, status: "running" }]);

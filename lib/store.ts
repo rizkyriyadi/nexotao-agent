@@ -4,16 +4,15 @@ import { getDatabase, DEFAULT_WORKFLOW_STATES, defaultStateId } from "./db/datab
 import { agentRuns, issueDependencies, issues, projects, runRecords, sessions, tasks, workflowStates } from "./db/schema";
 import { expandHome } from "./paths";
 
-export type AgentSpec = { name: string; scope: string };
-export type Project = { id: string; name: string; path: string; mode: "single" | "multi"; agents: AgentSpec[]; createdAt: number };
+export type Project = { id: string; name: string; path: string; createdAt: number };
 export type Message = { role: "user" | "assistant"; content: string };
 export type Session = { id: string; projectId: string; title: string; createdAt: number; updatedAt: number; messages: Message[] };
 export type Col = "backlog" | "todo" | "in_progress" | "review" | "done";
 export type Task = { id: string; ref: string; projectId: string; title: string; col: Col; createdAt: number; runId?: string; agent?: string; summary?: string; updatedAt?: number };
 export type AgentRun = { id: string; projectId: string; agent: string; task: string; summary: string; ok: boolean; ts: number };
-export type RunRecord = { id: string; projectId: string; kind: "chat" | "orchestrator"; title: string; status: "running" | "done" | "error" | "cancelled"; createdAt: number; updatedAt: number; events: any[] };
+export type RunRecord = { id: string; projectId: string; kind: "chat"; title: string; status: "running" | "done" | "error" | "cancelled"; createdAt: number; updatedAt: number; events: any[] };
 
-const projectFromRow = (row: typeof projects.$inferSelect): Project => ({ id: row.id, name: row.name, path: row.path, mode: row.mode, agents: row.agentSpecs, createdAt: row.createdAt });
+const projectFromRow = (row: typeof projects.$inferSelect): Project => ({ id: row.id, name: row.name, path: row.path, createdAt: row.createdAt });
 const taskFromRow = (row: typeof tasks.$inferSelect): Task => ({ id: row.id, ref: row.ref, projectId: row.projectId, title: row.title, col: row.col as Col, createdAt: row.createdAt, updatedAt: row.updatedAt, ...(row.runId ? { runId: row.runId } : {}), ...(row.agent ? { agent: row.agent } : {}), ...(row.summary ? { summary: row.summary } : {}) });
 const runFromRow = (row: typeof runRecords.$inferSelect): RunRecord => ({ ...row, events: row.events as any[] });
 
@@ -31,7 +30,10 @@ export async function addProject(input: Omit<Project, "id" | "createdAt">): Prom
   if (existing) return existing;
   const project: Project = { ...input, id: randomUUID(), createdAt: Date.now() };
   await database.write((db) => {
-    db.insert(projects).values({ id: project.id, name: project.name, path: project.path, mode: project.mode, agentSpecs: project.agents, createdAt: project.createdAt }).run();
+    // `mode` and `agent_specs` are leftovers of the multi-agent system: NOT NULL
+    // columns that nothing reads any more. They are filled with their only
+    // remaining value until the migration that drops them lands.
+    db.insert(projects).values({ id: project.id, name: project.name, path: project.path, mode: "single", agentSpecs: [], createdAt: project.createdAt }).run();
     // Seed the board columns in the same transaction as the project. The v9
     // migration only reached projects that existed when it ran; a project created
     // afterwards would otherwise open on an empty board.

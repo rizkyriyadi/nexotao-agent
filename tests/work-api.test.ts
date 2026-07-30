@@ -25,7 +25,7 @@ const cyclesRoute = await import("../app/api/work/cycles/route");
 const intakeRoute = await import("../app/api/work/intake/route");
 const analyticsRoute = await import("../app/api/work/analytics/route");
 
-const project = await addProject({ name: "Nexotao", path: dir, mode: "multi", agents: [] });
+const project = await addProject({ name: "Nexotao", path: dir });
 await saveConfig({ activeProjectId: project.id });
 const column = (key: string) => defaultStateId(project.id, key);
 

@@ -3,9 +3,8 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Search, Zap, CalendarDays, Plus, ArrowRight, Bot, Columns3 } from "lucide-react";
-import { agentPP } from "@/lib/avatars";
 
-type Project = { id: string; name: string; path: string; mode: "single" | "multi"; agents: { name: string; scope: string }[] } | null;
+type Project = { id: string; name: string; path: string } | null;
 type Task = { id: string; ref: string; title: string; status: string; updatedAt: number };
 
 function ago(ts: number) {
@@ -45,8 +44,6 @@ export function Overview() {
   const doneTasks = tasks.filter((t) => t.status === "done").length;
   const openTasks = tasks.filter((t) => t.status !== "done" && t.status !== "cancelled").length;
   const taskPct = tasks.length ? Math.round((doneTasks / tasks.length) * 100) : 0;
-  const isMulti = project?.mode === "multi";
-  const agents = project?.agents ?? [];
   const latest = tasks[0];
 
   return (
@@ -63,7 +60,7 @@ export function Overview() {
           </div>
           <div className="flex items-center gap-5 text-[13px] text-bark-grey">
             <span className="flex items-center gap-1.5"><Zap className="size-4 text-pebble" /> {model || "—"}</span>
-            <span className="flex items-center gap-1.5"><CalendarDays className="size-4 text-pebble" /> {isMulti ? "multi-agent" : "single agent"}</span>
+            <span className="flex items-center gap-1.5"><CalendarDays className="size-4 text-pebble" /> single agent</span>
           </div>
         </div>
 
@@ -74,7 +71,6 @@ export function Overview() {
           <div className="flex flex-wrap items-center gap-2">
             <Link href="/board" className="flex h-8 items-center gap-1.5 rounded-full bg-electric-indigo px-3.5 text-[13px] font-medium text-on-indigo transition-colors hover:bg-deep-violet"><Columns3 className="size-3.5" /> Open control panel</Link>
             <Link href="/board" className="flex h-8 items-center gap-1.5 rounded-full border border-line-strong px-3.5 text-[13px] text-bark-grey transition-colors hover:border-charcoal hover:text-charcoal"><Plus className="size-3.5" /> New task</Link>
-            <Link href="/agents" className="flex h-8 items-center gap-1.5 rounded-full border border-line-strong px-3.5 text-[13px] text-bark-grey transition-colors hover:border-charcoal hover:text-charcoal"><Bot className="size-3.5" /> Agents</Link>
           </div>
           <div className="flex h-9 w-[240px] items-center gap-2 rounded-full border border-line-strong px-3.5">
             <Search className="size-4 text-pebble" />
@@ -149,30 +145,15 @@ export function Overview() {
 
           <div className="rounded-3xl border border-line bg-paper-white p-5">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-[15px] font-semibold text-charcoal">{isMulti ? "Agent team" : "Agent"}</p>
-              {isMulti && <Link href="/board" className="text-[12px] text-sapphire-link hover:underline">Open</Link>}
+              <p className="text-[15px] font-semibold text-charcoal">Agent</p>
             </div>
-            {isMulti && agents.length ? (
-              <ul className="space-y-3.5">
-                {agents.map((a, i) => (
-                  <li key={i} className="flex items-center gap-3">
-                    <img src={agentPP(i)} alt={a.name} className="size-9 rounded-full object-cover" />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[13.5px] font-medium text-charcoal">{a.name}</p>
-                      <p className="truncate text-[11.5px] text-pebble">{a.scope}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="flex items-center gap-3 rounded-2xl border border-line p-4">
-                <span className="flex size-9 items-center justify-center rounded-full bg-electric-indigo/12 text-electric-indigo"><Bot className="size-4" /></span>
-                <div>
-                  <p className="text-[13.5px] font-medium text-charcoal">Single agent</p>
-                  <p className="text-[11.5px] text-pebble">One agent handles everything.</p>
-                </div>
+            <div className="flex items-center gap-3 rounded-2xl border border-line p-4">
+              <span className="flex size-9 items-center justify-center rounded-full bg-electric-indigo/12 text-electric-indigo"><Bot className="size-4" /></span>
+              <div>
+                <p className="text-[13.5px] font-medium text-charcoal">Single agent</p>
+                <p className="text-[11.5px] text-pebble">One agent handles everything.</p>
               </div>
-            )}
+            </div>
           </div>
         </div>
       </div>

@@ -21,7 +21,7 @@ export const agentRuns = sqliteTable("agent_runs", {
 }, (t) => [index("agent_runs_project_agent_ts_idx").on(t.projectId, t.agent, t.ts)]);
 export const runRecords = sqliteTable("run_records", {
   id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  kind: text("kind", { enum: ["chat", "orchestrator"] }).notNull(), title: text("title").notNull(),
+  kind: text("kind", { enum: ["chat"] }).notNull(), title: text("title").notNull(),
   status: text("status", { enum: ["running", "done", "error", "cancelled"] }).notNull(), events: text("events", { mode: "json" }).$type<unknown[]>().notNull(), ...timestamps,
 }, (t) => [index("run_records_project_updated_idx").on(t.projectId, t.updatedAt)]);
 export const agents = sqliteTable("agents", {
@@ -128,7 +128,7 @@ export const issueDependencies = sqliteTable("issue_dependencies", {
 }, (t) => [primaryKey({ columns: [t.issueId, t.blockerIssueId] }), index("issue_dependencies_blocker_idx").on(t.blockerIssueId)]);
 export const issueMutationRequests = sqliteTable("issue_mutation_requests", {
   id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  operation: text("operation", { enum: ["create", "delegate"] }).notNull(), idempotencyKey: text("idempotency_key").notNull(),
+  operation: text("operation", { enum: ["create"] }).notNull(), idempotencyKey: text("idempotency_key").notNull(),
   fingerprint: text("fingerprint").notNull(), issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
   createdAt: integer("created_at").notNull(),
 }, (t) => [uniqueIndex("issue_mutation_requests_key_uq").on(t.projectId, t.operation, t.idempotencyKey)]);

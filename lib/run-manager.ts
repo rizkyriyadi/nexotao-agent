@@ -8,14 +8,10 @@ export type RunEvent =
   // The agent's closing report, written in a tool-less turn after the work. New
   // text, not a repeat of the deltas — so unlike `result` it IS rendered.
   | { type: "summary"; text: string; thread?: string }
-  // A task the lead handed to another agent; the UI renders it as a link.
-  | { type: "task_delegated"; id: string; ref: string; title: string; assignee: string; thread?: string }
   | { type: "usage"; inputTokens: number; outputTokens: number; thread?: string }
   | { type: "tool_use"; id: string; name: string; input: any; thread?: string }
   | { type: "approval"; id: string; approvalId?: string; name: string; input: any; thread?: string; action?: string; target?: string; risk?: string; preview?: string }
   | { type: "tool_result"; id: string; name: string; ok: boolean; display?: string; kind?: string; file?: string; content?: string; output: string; thread?: string }
-  | { type: "thread_created"; id: string; scope: string; dependsOn?: string[] }
-  | { type: "thread_status"; id: string; status: "running" | "done" | "error" }
   | { type: "done" }
   | { type: "cancelled"; reason: string }
   | { type: "error"; error: string };
@@ -23,7 +19,7 @@ export type RunEvent =
 /** A durable, backend-owned run. Keeps a full event log so a client that
  * refreshes / changes tab can reconnect and replay + tail live. Runs to
  * completion regardless of whether anyone is connected. */
-export type RunMeta = { kind: "chat" | "orchestrator"; title: string; projectId: string };
+export type RunMeta = { kind: "chat"; title: string; projectId: string };
 
 export class Run {
   id: string;

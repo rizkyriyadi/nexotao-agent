@@ -13,7 +13,7 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as Partial<Config> & { project?: { name: string; path: string; mode: "single" | "multi"; agents: any[] } };
+  const body = (await req.json()) as Partial<Config> & { project?: { name: string; path: string } };
   const patch: Partial<Config> = {};
   if (body.apiKey !== undefined) patch.apiKey = body.apiKey;
   if (body.model !== undefined) patch.model = body.model;
@@ -33,7 +33,7 @@ export async function POST(req: Request) {
   if (body.project) {
     const p = await addProject(body.project);
     patch.activeProjectId = p.id;
-    await seedAgents(p.id, p.agents ?? []); // create the lead + specialist workers
+    await seedAgents(p.id); // every project needs its agent before it can run
     // Fire-and-forget beside seedAgents: a cold index can take minutes, and
     // onboarding must not sit on a spinner waiting for one.
     void refreshCodeIndex(p.id, p.path, { mode: "moderate" }).catch(() => null);

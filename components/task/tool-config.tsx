@@ -2,7 +2,7 @@
 
 import type { LucideIcon } from "lucide-react";
 import {
-  FileText, FilePlus, FileDiff, FolderTree, GitBranch, Globe, Network, Search, Terminal, Wrench,
+  FileText, FilePlus, FileDiff, FolderTree, Globe, Network, Search, Terminal, Wrench,
 } from "lucide-react";
 
 /** How a single tool call presents itself in the transcript.
@@ -108,14 +108,6 @@ export const TOOL_PRESENTATION: Record<string, ToolPresentation> = {
     value: (i) => str(i.id),
     verb: (i) => `Explaining ${str(i.id)}`,
     body: "text",
-  },
-  delegate: {
-    label: "Delegate", icon: GitBranch, accent: "border-l-electric-indigo", iconTint: "text-electric-indigo",
-    value: (i) => str(i.title),
-    verb: (i) => (str(i.assignee) ? `Handing "${short(str(i.title), 32)}" to ${str(i.assignee)}` : `Handing off ${short(str(i.title), 40)}`),
-    // The sub-task gets its own linked card in the transcript, so repeating the
-    // tool's confirmation text underneath it would just say the same thing twice.
-    body: "none",
   },
 };
 

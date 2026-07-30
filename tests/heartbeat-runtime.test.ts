@@ -4,23 +4,31 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type Anthropic from "@anthropic-ai/sdk";
-import { AgentLifecycleService } from "../lib/agent-lifecycle";
+import { eq } from "drizzle-orm";
 import { openDatabase } from "../lib/db/database";
 import { ControlPlaneRepositories } from "../lib/db/repositories";
-import { projects } from "../lib/db/schema";
+import { agents, projects } from "../lib/db/schema";
 import { DurableHeartbeatRuntime } from "../lib/heartbeat-runtime";
 import { NexotaoGatewayAdapter } from "../lib/runtime-adapter";
 
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-heartbeat-test-"));
   const database = await openDatabase(path.join(dir, "nexotao.sqlite"), { migrateJson: false });
-  await database.write((db) => db.insert(projects).values({ id: "p", name: "Runtime", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+  await database.write((db) => db.insert(projects).values({ id: "p", name: "Runtime", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run());
   const repositories = new ControlPlaneRepositories(database);
   await repositories.agents.insert({ id: "a", projectId: "p", name: "Agent", role: "worker", scope: "Runtime", runtimeConfig: { concurrency: 1 }, createdAt: 2, updatedAt: 2 });
   for (const [id, identifier] of [["i1", "NX-1"], ["i2", "NX-2"]]) {
     await repositories.issues.insert({ id, projectId: "p", identifier, title: id, status: "todo", assigneeAgentId: "a", createdAt: 3, updatedAt: 3 });
   }
   return { dir, database, repositories };
+}
+
+/** The runtime reads an agent's status straight off the row: a human-gated one
+ *  ("paused", "terminated") holds the queue, and clearing an error puts the
+ *  agent back in play. Written directly here so the test exercises the runtime
+ *  rather than whatever else a lifecycle helper would do on the way. */
+function setAgentStatus(database: Awaited<ReturnType<typeof openDatabase>>, id: string, status: string) {
+  return database.write((db) => db.update(agents).set({ status, errorReason: null, updatedAt: Date.now() }).where(eq(agents.id, id)).run());
 }
 
 async function waitFor<T>(read: () => T, expected: T, timeoutMs = 2_000) {
@@ -104,7 +112,7 @@ test("a restart picks up work that was already queued", async () => {
 test("pausing an agent still holds its queue", async () => {
   const f = await fixture();
   try {
-    await new AgentLifecycleService(f.database).action("a", "pause");
+    await setAgentStatus(f.database, "a", "paused");
     await f.repositories.enqueueHeartbeat({ agentId: "a", issueId: "i1", reason: "assignment", idempotencyKey: "assignment:i1:1" });
     assert.equal(await f.repositories.claimNextHeartbeat(), null);
     assert.equal(f.repositories.agents.get("a")?.status, "paused");
@@ -136,7 +144,7 @@ test("heartbeat runtime persists waiting, success, failure, and cancellation", a
     await runtime.runUntilIdle();
     assert.equal(f.repositories.getHeartbeat(two.heartbeat.id)?.status, "failed");
     await runtime.shutdown();
-    await new AgentLifecycleService(f.database).action("a", "clear_error");
+    await setAgentStatus(f.database, "a", "idle");
 
     const cancelledRuntime = new DurableHeartbeatRuntime(f.repositories, async (_job, context) => {
       await new Promise<void>((_resolve, reject) => {

@@ -18,11 +18,6 @@ export const RUN_RESULT_EVENT_TYPE = "result";
  * one block that tells the user what actually happened. */
 export const RUN_SUMMARY_EVENT_TYPE = "summary";
 
-/** A task the lead handed to someone else, emitted by the `delegate` tool so the
- * transcript can render a link the user can follow. Payload: `{ id, ref, title,
- * assignee }`. */
-export const TASK_DELEGATED_EVENT_TYPE = "task_delegated";
-
 /** What happened to the run's commit when we tried to fast-forward it into the
  * branch the user works on. Emitted only when integration was *refused*, which
  * is the case the user has to act on: the work is real, committed, and sitting

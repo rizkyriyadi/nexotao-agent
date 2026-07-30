@@ -1,6 +1,6 @@
-// The control plane. Turns each prompt into a task (issue) for the single lead
-// agent, then drives its run lifecycle: the lead handles the task in the chosen
-// mode (ask / plan / agent), and follow-up messages reopen the same task so the
+// The control plane. Turns each prompt into a task (issue) for the agent, then
+// drives its run lifecycle: the agent handles the task in the chosen mode
+// (ask / plan / agent), and follow-up messages reopen the same task so the
 // conversation continues.
 import { promises as fs } from "fs";
 import { getConfig } from "./config";
@@ -10,13 +10,13 @@ import { refreshCodeIndex } from "./code-memory";
 import { expandHome } from "./paths";
 import { DEFAULT_MODEL } from "./nexotao";
 import { createRun, type RunEvent } from "./run-manager";
-import { runIssueAgent, type DelegateFn } from "./agent";
+import { runIssueAgent } from "./agent";
 import * as I from "./issues";
 import { getDatabase } from "./db/database";
 import { ControlPlaneRepositories, type ClaimedHeartbeat, type WakeupReason } from "./db/repositories";
 import { RunEventDomainError } from "./run-events";
 import {
-  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, TASK_DELEGATED_EVENT_TYPE,
+  RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
   settledIssueStatus,
 } from "./run-transcript";
 import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runtime";
@@ -47,13 +47,12 @@ async function ctx(projectId: string) {
 }
 
 /** Create the root issue for a goal and start the run. The run mode (chosen in
- *  the control panel) decides how the lead handles it: `agent` builds directly,
+ *  the control panel) decides how the agent handles it: `agent` builds directly,
  *  `plan` writes a plan, `ask` just answers. */
 export async function submitGoal(projectId: string, text: string, mode: I.RunMode = "agent", idempotencyKey?: string, model?: string | null): Promise<I.Issue> {
   let lead = await I.leadAgent(projectId);
   if (!lead) {
-    const project = await getProject(projectId);
-    const seeded = await I.seedAgents(projectId, project?.agents ?? []);
+    const seeded = await I.seedAgents(projectId);
     lead = seeded.find((a) => a.role === "lead") ?? null;
   }
   const root = await I.createIssue({
@@ -120,9 +119,6 @@ function durableEvent(event: RunEvent): [string, unknown] | null {
   switch (event.type) {
     case "text": return ["reasoning_summary", { text: event.text, thread: event.thread }];
     case "summary": return [RUN_SUMMARY_EVENT_TYPE, { text: event.text, thread: event.thread }];
-    case "task_delegated": return [TASK_DELEGATED_EVENT_TYPE, {
-      id: event.id, ref: event.ref, title: event.title, assignee: event.assignee, thread: event.thread,
-    }];
     case "tool_use": return ["tool_call", { id: event.id, name: event.name, input: event.input, thread: event.thread }];
     case "approval": return ["approval_wait", { id: event.id, name: event.name, input: event.input, thread: event.thread }];
     case "tool_result": return ["tool_result", {
@@ -130,8 +126,6 @@ function durableEvent(event: RunEvent): [string, unknown] | null {
       file: event.file, content: event.content, output: event.output, thread: event.thread,
     }];
     case "usage": return ["usage", { inputTokens: event.inputTokens, outputTokens: event.outputTokens, thread: event.thread }];
-    case "thread_created": return ["status", { status: "thread_created", ...event }];
-    case "thread_status": return ["status", { ...event }];
     default: return null;
   }
 }
@@ -171,9 +165,9 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     run.push({ type: "run", runId });
     run.push({ type: "status", status: "running" });
 
-    // A single lead agent handles the task directly in the mode the user picked:
-    // `ask` answers read-only, `plan` writes a plan read-only, `agent` builds it
-    // in an isolated workspace.
+    // The agent handles the task directly in the mode the user picked: `ask`
+    // answers read-only, `plan` writes a plan read-only, `agent` builds it in an
+    // isolated workspace.
     const mode: import("./agent").IssueAgentMode =
       issue.runMode === "ask" ? "lead-ask" : issue.runMode === "plan" ? "lead-plan-doc" : "lead-execute";
     const writesFiles = mode === "lead-execute";
@@ -184,7 +178,7 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
 
     // Build the conversation: the original request, then any follow-up messages
     // (with the previous run's summary as the assistant turn between them) so the
-    // lead continues the same task instead of starting over.
+    // agent continues the same task instead of starting over.
     const followUps = repositories.listComments(issueId)
       .filter((c) => c.authorType === "user")
       .sort((a, b) => a.createdAt - b.createdAt);
@@ -196,37 +190,8 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
       for (const c of followUps) messages.push({ role: "user", content: c.body });
     }
 
-    // Teammates the lead may hand work to. A single-agent project has none, so
-    // the delegate tool is never offered and the lead does everything itself.
-    const project = await getProject(projectId);
-    const roster = project?.mode === "multi"
-      ? (await I.listAgents(projectId)).filter((a) => a.id !== agent.id && a.role === "worker")
-      : [];
-    const delegate: DelegateFn = async ({ title, detail, assignee }) => {
-      if (!title) return { ok: false, error: "a sub-task needs a title" };
-      const named = assignee
-        ? roster.find((a) => a.name.toLowerCase() === assignee.toLowerCase())
-        : undefined;
-      if (assignee && !named) {
-        return { ok: false, error: `no teammate named "${assignee}" — available: ${roster.map((a) => a.name).join(", ")}` };
-      }
-      // Unassigned work would sit in the backlog forever; fall back to whoever
-      // is first on the roster so every delegated task actually gets picked up.
-      const target = named ?? roster[0];
-      if (!target) return { ok: false, error: "this project has no teammates to delegate to" };
-      const child = await I.createIssue({
-        projectId, parentId: issue.id, title, detail: detail || title,
-        assigneeAgentId: target.id, createdByAgentId: agent.id,
-        // "todo", not "backlog": the executor's tick only ever starts todo or
-        // blocked issues, so a backlog sub-task would never run.
-        status: "todo", stage: "execute", runMode: "agent",
-        actor: { type: "agent", id: agent.id, runId },
-      });
-      return { ok: true, task: { id: child.id, ref: child.ref, title: child.title, assignee: target.name } };
-    };
-
-    let result: { text: string; summary: string; completion: import("./run-transcript").RunCompletion; delegated: { id: string; ref: string; title: string; assignee: string }[] } =
-      { text: "", summary: "", completion: "complete", delegated: [] };
+    let result: { text: string; summary: string; completion: import("./run-transcript").RunCompletion } =
+      { text: "", summary: "", completion: "complete" };
     try {
       // Provision the isolated worktree inside the run's try/catch so a
       // preparation failure (e.g. `git worktree add`) is reported as a failed
@@ -249,7 +214,6 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
       ]);
       result = await runIssueAgent({
         run, apiKey, model, root: executionRoot, mode, agentName: agent.name, messages, beforeMutation,
-        teammates: roster.map((a) => a.name), delegate,
       });
       if (mode === "lead-execute") {
         // Persist the work to the isolated worktree, then fast-forward it into the
@@ -296,7 +260,7 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
       run.push({ type: "done" });
     } catch (e: any) {
       run.push({ type: "error", error: String(e?.message ?? e) });
-      result = { text: `Failed: ${String(e?.message ?? e)}`, summary: "", completion: "complete", delegated: [] };
+      result = { text: `Failed: ${String(e?.message ?? e)}`, summary: "", completion: "complete" };
       if (run.cancelled) await I.updateIssue(issueId, { status: "cancelled", summary: "Cancelled by user" }, { type: "agent", id: agent.id, runId });
       else await onIssueFinished(projectId, issue, agent, result, false, false);
       throw e;

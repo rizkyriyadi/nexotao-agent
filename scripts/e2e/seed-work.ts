@@ -11,12 +11,10 @@ const DAY = 86_400_000;
 
 async function main() {
   const now = Date.now();
-  const project = await addProject({
-    name: "Work Demo", path: process.env.NEXOTAO_PROJECT_PATH || process.cwd(), mode: "multi",
-    agents: [{ name: "Builder", scope: "Implement" }],
-  });
+  const project = await addProject({ name: "Work Demo", path: process.env.NEXOTAO_PROJECT_PATH || process.cwd() });
   await saveConfig({ apiKey: "e2e-" + "k".repeat(40), model: "nexotao-default", onboarded: true, activeProjectId: project.id });
-  const [lead, worker] = await seedAgents(project.id, project.agents ?? []);
+  const [lead] = await seedAgents(project.id);
+  const worker = lead;
 
   const ui = await createLabel({ projectId: project.id, name: "ui", color: "#8b5cf6" });
   const backend = await createLabel({ projectId: project.id, name: "backend", color: "#10b981" });

@@ -1,8 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import Link from "next/link";
-import { ArrowUpRight, Check, ChevronRight, CircleSlash, Clock, Flag, GitBranch, PauseCircle, TriangleAlert } from "lucide-react";
+import { Check, ChevronRight, CircleSlash, Clock, Flag, GitBranch, PauseCircle, TriangleAlert } from "lucide-react";
 import { Markdown } from "../ui/markdown";
 import { ActivityIndicator } from "./ActivityIndicator";
 import { ToolCall } from "./ToolCall";
@@ -18,15 +17,12 @@ export type LogItem =
   | { kind: "summary"; text: string }
   // The run's commit could not be fast-forwarded into the user's branch, so the
   // work is sitting somewhere they have to be told about.
-  | { kind: "integration"; branch: string; reason: string }
-  // A sub-task the lead handed to a teammate, rendered as a link to follow.
-  | { kind: "task"; id: string; ref: string; title: string; assignee: string };
+  | { kind: "integration"; branch: string; reason: string };
 
 export type ToolItem = Extract<LogItem, { kind: "tool" }>;
 type EventItem = Extract<LogItem, { kind: "event" }>;
 type SummaryItem = Extract<LogItem, { kind: "summary" }>;
 type IntegrationItem = Extract<LogItem, { kind: "integration" }>;
-export type TaskItem = Extract<LogItem, { kind: "task" }>;
 
 /** How the surrounding run is doing — drives which of the three end-of-run
  *  presentations the transcript shows. `queued` deliberately does NOT get the
@@ -36,7 +32,7 @@ export type RunPhase = "queued" | "running" | "settled";
 export const TOOL_LABEL: Record<string, string> = {
   list_dir: "List", read_file: "Read", write_file: "Write", edit_file: "Edit",
   bash: "Run", grep: "Grep", web_search: "Search", web_fetch: "Fetch",
-  graph_query: "Graph", graph_path: "Graph", graph_explain: "Graph", delegate: "Delegate",
+  graph_query: "Graph", graph_path: "Graph", graph_explain: "Graph",
 };
 
 export const STATUS_LABEL: Record<string, string> = {
@@ -65,7 +61,6 @@ export function ago(ts: number) {
 type Block =
   | { kind: "text"; text: string }
   | { kind: "tools"; items: ToolItem[] }
-  | { kind: "tasks"; items: TaskItem[] }
   | EventItem
   | SummaryItem
   | IntegrationItem;
@@ -78,12 +73,6 @@ function toBlocks(log: LogItem[]): Block[] {
     if (it.kind === "text") { blocks.push({ kind: "text", text: it.text }); continue; }
     if (it.kind === "event" || it.kind === "summary" || it.kind === "integration") { blocks.push(it); continue; }
     const last = blocks[blocks.length - 1];
-    // Tasks delegated back to back read as one hand-off, so they group like tools.
-    if (it.kind === "task") {
-      if (last && last.kind === "tasks") last.items.push(it);
-      else blocks.push({ kind: "tasks", items: [it] });
-      continue;
-    }
     if (last && last.kind === "tools") last.items.push(it);
     else blocks.push({ kind: "tools", items: [it] });
   }
@@ -202,34 +191,6 @@ function IntegrationBlock({ item }: { item: IntegrationItem }) {
   );
 }
 
-/* ── delegated sub-tasks ─────────────────────────────────────── */
-
-/** Tasks the lead handed to teammates. Each is a link the user can open, so
- *  "what am I actually waiting for?" has an answer they can click. */
-function TaskBlock({ items }: { items: TaskItem[] }) {
-  return (
-    <div className="rounded-xl border border-line bg-paper-white/70 px-2.5 py-2">
-      <p className="mb-1.5 flex items-center gap-1.5 px-1 text-[11px] font-semibold uppercase tracking-[0.06em] text-bark-grey">
-        <GitBranch className="size-3" /> Handed off · {items.length}
-      </p>
-      <div className="space-y-0.5">
-        {items.map((task) => (
-          <Link
-            key={task.id}
-            href={`/board/${task.id}`}
-            className="flex items-center gap-2 rounded-lg px-1 py-1 transition-colors hover:bg-veil"
-          >
-            <span className="shrink-0 font-mono text-[11px] text-electric-indigo">{task.ref}</span>
-            <span className="min-w-0 flex-1 truncate text-[12.5px] text-charcoal" title={task.title}>{task.title}</span>
-            {task.assignee && <span className="shrink-0 text-[11px] text-pebble">{task.assignee}</span>}
-            <ArrowUpRight className="size-3 shrink-0 text-pebble" />
-          </Link>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /* ── terminal state ──────────────────────────────────────────── */
 
 const TERMINAL: Record<string, { icon: typeof Check; className: string }> = {
@@ -324,7 +285,6 @@ export function Transcript({
       {blocks.map((block, index) => {
         if (block.kind === "text") return <Markdown key={index}>{block.text}</Markdown>;
         if (block.kind === "tools") return <ToolBlock key={index} items={block.items} />;
-        if (block.kind === "tasks") return <TaskBlock key={index} items={block.items} />;
         if (block.kind === "summary") return <SummaryBlock key={index} text={block.text} />;
         if (block.kind === "integration") return <IntegrationBlock key={index} item={block} />;
         return TERMINAL_LABELS.has(block.label)

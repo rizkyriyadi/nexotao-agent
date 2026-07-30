@@ -1,6 +1,6 @@
 // Seeds a deterministic control-plane fixture into NEXOTAO_DATA_DIR so the E2E
-// runner can drive real orchestration flows (delegation, dependencies, approval,
-// cancel, retry, review/done, restart) against the running server WITHOUT a live
+// runner can drive real control-plane flows (dependencies, approval, cancel,
+// retry, review/done, restart) against the running server WITHOUT a live
 // Gateway. Prints the created identifiers as JSON on stdout for the runner.
 import { randomUUID } from "node:crypto";
 import { saveConfig } from "../../lib/config";
@@ -12,32 +12,32 @@ import { ControlPlaneRepositories } from "../../lib/db/repositories";
 
 async function main() {
   const now = Date.now();
-  const project = await addProject({ name: "E2E Beta", path: process.env.NEXOTAO_PROJECT_PATH || process.cwd(), mode: "multi", agents: [{ name: "Builder", scope: "Implement" }] });
+  const project = await addProject({ name: "E2E Beta", path: process.env.NEXOTAO_PROJECT_PATH || process.cwd() });
   await saveConfig({ apiKey: "e2e-" + "k".repeat(40), model: "nexotao-default", onboarded: true, activeProjectId: project.id });
 
-  const [lead, worker] = await seedAgents(project.id, project.agents ?? []);
+  const [agent] = await seedAgents(project.id);
 
-  // Root issue for delegation + dependency flows.
-  const root = await createIssue({ projectId: project.id, title: "Ship public beta", assigneeAgentId: lead.id, status: "backlog", actor: { type: "user" } });
+  // Root issue for the dependency flow.
+  const root = await createIssue({ projectId: project.id, title: "Ship public beta", assigneeAgentId: agent.id, status: "backlog", actor: { type: "user" } });
   // A second issue used as a dependency blocker.
-  const blocker = await createIssue({ projectId: project.id, title: "Cut release branch", assigneeAgentId: worker.id, status: "todo", actor: { type: "user" } });
+  const blocker = await createIssue({ projectId: project.id, title: "Cut release branch", assigneeAgentId: agent.id, status: "todo", actor: { type: "user" } });
   // An issue already in review, for the review -> done transition flow.
-  const review = await createIssue({ projectId: project.id, title: "Verify smoke matrix", assigneeAgentId: worker.id, status: "in_review", actor: { type: "user" } });
+  const review = await createIssue({ projectId: project.id, title: "Verify smoke matrix", assigneeAgentId: agent.id, status: "in_review", actor: { type: "user" } });
   // An assigned issue used to exercise re-invoke (retry).
-  const retry = await createIssue({ projectId: project.id, title: "Rebuild package", assigneeAgentId: worker.id, status: "backlog", actor: { type: "user" } });
+  const retry = await createIssue({ projectId: project.id, title: "Rebuild package", assigneeAgentId: agent.id, status: "backlog", actor: { type: "user" } });
 
   const database = await getDatabase();
   const repositories = new ControlPlaneRepositories(database);
 
   // A non-terminal heartbeat run to cancel through /api/run/cancel.
-  const cancelRun = await repositories.createHeartbeat({ agentId: worker.id, issueId: root.id, source: "invoke", status: "waiting", startedAt: now, updatedAt: now });
+  const cancelRun = await repositories.createHeartbeat({ agentId: agent.id, issueId: root.id, source: "invoke", status: "waiting", startedAt: now, updatedAt: now });
 
   // The shape of the reported "cancelled but still shows as running" bug: a run
   // that holds its issue's checkout, with nothing in memory to abort. Cancelling
   // it must release the issue, not just close the run row.
-  const stuck = await createIssue({ projectId: project.id, title: "Cancel mid-flight", assigneeAgentId: worker.id, status: "todo", actor: { type: "user" } });
-  const stuckRun = await repositories.createHeartbeat({ agentId: worker.id, issueId: stuck.id, source: "invoke", status: "running", startedAt: now, updatedAt: now });
-  await repositories.checkoutIssue(stuck.id, worker.id, stuckRun.id);
+  const stuck = await createIssue({ projectId: project.id, title: "Cancel mid-flight", assigneeAgentId: agent.id, status: "todo", actor: { type: "user" } });
+  const stuckRun = await repositories.createHeartbeat({ agentId: agent.id, issueId: stuck.id, source: "invoke", status: "running", startedAt: now, updatedAt: now });
+  await repositories.checkoutIssue(stuck.id, agent.id, stuckRun.id);
 
   // A pending, non-execution approval card on the root issue for the approve flow.
   const approvalId = randomUUID();
@@ -50,8 +50,8 @@ async function main() {
      repeat of one tool, a diff, a shell command, a failure and a denial. This is
      what the transcript redesign is actually judged on, and without it the E2E
      screenshots only ever show empty runs. */
-  const rich = await createIssue({ projectId: project.id, title: "Tidy the run transcript", assigneeAgentId: worker.id, status: "todo", actor: { type: "user" } });
-  const richRun = await repositories.createHeartbeat({ agentId: worker.id, issueId: rich.id, source: "invoke", status: "running", startedAt: now, updatedAt: now });
+  const rich = await createIssue({ projectId: project.id, title: "Tidy the run transcript", assigneeAgentId: agent.id, status: "todo", actor: { type: "user" } });
+  const richRun = await repositories.createHeartbeat({ agentId: agent.id, issueId: rich.id, source: "invoke", status: "running", startedAt: now, updatedAt: now });
   const say = (text: string) => repositories.appendHeartbeatEvent(richRun.id, "reasoning_summary", { text, thread: "lead" });
   const call = (id: string, name: string, input: unknown) => repositories.appendHeartbeatEvent(richRun.id, "tool_call", { id, name, input });
   const result = (id: string, output: string, ok = true) => repositories.appendHeartbeatEvent(richRun.id, "tool_result", { id, output, ok });
@@ -81,7 +81,7 @@ async function main() {
   await repositories.completeHeartbeat(richRun.id, "succeeded", { status: "succeeded" });
 
   process.stdout.write(JSON.stringify({
-    projectId: project.id, lead: lead.id, worker: worker.id,
+    projectId: project.id, agent: agent.id,
     root: root.id, blocker: blocker.id, review: review.id, retry: retry.id,
     cancelRunId: cancelRun.id, approvalId,
     stuck: stuck.id, stuckRunId: stuckRun.id,

@@ -3,7 +3,6 @@ import { asc, eq, inArray } from "drizzle-orm";
 import { getDatabase, STATUS_TO_DEFAULT_STATE, defaultStateId } from "./db/database";
 import { agents, issueDependencies, issueLabels, issues, moduleIssues, workflowStates } from "./db/schema";
 import { IssueDomainError, IssueLifecycleService, type IssueActor, type IssueStatus as LifecycleStatus } from "./issue-lifecycle";
-import type { AgentSpec } from "./store";
 
 export type AgentRole = "lead" | "worker";
 export type Agent = { id: string; projectId: string; name: string; role: AgentRole; scope: string; avatar: string | null; reportsTo: string | null; status: string; createdAt: number };
@@ -77,20 +76,18 @@ export async function getAgentModel(id: string): Promise<string | null> {
   const model = (row?.adapterConfig as { model?: unknown } | undefined)?.model;
   return typeof model === "string" && model.trim() ? model.trim() : null;
 }
-export async function findAgentByName(projectId: string, name: string) {
-  const all = await listAgents(projectId); const normalized = name.trim().toLowerCase();
-  return all.find((agent) => agent.name.toLowerCase() === normalized) ?? all.find((agent) => agent.name.toLowerCase().includes(normalized)) ?? null;
-}
-export async function seedAgents(projectId: string, team: AgentSpec[]): Promise<Agent[]> {
+/** Give a project its agent. Every issue is assigned to one, so a project
+ *  without this row cannot start a run at all. Idempotent: a project that
+ *  already has an agent keeps it. */
+export async function seedAgents(projectId: string): Promise<Agent[]> {
   const database = await getDatabase();
   return database.write((db) => {
     const existing = db.select().from(agents).where(eq(agents.projectId, projectId)).orderBy(asc(agents.createdAt)).all();
     if (existing.length) return existing.map(agentFromRow);
     const now = Date.now();
     const lead: Agent = { id: randomUUID(), projectId, name: "Hutao", role: "lead", scope: "Handles your requests end-to-end — answers, plans, and builds", avatar: null, reportsTo: null, status: "idle", createdAt: now };
-    const workers: Agent[] = (team ?? []).map((spec, index) => ({ id: randomUUID(), projectId, name: spec.name, role: "worker", scope: spec.scope, avatar: null, reportsTo: lead.id, status: "idle", createdAt: now + index + 1 }));
-    for (const agent of [lead, ...workers]) db.insert(agents).values({ ...agent, updatedAt: agent.createdAt }).run();
-    return [lead, ...workers];
+    db.insert(agents).values({ ...lead, updatedAt: lead.createdAt }).run();
+    return [lead];
   });
 }
 

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { publicView } from "../lib/config";
 import { modelLabel } from "../components/settings/ModelRow";
+import { AVAILABLE_MODEL_IDS, DEFAULT_MODEL } from "../lib/nexotao";
 
 test("the public config identifies a key without disclosing it", () => {
   const key = "sk-nexo-_gHv_MjeDay-MvMt5Y20clOpqiyPDHK8";
@@ -34,4 +35,15 @@ test("model ids render as readable names", () => {
   assert.equal(modelLabel("gpt-5.6-terra"), "GPT-5.6 Terra");
   // An id the pattern doesn't know still names itself.
   assert.equal(modelLabel("some-future-model"), "some-future-model");
+});
+
+/* Every model the app hardcodes has to be one the gateway actually serves. The
+ * default is the one that matters most: it is what a run falls back to when the
+ * project has no model set, so an id the catalog no longer carries turns every
+ * such run into a 404 from the gateway rather than a missing feature. */
+test("the default model is one the gateway serves", () => {
+  assert.ok(
+    new Set(AVAILABLE_MODEL_IDS).has(DEFAULT_MODEL),
+    `DEFAULT_MODEL (${DEFAULT_MODEL}) is not in the available catalog`,
+  );
 });

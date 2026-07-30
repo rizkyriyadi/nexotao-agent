@@ -19,8 +19,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as { name: string; path: string; mode?: "single" | "multi"; agents?: any[] };
-  const p = await addProject({ name: body.name, path: body.path, mode: body.mode ?? "single", agents: body.agents ?? [] });
+  const body = (await req.json()) as { name: string; path: string };
+  const p = await addProject({ name: body.name, path: body.path });
   await saveConfig({ activeProjectId: p.id });
   // Start the code index, but never wait for it: a cold index of an unknown repo
   // can run for minutes and onboarding must not hang behind it.

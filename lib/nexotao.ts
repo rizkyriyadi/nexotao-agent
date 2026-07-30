@@ -8,6 +8,16 @@ import Anthropic from "@anthropic-ai/sdk";
 export const NEXOTAO_BASE = "https://api.nexotao.com";
 export const DEFAULT_MODEL = "claude-opus-4-8";
 
+/** The model ids the Nexotao gateway serves and this app supports today: Claude
+ *  on the Anthropic transport plus the GPT 5.6 series. Kept as an explicit
+ *  allow-list so a hardcoded id that the gateway has stopped serving is caught
+ *  by a test rather than by a user whose every run 404s. Must track the filter
+ *  in `fetchModels`. */
+export const AVAILABLE_MODEL_IDS: readonly string[] = [
+  "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+  "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-luna",
+];
+
 /** How many tokens one assistant turn may produce.
  *
  *  This is a ceiling, not a reservation: a turn that answers in 200 tokens

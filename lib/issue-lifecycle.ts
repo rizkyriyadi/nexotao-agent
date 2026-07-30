@@ -134,7 +134,7 @@ export class IssueLifecycleService {
     return this.database.write((db) => {
       const now = input.now ?? Date.now();
       const actor = input.actor ?? { type: "system" as const };
-      const operation = input.parentId ? "delegate" as const : "create" as const;
+      const operation = "create" as const;
       const blockerIds = [...new Set(input.blockerIds ?? [])].sort();
       const normalized = {
         title: input.title.trim() || "Untitled", description: input.description ?? "", parentId: input.parentId ?? null,
@@ -181,7 +181,7 @@ export class IssueLifecycleService {
         id: randomUUID(), projectId: input.projectId, operation, idempotencyKey: input.idempotencyKey,
         fingerprint, issueId: id, createdAt: now,
       }).run();
-      audit(db, { actor, action: operation === "delegate" ? "issue.delegated" : "issue.created", issueId: id, summary: { status, parentId: normalized.parentId }, now });
+      audit(db, { actor, action: "issue.created", issueId: id, summary: { status, parentId: normalized.parentId }, now });
       if (normalized.assigneeAgentId && status === "todo") enqueue(db, {
         agentId: normalized.assigneeAgentId, issueId: id, reason: "assignment",
         key: `assignment:${id}:${normalized.assigneeAgentId}:created`, now,

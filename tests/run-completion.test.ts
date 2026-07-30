@@ -1,16 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import path from "node:path";
-import { openDatabase } from "../lib/db/database";
-import { ControlPlaneRepositories } from "../lib/db/repositories";
-import { projects } from "../lib/db/schema";
-import { IssueLifecycleService } from "../lib/issue-lifecycle";
 import {
   RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
-  TASK_DELEGATED_EVENT_TYPE, TEXT_DELTA_EVENT_TYPES,
-  runOutcomeChip, settledIssueStatus,
+  TEXT_DELTA_EVENT_TYPES, runOutcomeChip, settledIssueStatus,
 } from "../lib/run-transcript";
 import { relativizeWorkspacePaths } from "../lib/agent";
 
@@ -58,57 +50,6 @@ test("the closing summary is its own event, not another text delta", () => {
   assert.ok(TEXT_DELTA_EVENT_TYPES.has("reasoning_summary"));
 });
 
-/* ── delegation ─────────────────────────────────────────────────────────── */
-
-async function fixture() {
-  const dir = await mkdtemp(path.join(tmpdir(), "nexotao-delegate-test-"));
-  const database = await openDatabase(path.join(dir, "nexotao.sqlite"), { migrateJson: false });
-  await database.write((db) => db.insert(projects).values({
-    id: "p", name: "Team", path: dir, mode: "multi", agentSpecs: [], createdAt: 1,
-  }).run());
-  const repositories = new ControlPlaneRepositories(database);
-  await repositories.agents.insert({ id: "lead", projectId: "p", name: "Hutao", role: "lead", scope: "lead", createdAt: 2, updatedAt: 2 });
-  await repositories.agents.insert({ id: "dev", projectId: "p", name: "Dev", role: "worker", scope: "engineering", createdAt: 3, updatedAt: 3 });
-  const lifecycle = new IssueLifecycleService(database);
-  const parent = await lifecycle.create({
-    projectId: "p", title: "Ship the thing", assigneeAgentId: "lead", actor: { type: "user" },
-  });
-  return { dir, database, repositories, lifecycle, parent };
-}
-
-test("a delegated sub-task hangs off its parent and is ready to run", async () => {
-  const f = await fixture();
-  try {
-    const child = await f.lifecycle.create({
-      projectId: "p", parentId: f.parent.id, title: "Build the billing page",
-      description: "Everything the teammate needs", assigneeAgentId: "dev", createdByAgentId: "lead",
-      status: "todo", actor: { type: "agent", id: "lead" },
-    });
-
-    assert.equal(child.parentId, f.parent.id);
-    assert.equal(child.assigneeAgentId, "dev");
-    // "todo", not "backlog": the executor's tick only starts todo or blocked
-    // work, so a backlog sub-task would sit there forever and the user would be
-    // waiting on something that was never going to run.
-    assert.equal(child.status, "todo");
-    // The ref is what the transcript link shows, so it must be distinct.
-    assert.notEqual(child.identifier, f.parent.identifier);
-  } finally {
-    await f.database.close();
-    await rm(f.dir, { recursive: true, force: true });
-  }
-});
-
-test("the delegation event carries what a link needs", () => {
-  // The transcript renders a clickable card from this payload alone: the id to
-  // navigate to, and the ref/title so the user knows which task it is.
-  const payload = { id: "abc", ref: "NX-7", title: "Build the billing page", assignee: "Dev" };
-  assert.equal(TASK_DELEGATED_EVENT_TYPE, "task_delegated");
-  for (const key of ["id", "ref", "title", "assignee"]) {
-    assert.ok(key in payload, `${key} travels with the event`);
-  }
-});
-
 /* ── work the user cannot see ────────────────────────────────────────────────
  * When a run's commit cannot be fast-forwarded into the branch the user works
  * on, their folder looks exactly as they left it while the task reports done.
@@ -137,51 +78,50 @@ test("the notice is emitted for a refusal and withheld for a clean merge", () =>
   assert.ok(!shouldNotify({ commit: null, reason: "the run made no changes" }));
 });
 
-/* ── the hand-off that wrote into the wrong copy ─────────────────────────────
- * Each run works in its own copy of the project. A lead that pastes its own
- * absolute workspace path into a sub-task sends the teammate somewhere outside
- * that teammate's workspace: the write succeeds, the teammate reports done, its
- * branch is empty, and the user is told three files were created while their
- * folder holds none. Nothing downstream can detect this — the run genuinely had
- * no changes to integrate — so it has to be stopped at the hand-off. */
+/* ── text that points into a folder that is gone ─────────────────────────────
+ * Each run works in its own copy of the project, at a path that stops existing
+ * once the run is cleaned up. Anything the run writes down for later — a task
+ * detail, a plan, a summary — that quotes that absolute path sends its next
+ * reader, whether the following run or the user in their own folder, to a
+ * directory that is not there. The relative path is the one that stays true. */
 
-test("a delegated brief never carries the lead's own workspace path", () => {
+test("run-written text never carries the run's own workspace path", () => {
   const root = "/home/user/.nexotao/worktrees/abc123/nx-12-9b7ddca6";
-  const brief = relativizeWorkspacePaths(
+  const detail = relativizeWorkspacePaths(
     `Create a file called ROUTING.md in the repo root at ${root}/ROUTING.md. Also update ${root}/docs/index.md.`,
     root,
   );
-  assert.ok(!brief.includes(root), "the lead's workspace is gone from the brief");
-  assert.match(brief, /called ROUTING\.md in the repo root at ROUTING\.md/);
-  assert.match(brief, /update docs\/index\.md/);
+  assert.ok(!detail.includes(root), "the run's workspace is gone from the text");
+  assert.match(detail, /called ROUTING\.md in the repo root at ROUTING\.md/);
+  assert.match(detail, /update docs\/index\.md/);
 });
 
 /* Why: the guard above matched a `/`-delimited root only, so on Windows — where
- * the root arrives as `D:\…\worktrees\…` — it stripped nothing and every
- * delegated brief carried the lead's absolute path. That is the failure this
- * whole function exists to prevent, reappearing on the one platform where the
- * user reporting it was working. The model is told to write POSIX paths and
- * often does, so both spellings of the same root have to go. */
+ * the root arrives as `D:\…\worktrees\…` — it stripped nothing and every line
+ * the run wrote kept its absolute path. That is the failure this whole function
+ * exists to prevent, reappearing on the one platform where the user reporting it
+ * was working. The model is told to write POSIX paths and often does, so both
+ * spellings of the same root have to go. */
 test("a Windows workspace path is stripped in either spelling", () => {
   const root = "D:\\platform vendore\\devi ardiani\\vendora\\.nexotao\\worktrees\\nx-1-9b7ddca6";
   const posix = root.replace(/\\/g, "/");
-  // Both spellings appear in one brief because that is what actually happens:
-  // the root is handed to us backslashed by the host, while the model — told to
+  // Both spellings appear in one line because that is what actually happens: the
+  // root is handed to us backslashed by the host, while the model — told to
   // write POSIX paths — echoes it back with forward slashes.
-  const brief = relativizeWorkspacePaths(
+  const detail = relativizeWorkspacePaths(
     `Create ${root}\\ROUTING.md and update ${posix}/docs/index.md.`,
     root,
   );
-  assert.ok(!brief.includes(root), "the backslashed root is gone");
-  assert.ok(!brief.includes(posix), "and so is the same root written with forward slashes");
-  assert.match(brief, /Create ROUTING\.md/);
-  assert.match(brief, /update docs\/index\.md/);
+  assert.ok(!detail.includes(root), "the backslashed root is gone");
+  assert.ok(!detail.includes(posix), "and so is the same root written with forward slashes");
+  assert.match(detail, /Create ROUTING\.md/);
+  assert.match(detail, /update docs\/index\.md/);
 });
 
-test("relativizing leaves a brief that never mentioned the workspace alone", () => {
+test("relativizing leaves text that never mentioned the workspace alone", () => {
   const root = "/home/user/.nexotao/worktrees/abc123/nx-12-9b7ddca6";
-  const brief = "Create ROUTING.md in the repo root. Cover redirects and 404s.";
-  assert.equal(relativizeWorkspacePaths(brief, root), brief);
+  const detail = "Create ROUTING.md in the repo root. Cover redirects and 404s.";
+  assert.equal(relativizeWorkspacePaths(detail, root), detail);
   // A bare root with no trailing slash still resolves to "the project", not "".
   assert.equal(relativizeWorkspacePaths(`Work inside ${root} only.`, root), "Work inside . only.");
 });

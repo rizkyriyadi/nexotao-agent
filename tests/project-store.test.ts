@@ -22,8 +22,8 @@ after(async () => {
 
 test("re-adding a folder re-opens the project already on it", async () => {
   const tree = path.join(dir, "tree");
-  const first = await addProject({ name: "Shop", path: tree, mode: "single", agents: [] });
-  const again = await addProject({ name: "Shop again", path: tree, mode: "multi", agents: [] });
+  const first = await addProject({ name: "Shop", path: tree });
+  const again = await addProject({ name: "Shop again", path: tree });
 
   assert.equal(again.id, first.id, "the same folder yields the same project");
   assert.equal(again.name, "Shop", "the existing project is returned untouched, not overwritten");
@@ -31,13 +31,13 @@ test("re-adding a folder re-opens the project already on it", async () => {
 });
 
 test("~ and an absolute home path name the same folder", async () => {
-  const first = await addProject({ name: "Tilde", path: `${process.env.HOME}/nexotao-dedupe-probe`, mode: "single", agents: [] });
-  const again = await addProject({ name: "Tilde", path: "~/nexotao-dedupe-probe", mode: "single", agents: [] });
+  const first = await addProject({ name: "Tilde", path: `${process.env.HOME}/nexotao-dedupe-probe` });
+  const again = await addProject({ name: "Tilde", path: "~/nexotao-dedupe-probe" });
   assert.equal(again.id, first.id);
 });
 
 test("different folders stay different projects", async () => {
-  const a = await addProject({ name: "A", path: path.join(dir, "a"), mode: "single", agents: [] });
-  const b = await addProject({ name: "B", path: path.join(dir, "b"), mode: "single", agents: [] });
+  const a = await addProject({ name: "A", path: path.join(dir, "a") });
+  const b = await addProject({ name: "B", path: path.join(dir, "b") });
   assert.notEqual(a.id, b.id);
 });
