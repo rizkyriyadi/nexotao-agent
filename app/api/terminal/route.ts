@@ -30,7 +30,10 @@ export async function POST(request: Request) {
   } else if (action === "write") {
     if (!session.write(String(body.data ?? ""))) return NextResponse.json({ error: "The shell has exited." }, { status: 409 });
   } else if (action === "interrupt") {
-    session.interrupt();
+    // Answering `{ok: true}` for a shell that is already gone told the client the
+    // Ctrl-C landed, so the panel kept showing Stop for a command that no longer
+    // exists. The same 409 the other actions give is what teaches it otherwise.
+    if (!session.interrupt()) return NextResponse.json({ error: "The shell has exited." }, { status: 409 });
   } else if (action === "close") {
     session.dispose();
   } else {

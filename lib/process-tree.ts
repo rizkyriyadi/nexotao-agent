@@ -60,6 +60,46 @@ export function killTree(pid: number | undefined, fallback?: () => void) {
 }
 
 /**
+ * The direct children of `pid` on Windows, asked for two ways.
+ *
+ * `wmic` was the obvious tool and it is being taken away: deprecated since
+ * Windows 10 21H1, and absent from a clean Windows 11 24H2 install. A lookup
+ * that only knows `wmic` returns nothing there — silently, because "no such
+ * command" and "no children" both arrive as an error we are obliged to swallow.
+ * The visible symptom would be Ctrl-C doing nothing at all on the newest
+ * Windows, which is the one place we cannot test from here.
+ *
+ * So PowerShell's CIM query is tried first (present on every supported Windows)
+ * and `wmic` is the fallback for the older boxes where PowerShell is locked down
+ * by execution policy. Both print one pid per line; anything that is not a
+ * number is a header or a blank and is filtered out.
+ */
+function windowsChildren(pid: number, done: (children: number[]) => void) {
+  // `pid` is a number from `child.pid`, never user text, so it cannot carry a
+  // quote out of the `-Filter` string — but the whole file's contract is that a
+  // timeout handler never dies, so a spawn that fails outright ends in an empty
+  // list rather than an exception thrown from inside someone's `catch`.
+  const parse = (stdout: string) => stdout.split(/\r?\n/).map((row) => Number(row.trim())).filter(Boolean);
+  const viaWmic = () => {
+    try {
+      execFile("wmic", ["process", "where", `ParentProcessId=${pid}`, "get", "ProcessId"], (error, stdout) => {
+        done(error ? [] : parse(stdout));
+      });
+    } catch { done([]); }
+  };
+  try {
+    execFile("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-Command",
+      `Get-CimInstance Win32_Process -Filter "ParentProcessId=${pid}" | Select-Object -ExpandProperty ProcessId`,
+    ], (error, stdout) => {
+      const children = error ? [] : parse(stdout);
+      if (children.length) return done(children);
+      viaWmic();
+    });
+  } catch { viaWmic(); }
+}
+
+/**
  * Signal everything `pid` spawned, but *not* `pid` itself.
  *
  * Ctrl-C in the terminal panel is this, and it cannot be `killTree`. A shell
@@ -80,10 +120,15 @@ export function killTree(pid: number | undefined, fallback?: () => void) {
 export function signalDescendants(pid: number | undefined, signal: NodeJS.Signals = "SIGINT") {
   if (!pid) return;
   if (process.platform === "win32") {
-    // No process groups and no SIGINT delivery to another console's processes.
-    // Terminating the tree below the shell is the closest equivalent, and it is
-    // what the button promises: stop what is running, keep the shell.
-    execFile("taskkill", ["/pid", String(pid), "/T", "/F"], () => { /* already gone is normal */ });
+    // `taskkill /T` kills the tree *including* the pid it is given, so naming the
+    // shell here would kill the shell — the exact bug this function exists to
+    // avoid, just spelled in Windows. Ask for the shell's direct children and
+    // kill each of their trees instead, leaving the shell itself standing.
+    windowsChildren(pid, (children) => {
+      for (const child of children) {
+        execFile("taskkill", ["/pid", String(child), "/T", "/F"], () => { /* already gone is normal */ });
+      }
+    });
     return;
   }
   execFile("ps", ["-eo", "pid=,ppid="], (error, stdout) => {

@@ -16,28 +16,83 @@
 // discovering.
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { accessSync, constants, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { killTree, signalDescendants } from "./process-tree";
 
 export type TerminalChunk = { seq: number; stream: "out" | "err" | "meta"; data: string };
 
 const SCROLLBACK = 4_000;
 const IDLE_MS = 30 * 60_000;
+const REAP_MS = 60_000;
 const MAX_INPUT = 64_000;
 
 /** Emitted by the shell itself after every command so we can report the exit
  *  code and the directory the next command will run in. Randomised per session
- *  so command output that happens to contain the word cannot forge one. */
+ *  so command output that happens to contain the word cannot forge one.
+ *
+ *  The `@` on the Windows line is not decoration. `cmd /q` starts with echo off,
+ *  but echo is session state the user can change — one `echo on`, or a `.bat`
+ *  that turns it on and does not turn it back, and cmd starts echoing the marker
+ *  *command* before running it. That echo is the literal text `%ERRORLEVEL%` and
+ *  `%CD%`, unexpanded, which parses as a marker reporting a non-numeric exit code
+ *  and a current directory of `%CD%`. `@` suppresses the echo of its own line
+ *  whatever ECHO is set to; the numeric guard in `ingest` covers the rest. */
 function markerFor(token: string) {
   return process.platform === "win32"
-    ? `echo ${token} %ERRORLEVEL% %CD%`
+    ? `@echo ${token} %ERRORLEVEL% %CD%`
     : `printf '${token} %s %s\\n' "$?" "$PWD"`;
 }
 
+function runnable(file: string) {
+  try { accessSync(file, constants.X_OK); return true; } catch { return false; }
+}
+
+/** Pick a shell that is actually on this machine.
+ *
+ *  `process.env.SHELL` is a *preference*, not a promise. It is whatever was set
+ *  in the environment that launched the server, and that environment is often
+ *  not the one the shell lives in: a macOS user's `SHELL=/bin/zsh` inherited by
+ *  a Linux container, a launchd or systemd unit carrying a stale value, a Nix or
+ *  Homebrew shell that has since been removed. Spawning it unchecked turns a
+ *  missing file into `spawn /bin/zsh ENOENT` and a panel with no shell at all —
+ *  for a variable we only ever wanted as a nicety.
+ *
+ *  So the preference is tried, then the shells that are actually present, and
+ *  `/bin/sh` is the floor every POSIX box has. */
 function shellCommand(): [string, string[]] {
-  if (process.platform === "win32") return [process.env.COMSPEC || "cmd.exe", ["/q"]];
-  // `sh` is the floor every POSIX box has; the user's own shell is preferred so
-  // their aliases and prompt-independent rc settings apply where they exist.
-  return [process.env.SHELL || "/bin/sh", ["-s"]];
+  if (process.platform === "win32") {
+    // `COMSPEC` is the same kind of promise `SHELL` is — a variable that usually
+    // says `C:\Windows\system32\cmd.exe` and occasionally says something a
+    // corporate login script set years ago. Checking it costs one `access` call
+    // and saves the panel from the Windows spelling of the bug above.
+    const comspec = process.env.COMSPEC;
+    if (comspec && runnable(comspec)) return [comspec, ["/q"]];
+    const root = process.env.SystemRoot || "C:\\Windows";
+    const fallback = `${root}\\System32\\cmd.exe`;
+    return [runnable(fallback) ? fallback : "cmd.exe", ["/q"]];
+  }
+  const preferred = process.env.SHELL;
+  const candidates = [preferred, "/bin/bash", "/bin/zsh", "/bin/sh", "/usr/bin/sh"].filter((file): file is string => Boolean(file));
+  return [candidates.find(runnable) ?? "/bin/sh", ["-s"]];
+}
+
+/** The folder to start in, and a note when it is not the one that was asked for.
+ *
+ *  A cwd that no longer exists fails the spawn with `spawn <shell> ENOENT` —
+ *  naming the shell, not the folder, because that is the file `execve` reports.
+ *  Read literally it sends everyone hunting for a missing shell binary that is
+ *  sitting right there. It happens for an ordinary reason: the panel opens on a
+ *  run's worktree, and a worktree is removed when its run is cleaned up.
+ *
+ *  Falling back to the home directory keeps the terminal usable, and the note
+ *  says which folder went missing so the substitution is visible rather than a
+ *  shell that silently starts somewhere else. */
+function startDirectory(requested: string): [string, string | null] {
+  try {
+    if (statSync(requested).isDirectory()) return [requested, null];
+  } catch { /* fall through to the note below */ }
+  return [homedir(), `${requested} no longer exists — opened your home folder instead.`];
 }
 
 export class TerminalSession {
@@ -53,9 +108,11 @@ export class TerminalSession {
   private idle: NodeJS.Timeout;
   private partial = { out: "", err: "" };
 
-  constructor(readonly rootId: string, cwd: string) {
+  constructor(readonly rootId: string, requested: string) {
+    const [cwd, note] = startDirectory(requested);
     this.cwd = cwd;
     const [file, args] = shellCommand();
+    if (note) this.push("meta", JSON.stringify({ note }));
     this.child = spawn(file, args, {
       cwd, detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
@@ -63,7 +120,17 @@ export class TerminalSession {
     });
     this.child.stdout?.on("data", (c: Buffer) => this.ingest("out", c.toString("utf8")));
     this.child.stderr?.on("data", (c: Buffer) => this.ingest("err", c.toString("utf8")));
-    this.child.once("error", (error) => { this.push("err", `${error.message}\n`); this.finish(-1); });
+    // `spawn <file> ENOENT` names the shell whether the shell or the *folder* is
+    // the thing that is missing, so say which in plain words rather than passing
+    // the raw errno message to someone who then goes looking for a file that is
+    // not the problem.
+    this.child.once("error", (error) => {
+      const reason = (error as NodeJS.ErrnoException).code === "ENOENT"
+        ? `Could not start a shell (tried ${file}).`
+        : `Could not start a shell: ${error.message}`;
+      this.push("err", `${reason}\n`);
+      this.finish(-1);
+    });
     this.child.once("close", (code) => this.finish(code ?? 0));
     this.idle = setTimeout(() => this.dispose(), IDLE_MS);
     this.idle.unref?.();
@@ -81,7 +148,11 @@ export class TerminalSession {
    *  showing a spinner for a command that finished, and the raw token is printed
    *  to the user. Splitting the line at the marker recovers both halves. */
   private ingest(stream: "out" | "err", text: string) {
-    const combined = this.partial[stream] + text;
+    // `\r\n` is dropped to `\n` first. cmd.exe emits CRLF, and splitting on
+    // `\n` alone leaves a carriage return on the end of every line — invisible
+    // in the log but real in the text, so a copied command carries a stray CR
+    // and anything comparing the output to a string fails for no visible reason.
+    const combined = (this.partial[stream] + text).replace(/\r\n/g, "\n");
     const lines = combined.split("\n");
     this.partial[stream] = lines.pop() ?? "";
     for (const line of lines) {
@@ -90,7 +161,11 @@ export class TerminalSession {
       if (at > 0) this.push(stream, line.slice(0, at));
       const [, code = "0", ...rest] = line.slice(at).trim().split(" ");
       const cwd = rest.join(" ");
-      if (cwd) this.cwd = cwd;
+      // An unexpanded `%CD%` is the shape a mis-echoed cmd.exe marker takes, and
+      // believing it would point the folder chip — and the next shell opened on
+      // this root — at a directory spelled `%CD%`. A cwd we cannot vouch for is
+      // better left as the last one we could.
+      if (cwd && !cwd.includes("%")) this.cwd = cwd;
       this.push("meta", JSON.stringify({ exit: Number(code) || 0, cwd: this.cwd }));
     }
     // A prompt-less read (`read -p`, a password) never ends in a newline, so
@@ -156,11 +231,22 @@ export class TerminalSession {
     this.idle.unref?.();
   }
 
+  /** A dead session is kept around briefly, then dropped.
+   *
+   *  Kept, because the client is usually mid-reconnect when the shell dies and
+   *  the last thing it wrote — the error that explains *why* — is only in this
+   *  buffer; a session deleted the instant it exits answers that reconnect with
+   *  "that shell is gone" and the user never learns what happened. Dropped,
+   *  because each one holds a scrollback of up to `SCROLLBACK` chunks and a
+   *  server that runs for weeks would otherwise accumulate one per shell that
+   *  ever exited. */
   private finish(code: number) {
     if (this.exited !== null) return;
     this.exited = code;
     clearTimeout(this.idle);
     this.push("meta", JSON.stringify({ closed: code }));
+    const reap = setTimeout(() => { this.listeners.clear(); sessions.delete(this.id); }, REAP_MS);
+    reap.unref?.();
   }
 
   dispose() {

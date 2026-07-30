@@ -16,8 +16,12 @@ const skip = process.platform === "win32";
  *  accumulated output is the only honest way to test it — a fixed sleep either
  *  flakes on a slow box or wastes a second on a fast one. */
 function collector(session: TerminalSession) {
-  const chunks: TerminalChunk[] = [];
-  session.subscribe((chunk) => chunks.push(chunk));
+  // Replay first, then tail — the same order the SSE route uses, and for the
+  // same reason: a session can push before anyone has subscribed (the note about
+  // a substituted folder is written in the constructor), and a collector that
+  // only tails would never see it.
+  const chunks: TerminalChunk[] = [...session.since(0)];
+  session.subscribe((chunk) => { if (!chunks.some((seen) => seen.seq === chunk.seq)) chunks.push(chunk); });
   return {
     chunks,
     text: () => chunks.filter((c) => c.stream !== "meta").map((c) => c.data).join(""),
@@ -142,6 +146,93 @@ test("interrupting stops the command and leaves the shell standing", { skip }, a
     session.run("printf 'pwd=%s mark=%s\\n' \"$PWD\" \"$NEXOTAO_MARK\"");
     assert.ok(await sink.until(() => sink.text().includes("pwd=")), "and still accepts commands");
     assert.match(sink.text(), /pwd=\/ mark=kept/);
+  } finally {
+    session.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/* `SHELL` is a preference inherited from whatever launched the server, and it is
+ * routinely a lie: a macOS `SHELL=/bin/zsh` carried into a Linux container, a
+ * stale systemd unit, a Homebrew shell since removed. Spawning it unchecked
+ * turned that into `spawn /bin/zsh ENOENT` and a panel with no shell at all —
+ * the whole feature lost to a variable we only ever wanted as a nicety. */
+test("a SHELL that is not on this machine falls back instead of failing", { skip }, async () => {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "nexotao-terminal-")));
+  const previous = process.env.SHELL;
+  process.env.SHELL = "/nonexistent/zsh";
+  const session = new TerminalSession("root", dir);
+  const sink = collector(session);
+  try {
+    session.run("printf 'shell=%s\\n' alive");
+    assert.ok(await sink.until(() => sink.text().includes("shell=alive")), "a working shell was found anyway");
+    assert.ok(session.alive, "and it is still running");
+    // The name of the shell we could not start is never shown as a bare errno.
+    assert.ok(!sink.text().includes("ENOENT"), "no raw spawn error reached the user");
+  } finally {
+    if (previous === undefined) delete process.env.SHELL; else process.env.SHELL = previous;
+    session.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/* A folder that has been deleted fails the spawn with `spawn <shell> ENOENT` —
+ * naming the shell, because that is the file `execve` reports. Read literally it
+ * sends the user hunting for a missing shell binary that is sitting right there.
+ * And it happens for an entirely ordinary reason: the panel opens on a run's
+ * worktree, and a worktree is removed when its run is cleaned up. */
+test("a folder that has been deleted opens a shell somewhere real, and says so", { skip }, async () => {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "nexotao-terminal-")));
+  await rm(dir, { recursive: true, force: true });
+  const session = new TerminalSession("root", dir);
+  const sink = collector(session);
+  try {
+    assert.ok(await sink.until(() => sink.meta().some((m) => typeof m.note === "string")), "the substitution was reported");
+    assert.match(sink.meta().find((m) => m.note)!.note, /no longer exists/);
+    session.run("printf 'ok\\n'");
+    assert.ok(await sink.until(() => sink.text().includes("ok")), "and the shell works");
+    assert.ok(session.alive);
+  } finally {
+    session.dispose();
+  }
+});
+
+/* cmd.exe ends every line with CRLF. Splitting on `\n` alone leaves the carriage
+ * return on the end of each line, where it is invisible in the panel and real in
+ * the text: a copied command carries a stray CR into the next shell, and anything
+ * comparing output to a string fails for a reason nobody can see. Windows is the
+ * platform that makes this routine, but any command emitting CRLF hits it, which
+ * is what lets this be tested from a POSIX box at all. */
+test("carriage returns from CRLF output do not survive into the log", { skip }, async () => {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "nexotao-terminal-")));
+  const session = new TerminalSession("root", dir);
+  const sink = collector(session);
+  try {
+    session.run("printf 'first\\r\\nsecond\\r\\n'");
+    assert.ok(await sink.until(() => sink.text().includes("second")), "the output arrived");
+    assert.ok(!sink.text().includes("\r"), "no carriage return reached the user");
+    assert.match(sink.text(), /first\nsecond\n/);
+  } finally {
+    session.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/* On Windows the marker is `@echo <token> %ERRORLEVEL% %CD%`, and cmd.exe expands
+ * those two only when it runs the line. If echo is ever turned back on — one
+ * stray `echo on`, a `.bat` that does not restore it — cmd prints the command
+ * *before* running it, unexpanded, and a marker arrives claiming the current
+ * directory is literally `%CD%`. Believing it would point the folder chip, and
+ * every shell later opened on this root, at a directory that cannot exist. */
+test("a marker carrying an unexpanded variable does not move the reported folder", { skip }, async () => {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "nexotao-terminal-")));
+  const session = new TerminalSession("root", dir);
+  const sink = collector(session);
+  try {
+    session.run(`printf '${session.token} 0 %%CD%%\\n'`);
+    assert.ok(await sink.until(() => sink.meta().some((m) => m.exit !== undefined)), "the command finished");
+    assert.equal(session.cwd, dir, "the folder is still the real one");
+    assert.ok(!sink.meta().some((m) => String(m.cwd).includes("%")), "and no meta reported a bogus folder");
   } finally {
     session.dispose();
     await rm(dir, { recursive: true, force: true });
