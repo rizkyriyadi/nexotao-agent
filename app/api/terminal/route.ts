@@ -1,3 +1,4 @@
+import { homedir } from "node:os";
 import { NextResponse } from "next/server";
 import { getSession, openSession } from "@/lib/terminal";
 import { activeRoot, resolveRoot } from "@/lib/workspace-files";
@@ -19,7 +20,15 @@ export async function POST(request: Request) {
     const root = body.rootId ? await resolveRoot(String(body.rootId)) : await activeRoot();
     if (!root) return NextResponse.json({ error: "No workspace folder is open yet." }, { status: 404 });
     const session = openSession(root.id, root.path);
-    return NextResponse.json({ sessionId: session.id, cwd: session.cwd, root: { id: root.id, label: root.label, path: root.path } });
+    // The home directory travels with the session so the panel can render the
+    // prompt the way every shell does — `~/project` rather than the full
+    // `/Users/someone/…/project`, which in a panel this narrow is most of the
+    // line. The client cannot know it: this is the *server's* home, and the
+    // server is the machine the shell runs on.
+    return NextResponse.json({
+      sessionId: session.id, cwd: session.cwd, home: homedir(),
+      root: { id: root.id, label: root.label, path: root.path },
+    });
   }
 
   const session = getSession(String(body.sessionId ?? ""));
