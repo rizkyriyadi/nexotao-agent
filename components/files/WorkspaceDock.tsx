@@ -9,9 +9,10 @@
    opening a file slides a reader over the tree rather than replacing the chat. */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, FolderTree, Loader2, PanelRightClose, RefreshCw, Search } from "lucide-react";
+import { ArrowLeft, FolderTree, Loader2, PanelRightClose, RefreshCw, Search, TerminalSquare } from "lucide-react";
 import { FileTree } from "./FileTree";
 import { FilePreviewPane } from "./FilePreview";
+import { TerminalPane } from "./TerminalPane";
 import { DOCK_MIN, useDockWidth } from "./useDockWidth";
 import type { TreeNode, WorkspaceRoot } from "@/lib/workspace-files";
 import type { WorkspaceNotice } from "./use-workspace";
@@ -38,6 +39,7 @@ export function WorkspaceDock({
   const [selected, setSelected] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [seeded, setSeeded] = useState(false);
+  const [tab, setTab] = useState<"files" | "terminal">("files");
   const { width, dragging, startDrag, nudge } = useDockWidth();
 
   // Seeded once, from whichever tree arrives first. Re-seeding on every poll
@@ -85,7 +87,7 @@ export function WorkspaceDock({
   // The reader takes the whole dock when a file is open. Splitting the panel
   // between a tree and a preview leaves neither usable at these widths — and if
   // you want both at once, that is what widening it is for.
-  if (selected && root) {
+  if (selected && root && tab === "files") {
     return (
       <Shell width={width} dragging={dragging} startDrag={startDrag} nudge={nudge}>
         <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line/70 px-2">
@@ -108,9 +110,18 @@ export function WorkspaceDock({
     );
   }
 
+  if (tab === "terminal") {
+    return (
+      <Shell width={width} dragging={dragging} startDrag={startDrag} nudge={nudge}>
+        <DockHeader onClose={onClose} tab={tab} onTab={setTab} />
+        <TerminalPane rootId={root?.id ?? null} rootLabel={root?.label} />
+      </Shell>
+    );
+  }
+
   return (
     <Shell width={width} dragging={dragging} startDrag={startDrag} nudge={nudge}>
-      <DockHeader onClose={onClose} />
+      <DockHeader onClose={onClose} tab={tab} onTab={setTab} />
 
       <div className="shrink-0 space-y-2 px-3 pb-2">
         <p className="truncate px-1 text-[12.5px] font-medium text-charcoal" title={root?.detail}>{root?.label ?? "Files"}</p>
@@ -215,13 +226,43 @@ function Shell({
   );
 }
 
-function DockHeader({ onClose }: { onClose: () => void }) {
+/** Files and the shell are two views of one folder, so they are tabs on the same
+ *  panel rather than two places to be. The terminal opens in whatever folder the
+ *  tree is showing — including a live run's worktree, which is the folder you
+ *  actually want a shell in while watching an agent work. */
+function DockHeader({ onClose, tab, onTab }: { onClose: () => void; tab?: "files" | "terminal"; onTab?: (next: "files" | "terminal") => void }) {
+  if (!tab || !onTab) {
+    return (
+      <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line/70 px-3">
+        <FolderTree className="size-3.5 text-pebble" strokeWidth={1.8} />
+        <span className="flex-1 text-[12px] font-medium text-charcoal">Workspace</span>
+        <CloseButton onClose={onClose} />
+      </div>
+    );
+  }
   return (
-    <div className="flex h-11 shrink-0 items-center gap-2 border-b border-line/70 px-3">
-      <FolderTree className="size-3.5 text-pebble" strokeWidth={1.8} />
-      <span className="flex-1 text-[12px] font-medium text-charcoal">Workspace</span>
+    <div className="flex h-11 shrink-0 items-center gap-1 border-b border-line/70 px-2">
+      <Tab active={tab === "files"} onClick={() => onTab("files")} icon={<FolderTree className="size-3.5" strokeWidth={1.8} />} label="Files" />
+      <Tab active={tab === "terminal"} onClick={() => onTab("terminal")} icon={<TerminalSquare className="size-3.5" strokeWidth={1.8} />} label="Terminal" />
+      <span className="flex-1" />
       <CloseButton onClose={onClose} />
     </div>
+  );
+}
+
+function Tab({ active, onClick, icon, label }: { active: boolean; onClick: () => void; icon: React.ReactNode; label: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[12px] transition-colors ${
+        active ? "bg-veil font-medium text-charcoal" : "text-pebble hover:text-charcoal"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

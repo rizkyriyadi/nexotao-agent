@@ -25,7 +25,7 @@
 //
 // `taskkill /T` is the Windows equivalent of signalling a process group: it
 // walks the child list the kernel already maintains and terminates the tree.
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 
 /**
  * Terminate `pid` and every process it spawned. Never throws — callers are
@@ -57,4 +57,52 @@ export function killTree(pid: number | undefined, fallback?: () => void) {
   } catch {
     try { fallback?.(); } catch { /* already gone */ }
   }
+}
+
+/**
+ * Signal everything `pid` spawned, but *not* `pid` itself.
+ *
+ * Ctrl-C in the terminal panel is this, and it cannot be `killTree`. A shell
+ * started with `detached: true` is the leader of its own process group, so
+ * `process.kill(-pid, "SIGINT")` reaches the running command *and the shell*,
+ * and a shell with no tty has no line discipline to treat SIGINT as "abandon
+ * this line" — it simply dies. The user pressed Ctrl-C to stop a dev server and
+ * instead lost the shell, with the cwd they had navigated to and every variable
+ * they had exported.
+ *
+ * Walking the tree by ppid and signalling only the descendants leaves the shell
+ * standing, and it still reports the interrupted command's exit code (130) the
+ * way a real terminal does.
+ *
+ * Never throws, for the same reason as `killTree`: the process is often already
+ * gone by the time the user's click arrives.
+ */
+export function signalDescendants(pid: number | undefined, signal: NodeJS.Signals = "SIGINT") {
+  if (!pid) return;
+  if (process.platform === "win32") {
+    // No process groups and no SIGINT delivery to another console's processes.
+    // Terminating the tree below the shell is the closest equivalent, and it is
+    // what the button promises: stop what is running, keep the shell.
+    execFile("taskkill", ["/pid", String(pid), "/T", "/F"], () => { /* already gone is normal */ });
+    return;
+  }
+  execFile("ps", ["-eo", "pid=,ppid="], (error, stdout) => {
+    if (error) return;
+    const children = new Map<number, number[]>();
+    for (const line of stdout.split("\n")) {
+      const [child, parent] = line.trim().split(/\s+/).map(Number);
+      if (!child || !parent) continue;
+      children.set(parent, [...(children.get(parent) ?? []), child]);
+    }
+    // Depth-first from the shell, collecting every descendant. Deepest first on
+    // the way back out so a supervisor cannot notice a worker die and restart it.
+    const found: number[] = [];
+    const stack = [pid];
+    while (stack.length) {
+      for (const child of children.get(stack.pop()!) ?? []) { found.push(child); stack.push(child); }
+    }
+    for (const target of found.reverse()) {
+      try { process.kill(target, signal); } catch { /* exited on its own */ }
+    }
+  });
 }
