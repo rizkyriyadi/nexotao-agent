@@ -120,13 +120,49 @@ export function assertAllowedPaths(files: string[]) {
   if (prohibited.length) throw new Error(`Agent instruction Markdown is local-only and cannot be committed: ${prohibited.join(", ")}`);
 }
 
+/** Who a run's commits are authored as when the machine has nobody configured.
+ *
+ *  Git for Windows does not set `user.name` / `user.email` at install time, and
+ *  a user who opens a project they already have — cloned, copied, or committed
+ *  to from another machine — never passes through the `git init` path that used
+ *  to fill this in. So the common Windows case is a repository with real history
+ *  and no identity anywhere. */
+export const FALLBACK_IDENTITY: GitIdentity = { name: "Nexotao Agent", email: "agent@nexotao.local" };
+
+/** The identity this repository's run-commits are made and audited under.
+ *
+ *  Falls back rather than throwing. It used to throw "Repository-approved Git
+ *  identity is not configured", which never reached the user: the throw came out
+ *  of `git config --get`, a command that exits 1 and prints *nothing* when a key
+ *  is simply absent, so the run died reporting `git exited with 1` — no path, no
+ *  key, no mention of identity. The agent had already written the files; they
+ *  sat uncommitted in a worktree while the task showed a failure naming an exit
+ *  code.
+ *
+ *  Falling back is also the honest reading of the rule. The identity check
+ *  exists to prove a run's commits were made by this app rather than smuggled in
+ *  — a constant we control satisfies that exactly, where refusing to run at all
+ *  satisfies it only by discarding the work. A user who *has* an identity still
+ *  gets theirs. */
 async function repositoryIdentity(repositoryPath: string): Promise<GitIdentity> {
   const [name, email] = await Promise.all([
-    git(repositoryPath, "config", "--get", "user.name"),
-    git(repositoryPath, "config", "--get", "user.email"),
+    git(repositoryPath, "config", "--get", "user.name").catch(() => ({ stdout: "" })),
+    git(repositoryPath, "config", "--get", "user.email").catch(() => ({ stdout: "" })),
   ]);
-  if (!name.stdout || !email.stdout) throw new Error("Repository-approved Git identity is not configured");
+  // Both or neither: a repo with a name and no email would otherwise commit as
+  // "Their Name <agent@nexotao.local>", an identity belonging to no one.
+  if (!name.stdout || !email.stdout) return FALLBACK_IDENTITY;
   return { name: name.stdout, email: email.stdout };
+}
+
+/** `-c` overrides that make a commit-creating command author as `identity`.
+ *
+ *  Passed per invocation rather than written into the user's config: `rebase`
+ *  and `cherry-pick` below build commits too, and on a machine with no identity
+ *  they fail with "Committer identity unknown" — the same dead end, reached
+ *  later, after the run has already been called a success. */
+function identityArgs(identity: GitIdentity) {
+  return ["-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`];
 }
 
 async function changedPaths(workspacePath: string) {
@@ -220,9 +256,8 @@ export class GitWorkspaceManager {
       // the directory. An empty directory produces an empty initial commit.
       await git(repositoryPath, "add", "-A").catch(() => undefined);
       const staged = (await git(repositoryPath, "diff", "--cached", "--name-only")).stdout;
-      const identityArgs = ["-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`];
       const commitArgs = staged ? ["commit", "-m", "chore: initialize workspace"] : ["commit", "--allow-empty", "-m", "chore: initialize workspace"];
-      await git(repositoryPath, ...identityArgs, ...commitArgs);
+      await git(repositoryPath, ...identityArgs(identity), ...commitArgs);
     }
   }
 
@@ -527,7 +562,8 @@ export class GitWorkspaceManager {
       // Rebase in the worktree, never in the user's repository: a conflict there
       // would leave their checkout mid-rebase.
       try {
-        await git(assignment.workspacePath, "rebase", "--onto", head, assignment.baseCommit, assignment.branch);
+        const identity = await repositoryIdentity(assignment.repositoryPath);
+        await git(assignment.workspacePath, ...identityArgs(identity), "rebase", "--onto", head, assignment.baseCommit, assignment.branch);
       } catch {
         await git(assignment.workspacePath, "rebase", "--abort").catch(() => {});
         return result(false, `this run's changes conflict with work that landed on ${assignment.targetBranch} while it ran, so they were left on ${assignment.branch}`);
@@ -546,6 +582,7 @@ export class GitWorkspaceManager {
 
   async cherryPickChildren(issueId: string, runId: string, children: Array<{ identifier: string; workspaceCommit?: string | null; workspaceBaseCommit?: string | null; verificationStatus?: string | null }>) {
     const assignment = await this.validate(issueId, runId);
+    const identity = await repositoryIdentity(assignment.repositoryPath);
     const reports: string[] = [];
     for (const child of children) {
       if (!child.workspaceCommit || !child.workspaceBaseCommit || !["committed", "verified"].includes(child.verificationStatus ?? "")) {
@@ -558,7 +595,7 @@ export class GitWorkspaceManager {
         continue;
       }
       try {
-        await git(assignment.workspacePath, "cherry-pick", child.workspaceCommit);
+        await git(assignment.workspacePath, ...identityArgs(identity), "cherry-pick", child.workspaceCommit);
       } catch (error) {
         await git(assignment.workspacePath, "cherry-pick", "--abort").catch(() => undefined);
         await this.repositories.markWorkspaceState(runId, "rejected", `Conflict while integrating ${child.identifier}`);

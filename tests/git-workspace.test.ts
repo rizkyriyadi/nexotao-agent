@@ -806,3 +806,100 @@ test("continuing never drops commits the user made in the meantime", async () =>
     );
   } finally { await cleanup(f); }
 });
+
+/* ── the machine with nobody configured ───────────────────────────────────────
+ * Git for Windows sets no `user.name` / `user.email` at install time. A user who
+ * opens a project they already have — cloned, copied, committed to from another
+ * machine — never passes through the `git init` path that filled one in, so the
+ * ordinary Windows case is a repository with real history and no identity.
+ *
+ * `finalizeCommit` used to throw there. Not visibly: the throw came from
+ * `git config --get`, which exits 1 and prints *nothing* when a key is merely
+ * absent, so the run died reporting `git exited with 1` — no path, no key, no
+ * mention of identity. The agent's files sat in a worktree while the task showed
+ * a bare exit code. The fixture above always configures an identity, which is
+ * why every existing test passed straight over this.
+ *
+ * `withoutGitIdentity` hides the *test machine's* config too, or CI's own
+ * global identity would satisfy the lookup and the test would prove nothing. */
+async function withoutGitIdentity<T>(dir: string, body: () => Promise<T>): Promise<T> {
+  const previous = { global: process.env.GIT_CONFIG_GLOBAL, system: process.env.GIT_CONFIG_SYSTEM };
+  process.env.GIT_CONFIG_GLOBAL = path.join(dir, "absent-global");
+  process.env.GIT_CONFIG_SYSTEM = path.join(dir, "absent-system");
+  try { return await body(); } finally {
+    if (previous.global === undefined) delete process.env.GIT_CONFIG_GLOBAL; else process.env.GIT_CONFIG_GLOBAL = previous.global;
+    if (previous.system === undefined) delete process.env.GIT_CONFIG_SYSTEM; else process.env.GIT_CONFIG_SYSTEM = previous.system;
+  }
+}
+
+test("an existing project on a machine with no git identity still lands its work", async () => {
+  const f = await fixture();
+  try {
+    await withoutGitIdentity(f.dir, async () => {
+      // Strip the fixture's identity so this is a repository with history and
+      // nobody configured at any level — exactly what was reported.
+      await git(f.repositoryPath, "config", "--unset", "user.name");
+      await git(f.repositoryPath, "config", "--unset", "user.email");
+
+      const runId = await activate(f, "one");
+      const workspace = await f.manager.provision({
+        projectId: "project", issueId: "issue-one", identifier: "NEXA-1", runId, repositoryPath: f.repositoryPath,
+      });
+      await writeFile(path.join(workspace.workspacePath, "app.js"), "console.log('what the user asked for')\n");
+
+      const finalized = await f.manager.finalizeCommit("issue-one", runId, "NEXA-1");
+      assert.notEqual(finalized.commit, workspace.baseCommit, "the work is committed, not abandoned at the base");
+
+      const integration = await f.manager.integrate(runId);
+      assert.equal(integration.integrated, true, integration.reason ?? "integration was refused");
+      // The whole point: the file is in the folder the user is looking at.
+      assert.equal(await readFile(path.join(f.repositoryPath, "app.js"), "utf8"), "console.log('what the user asked for')\n");
+    });
+  } finally { await cleanup(f); }
+});
+
+/* Why separately: `rebase` and `cherry-pick` build commits of their own, and on
+ * a machine with no identity they fail with "Committer identity unknown" — the
+ * same dead end, reached later, after the run has already been called a success.
+ * This is the shape that gets there: the user's branch moves while the agent
+ * works, so integration has to replay the run's commit rather than fast-forward. */
+test("a branch that moved mid-run is replayed even with no git identity", async () => {
+  const f = await fixture();
+  try {
+    await withoutGitIdentity(f.dir, async () => {
+      const runId = await activate(f, "one");
+      const workspace = await f.manager.provision({
+        projectId: "project", issueId: "issue-one", identifier: "NEXA-1", runId, repositoryPath: f.repositoryPath,
+      });
+      await git(f.repositoryPath, "config", "--unset", "user.name");
+      await git(f.repositoryPath, "config", "--unset", "user.email");
+
+      await writeFile(path.join(workspace.workspacePath, "agent.js"), "agent\n");
+      // The user commits to their own branch while the run is in flight, so the
+      // base the run branched from is no longer HEAD.
+      await writeFile(path.join(f.repositoryPath, "user.txt"), "mine\n");
+      await git(f.repositoryPath, "add", "user.txt");
+      await git(f.repositoryPath, "-c", `user.name=${identity.name}`, "-c", `user.email=${identity.email}`, "commit", "-m", "chore(repo): user's own commit");
+
+      await f.manager.finalizeCommit("issue-one", runId, "NEXA-1");
+      const integration = await f.manager.integrate(runId);
+      assert.equal(integration.integrated, true, integration.reason ?? "the replay was refused");
+      assert.equal(await readFile(path.join(f.repositoryPath, "agent.js"), "utf8"), "agent\n", "the agent's file landed");
+      assert.equal(await readFile(path.join(f.repositoryPath, "user.txt"), "utf8"), "mine\n", "the user's own commit survived");
+    });
+  } finally { await cleanup(f); }
+});
+
+test("a configured identity is still the one used", async () => {
+  const f = await fixture();
+  try {
+    const runId = await activate(f, "one");
+    const workspace = await f.manager.provision({
+      projectId: "project", issueId: "issue-one", identifier: "NEXA-1", runId, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(workspace.workspacePath, "app.js"), "x\n");
+    const finalized = await f.manager.finalizeCommit("issue-one", runId, "NEXA-1");
+    const author = await git(f.repositoryPath, "log", "-1", "--format=%an <%ae>", finalized.commit);
+    assert.equal(author, `${identity.name} <${identity.email}>`, "falling back must not override a real identity");
+  } finally { await cleanup(f); }
+});
