@@ -259,6 +259,58 @@ test("control characters meant for a cursor do not reach a plain text log", { sk
   }
 });
 
+/* An apostrophe in an English word is not an edge case, it is Tuesday: `echo
+ * it's fine`, `git commit -m "don't"`. Sending the marker as the *next* line
+ * left bash waiting for a closing quote, so it swallowed the marker as a
+ * continuation — and then the next command, and the one after that. The panel
+ * showed a spinner over a shell that would never answer again, and everything
+ * typed afterwards vanished with no error at all. The only way out was to
+ * reload the page. */
+test("an unbalanced quote does not wedge the shell for every command after it", { skip }, async () => {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "nexotao-terminal-")));
+  const session = new TerminalSession("root", dir);
+  const sink = collector(session);
+  try {
+    session.run("echo it's fine");
+    assert.ok(await sink.until(() => sink.meta().some((m) => m.exit !== undefined)), "the mistake was reported, not swallowed");
+
+    // The shell is still there, and still the same shell — cwd and exports intact.
+    session.run("cd / && export NEXOTAO_MARK=kept");
+    assert.ok(await sink.until(() => sink.meta().filter((m) => m.exit !== undefined).length >= 2), "the next command ran");
+    session.run("printf 'pwd=%s mark=%s\\n' \"$PWD\" \"$NEXOTAO_MARK\"");
+    assert.ok(await sink.until(() => sink.text().includes("pwd=")), "and the one after that");
+    assert.match(sink.text(), /pwd=\/ mark=kept/);
+  } finally {
+    session.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+/* A command that reads stdin — `read`, a bare `cat`, any prompt — takes the next
+ * line on the pipe. With the marker written on that next line, the command ate
+ * our bookkeeping: it reported a value the user never typed, and the exit code
+ * never arrived, so the panel stayed busy forever. Keeping the marker on the
+ * same physical line leaves the user's own typing as the next thing on stdin,
+ * which is what a terminal would have handed it. */
+test("a command that reads stdin gets the user's typing, not our marker", { skip }, async () => {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "nexotao-terminal-")));
+  const session = new TerminalSession("root", dir);
+  const sink = collector(session);
+  try {
+    session.run("read answer; printf 'answered=%s\\n' \"$answer\"");
+    // Raw stdin, the way the panel sends a line typed at a running program.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    session.write("hello\n");
+    assert.ok(await sink.until(() => sink.text().includes("answered=")), "the program was answered");
+    assert.match(sink.text(), /answered=hello/, "with what the user typed");
+    assert.ok(!sink.text().includes(session.token), "and never with the marker");
+    assert.ok(await sink.until(() => sink.meta().some((m) => m.exit !== undefined)), "and the exit code still arrived");
+  } finally {
+    session.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("reopening a folder rejoins its shell rather than starting a fresh one", { skip }, async () => {
   const dir = await realpath(await mkdtemp(path.join(tmpdir(), "nexotao-terminal-")));
   try {

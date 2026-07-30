@@ -44,6 +44,32 @@ function markerFor(token: string) {
     : `printf '${token} %s %s\\n' "$?" "$PWD"`;
 }
 
+/** Wrap a command so the marker rides on the *same physical line* it does.
+ *
+ *  Sending `<command>\n<marker>\n` is the obvious shape and it loses the shell
+ *  in two ordinary cases, because a shell reads a line at a time and the marker
+ *  is the line after.
+ *
+ *  `echo it's fine` — an apostrophe in an English word — leaves bash waiting for
+ *  a closing quote, so it swallows the marker line as a continuation, and then
+ *  the next command, and the next. The panel shows a spinner over a shell that
+ *  will never answer again, and every command typed after it silently
+ *  disappears. Quoting the whole command into one `eval` argument means a
+ *  quoting mistake is an error *inside* eval — reported, exit 2, shell still
+ *  standing — rather than an unterminated line at the top level.
+ *
+ *  And `read answer`, or a bare `cat`, consumes the next line of stdin. That
+ *  line was our marker, so the command reports a value the user never typed and
+ *  no exit code ever arrives. On one line, the next thing on stdin is the user's
+ *  own typing, which is what a real terminal would have given it.
+ *
+ *  Windows keeps the two-line form: cmd has no `eval`, and `&` would need every
+ *  metacharacter in the user's command escaped instead. */
+function commandLine(command: string, token: string) {
+  if (process.platform === "win32") return `${command}\n${markerFor(token)}\n`;
+  return `eval '${command.replace(/'/g, "'\\''")}'; ${markerFor(token)}\n`;
+}
+
 function runnable(file: string) {
   try { accessSync(file, constants.X_OK); return true; } catch { return false; }
 }
@@ -232,7 +258,7 @@ export class TerminalSession {
     if (!this.alive || !this.child?.stdin?.writable) return false;
     const line = command.slice(0, MAX_INPUT);
     this.push("meta", JSON.stringify({ prompt: this.cwd, command: line }));
-    this.child.stdin.write(`${line}\n${markerFor(this.token)}\n`);
+    this.child.stdin.write(commandLine(line, this.token));
     this.touch();
     return true;
   }
