@@ -77,14 +77,22 @@ async function git(cwd: string, ...args: string[]) {
   return command("git", [...GIT_PLATFORM_ARGS, ...args], cwd);
 }
 
+/** The agent-instruction files that must stay out of a user's history.
+ *
+ *  Deliberately an exact list rather than a word match. The rule used to be
+ *  `/(?:agent|prompt|instruction|runbook)/` over the basename, which reads as a
+ *  reasonable generalisation right up until someone builds an ordinary website:
+ *  `travel-agent.md`, `docs/instructions.md`, `blog/prompt-engineering.md` and
+ *  `RUNBOOK.md` are all a user's own content, and every one of them tripped it.
+ *  These file names are a convention with a fixed spelling; matching them by
+ *  substring buys nothing and claims files we have no business claiming. */
 export function isProhibitedAgentMarkdown(file: string) {
   const normalized = file.replace(/\\/g, "/").toLowerCase();
   const parts = normalized.split("/");
   const base = parts.at(-1) ?? "";
   if (!base.endsWith(".md")) return false;
   if (["agents.md", "agent.md", "claude.md", "codex.md"].includes(base)) return true;
-  if (parts.some((part) => [".agents", "agents", ".agent", "agent"].includes(part))) return true;
-  return /(?:agent|prompt|instruction|runbook)/.test(base);
+  return parts.slice(0, -1).some((part) => [".agents", ".agent", ".claude"].includes(part));
 }
 
 export function assertProfessionalCommit(message: string) {
@@ -383,16 +391,39 @@ export class GitWorkspaceManager {
     return assignment;
   }
 
+  /** Commit the run's work.
+   *
+   *  An agent-instruction file found here is *left out of the commit*, not made
+   *  into a failure. It used to throw: one stray `AGENTS.md` — a file the
+   *  harness itself often writes, and one the agent never touched through a
+   *  guarded tool — aborted `finalizeCommit` before anything was staged, so the
+   *  run failed, `integrate` was never reached, and every other file the agent
+   *  had written sat uncommitted on a branch no surface in the app lists. A user
+   *  who asked for a portfolio site was told the run failed and found nothing.
+   *
+   *  Excluding costs the user nothing (the file stays in the worktree, and it
+   *  was never theirs to keep in history) and it keeps the rule honest: the
+   *  policy is "this does not go into your history", which exclusion satisfies
+   *  exactly, where failing the run satisfies it only by destroying the work
+   *  alongside it. */
   async finalizeCommit(issueId: string, runId: string, identifier: string) {
     const assignment = await this.validate(issueId, runId);
     const identity = await repositoryIdentity(assignment.repositoryPath);
     const paths = await changedPaths(assignment.workspacePath);
-    assertAllowedPaths(paths);
+    const excluded: string[] = [];
     let staged: string[] = [];
     if (paths.length) {
       await git(assignment.workspacePath, "add", "--all");
       staged = (await git(assignment.workspacePath, "diff", "--cached", "--name-only", "-z")).stdout.split("\0").filter(Boolean);
-      assertAllowedPaths(staged);
+      const prohibited = staged.filter(isProhibitedAgentMarkdown);
+      if (prohibited.length) {
+        // Unstage rather than delete: a tracked file returns to modified, an
+        // untracked one returns to untracked, and either way it is still on disk
+        // where the user (or the next run) can see it.
+        await git(assignment.workspacePath, "reset", "--quiet", "--", ...prohibited);
+        staged = (await git(assignment.workspacePath, "diff", "--cached", "--name-only", "-z")).stdout.split("\0").filter(Boolean);
+        excluded.push(...prohibited);
+      }
     }
     // `git diff` reports a submodule whose *contents* changed as a changed path,
     // but `git add --all` stages nothing for it: from the superproject's view the
@@ -408,7 +439,7 @@ export class GitWorkspaceManager {
     const head = (await git(assignment.workspacePath, "rev-parse", "HEAD")).stdout;
     await inspectOutgoingCommits(assignment.workspacePath, assignment.baseCommit, head, identity);
     await this.repositories.recordWorkspaceCommit(runId, head, "committed");
-    return { commit: head, changedPaths: paths };
+    return { commit: head, changedPaths: paths.filter((file) => !excluded.includes(file)), excluded };
   }
 
   /** Fast-forward the branch the user actually works on so the run's commit lands

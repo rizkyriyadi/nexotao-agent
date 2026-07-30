@@ -396,6 +396,56 @@ test("a real file change still commits when a submodule is also dirty", async ()
   } finally { await cleanup(f); }
 });
 
+/* ── the stray AGENTS.md that failed a whole run ──────────────────────────────
+ * A user asked for a portfolio site. The agent built it, the harness left an
+ * `AGENTS.md` and a `CLAUDE.md` in the worktree, and `finalizeCommit` threw
+ * before staging anything: the run was reported as failed, `integrate` was never
+ * reached, and every page the agent had written sat uncommitted on a branch no
+ * screen in the app lists. From the user's side the work was simply gone.
+ *
+ * The policy is "these files do not enter your history". Leaving them out of the
+ * commit satisfies that exactly. Failing the run satisfies it only by destroying
+ * everything else alongside them. */
+test("a stray AGENTS.md is left out of the commit instead of failing the run", async () => {
+  const f = await fixture();
+  try {
+    const run = await activate(f, "clean");
+    const assignment = await f.manager.provision({
+      projectId: "project", issueId: "issue-clean", identifier: "NEXA-6", runId: run, repositoryPath: f.repositoryPath,
+    });
+    await writeFile(path.join(assignment.workspacePath, "index.html"), "<h1>portfolio</h1>\n");
+    await writeFile(path.join(assignment.workspacePath, "about.md"), "# About\n");
+    await writeFile(path.join(assignment.workspacePath, "AGENTS.md"), "harness instructions\n");
+    await writeFile(path.join(assignment.workspacePath, "CLAUDE.md"), "harness instructions\n");
+
+    const finalized = await f.manager.finalizeCommit("issue-clean", run, "NEXA-6");
+
+    assert.notEqual(finalized.commit, assignment.baseCommit, "the user's work is committed");
+    const committed = (await git(assignment.workspacePath, "show", "--name-only", "--format=", "HEAD")).split("\n").filter(Boolean).sort();
+    assert.deepEqual(committed, ["about.md", "index.html"], "every file except the instruction Markdown");
+    assert.deepEqual(finalized.excluded.sort(), ["AGENTS.md", "CLAUDE.md"]);
+    // Excluded, not deleted — the file is still on disk, just untracked.
+    await access(path.join(assignment.workspacePath, "AGENTS.md"));
+  } finally { await cleanup(f); }
+});
+
+/* Why an exact list and not a word match: the rule used to be
+ * `/(?:agent|prompt|instruction|runbook)/` over the basename, which claims a
+ * pile of files that are plainly the user's own. On a portfolio or docs site
+ * that is not a corner case — it is the content. */
+test("a user's own Markdown is never mistaken for agent instructions", () => {
+  for (const file of [
+    "content/travel-agent.md", "docs/instructions.md", "INSTRUCTIONS.md",
+    "blog/prompt-engineering.md", "RUNBOOK.md", "docs/user-agent.md",
+    "docs/agents/overview.md", "src/components/agents/README.md",
+  ]) assert.equal(isProhibitedAgentMarkdown(file), false, `${file} belongs to the user`);
+
+  for (const file of [
+    "AGENTS.md", "CLAUDE.md", "agent.md", "codex.md",
+    ".agents/runtime.md", ".claude/notes.md", "sub/.agent/brief.md",
+  ]) assert.equal(isProhibitedAgentMarkdown(file), true, `${file} is ours`);
+});
+
 // The isolation is only half the contract. Committing the agent's work to
 // `nexotao/nx-N/<runId>` and stopping there leaves the folder the user is
 // looking at untouched while the task reports done — the work exists only on a
