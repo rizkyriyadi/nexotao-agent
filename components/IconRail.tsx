@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  Scissors, LayoutGrid, Columns3, Boxes, Bot, Settings, CircleHelp, Inbox as InboxIcon, Share2, Store, Users, Table2,
+  Scissors, LayoutGrid, Columns3, Boxes, Settings, CircleHelp, Inbox as InboxIcon, Table2,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "./ui/tooltip";
 import { ThemeToggle } from "./Theme";
@@ -22,11 +22,7 @@ const NAV = [
   { id: "home", href: "/", label: "Overview", icon: LayoutGrid },
   { id: "board", href: "/board", label: "Control Panel", icon: Columns3 },
   { id: "work", href: "/work", label: "Work Items", icon: Table2 },
-  { id: "team-room", href: "/team-room", label: "Live Team Room", icon: Users },
   { id: "inbox", href: "/inbox", label: "Attention", icon: InboxIcon },
-  { id: "agents", href: "/agents", label: "Agents", icon: Bot },
-  { id: "marketplace", href: "/marketplace", label: "Marketplace", icon: Store },
-  { id: "graph", href: "/graph", label: "Knowledge Graph", icon: Share2 },
   { id: "projects", href: "/projects", label: "Projects", icon: Boxes },
 ];
 

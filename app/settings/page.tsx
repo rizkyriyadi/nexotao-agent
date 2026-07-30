@@ -4,6 +4,7 @@ import { SearchKeyRow } from "@/components/settings/SearchKeyRow";
 import { ModeRow } from "@/components/settings/ModeRow";
 import { ModelRow } from "@/components/settings/ModelRow";
 import { ApiKeyRow } from "@/components/settings/ApiKeyRow";
+import { CodeIndexRow } from "@/components/settings/CodeIndexRow";
 import { DataControls } from "@/components/settings/DataControls";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -54,6 +55,16 @@ export default function Settings() {
             </Row>
             <Row label="Tavily API key" hint="Optional — a free tavily.com key makes web search reliable. Stored locally.">
               <SearchKeyRow />
+            </Row>
+          </Section>
+
+          {/* The agent's first instruction is to consult its graph tools before
+              reading files. Without the code index those tools answer from work
+              history alone, so this row is the difference between an agent that
+              knows the codebase and one that has to rediscover it every run. */}
+          <Section title="Code index">
+            <Row label="Code index" hint="Lets the agent's graph tools answer from your code, not just its work history. ~40 MB download, about a minute.">
+              <CodeIndexRow />
             </Row>
           </Section>
 

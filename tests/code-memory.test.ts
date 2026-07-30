@@ -96,10 +96,11 @@ test("a project that was never indexed reads as an empty code layer, not a failu
 });
 
 /* ── the counts survive a page reload ────────────────────────────────────────
- * The /graph banner is the one surface that tells a user how much of their code
- * the agent can see. It used to know only what the last build returned, so a
- * refresh dropped it back to "installed, size unknown". Reading the index's own
- * status is a header read, not a tree walk, so the page can just ask. */
+ * How much of their code the agent can see is something a user can ask for at
+ * any time, not only in the moment after a build. Were the size known only from
+ * what the last build returned, a refresh would drop it back to "installed, size
+ * unknown". Reading the index's own status is a header read, not a tree walk, so
+ * any caller can just ask. */
 
 test("an existing index reports its size without re-indexing anything", async () => {
   const rec = recorder(() => envelope({ project: codeIndexName("p9"), nodes: 1867, edges: 5093, status: "ready" }));
