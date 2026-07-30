@@ -239,6 +239,26 @@ test("a marker carrying an unexpanded variable does not move the reported folder
   }
 });
 
+/* On Windows the shell is asked for `@prompt $H` — a lone backspace — so that a
+ * user who turns echo back on does not get `C:\dir>` threaded through every line.
+ * A backspace moves a cursor in a real terminal and is invisible junk in a plain
+ * text log, where it travels silently with anything the user copies out. Tabs and
+ * newlines are content and must survive. */
+test("control characters meant for a cursor do not reach a plain text log", { skip }, async () => {
+  const dir = await realpath(await mkdtemp(path.join(tmpdir(), "nexotao-terminal-")));
+  const session = new TerminalSession("root", dir);
+  const sink = collector(session);
+  try {
+    session.run("printf 'a\\bb\\x0cc\\td\\n'");
+    assert.ok(await sink.until(() => sink.text().includes("d")), "the output arrived");
+    assert.ok(!/[\x00-\x08\x0b\x0c]/.test(sink.text()), "no cursor-control junk survived");
+    assert.match(sink.text(), /abc\td/, "and the tab, which is content, did");
+  } finally {
+    session.dispose();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("reopening a folder rejoins its shell rather than starting a fresh one", { skip }, async () => {
   const dir = await realpath(await mkdtemp(path.join(tmpdir(), "nexotao-terminal-")));
   try {

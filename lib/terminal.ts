@@ -48,6 +48,16 @@ function runnable(file: string) {
   try { accessSync(file, constants.X_OK); return true; } catch { return false; }
 }
 
+/** Strip the control characters a shell writes for a terminal we do not have.
+ *
+ *  `@prompt $H` is a lone backspace, and cmd emits a form feed for `cls`. In a
+ *  real terminal they move the cursor; in a plain-text log they are invisible
+ *  junk that travels with any text the user copies out. Tabs and newlines stay —
+ *  those are content. */
+function clean(line: string) {
+  return line.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, "");
+}
+
 /** Pick a shell that is actually on this machine.
  *
  *  `process.env.SHELL` is a *preference*, not a promise. It is whatever was set
@@ -66,11 +76,18 @@ function shellCommand(): [string, string[]] {
     // says `C:\Windows\system32\cmd.exe` and occasionally says something a
     // corporate login script set years ago. Checking it costs one `access` call
     // and saves the panel from the Windows spelling of the bug above.
+    // `/d` is the one that is easy to miss. Without it cmd runs whatever is in
+    // the `Command Processor\AutoRun` registry key before accepting input, and
+    // that key is where Anaconda, clink and corporate login scripts install
+    // themselves. Their banner text lands in the user's log as if a command had
+    // printed it, and an AutoRun that ends with a `cd` moves the shell out of
+    // the folder the panel is showing.
+    const args = ["/d", "/q"];
     const comspec = process.env.COMSPEC;
-    if (comspec && runnable(comspec)) return [comspec, ["/q"]];
+    if (comspec && runnable(comspec)) return [comspec, args];
     const root = process.env.SystemRoot || "C:\\Windows";
     const fallback = `${root}\\System32\\cmd.exe`;
-    return [runnable(fallback) ? fallback : "cmd.exe", ["/q"]];
+    return [runnable(fallback) ? fallback : "cmd.exe", args];
   }
   const preferred = process.env.SHELL;
   const candidates = [preferred, "/bin/bash", "/bin/zsh", "/bin/sh", "/usr/bin/sh"].filter((file): file is string => Boolean(file));
@@ -107,6 +124,8 @@ export class TerminalSession {
   private listeners = new Set<(chunk: TerminalChunk) => void>();
   private idle: NodeJS.Timeout;
   private partial = { out: "", err: "" };
+  /** Swallowing cmd.exe's startup banner: true until its marker arrives. */
+  private silent = false;
 
   constructor(readonly rootId: string, requested: string) {
     const [cwd, note] = startDirectory(requested);
@@ -115,6 +134,11 @@ export class TerminalSession {
     if (note) this.push("meta", JSON.stringify({ note }));
     this.child = spawn(file, args, {
       cwd, detached: process.platform !== "win32",
+      // Node defaults this to false, and a console window then appears whenever
+      // the host has no console of its own to inherit — a service, a GUI launch.
+      // The user gets a black window they did not ask for, in front of the app,
+      // for a shell whose entire output they are already reading in the panel.
+      windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, TERM: "dumb", GIT_PAGER: "cat", PAGER: "cat", NO_COLOR: "1" },
     });
@@ -132,6 +156,18 @@ export class TerminalSession {
       this.finish(-1);
     });
     this.child.once("close", (code) => this.finish(code ?? 0));
+    // cmd.exe greets a new session with its version and copyright banner, and
+    // `/q` does not suppress it — there is no `/nologo`. It would arrive in the
+    // panel looking like output from a command the user never ran. Rather than
+    // model the banner's text, which is localised and changes between Windows
+    // builds, the shell is asked to mark where its own preamble ends: everything
+    // before that first marker is the banner and is dropped. `@prompt $H` turns
+    // the prompt into a lone backspace, so a user who later types `echo on` gets
+    // their echo without `C:\dir>` threaded through the log.
+    if (process.platform === "win32") {
+      this.silent = true;
+      this.child.stdin?.write(`@echo off\n@prompt $H\n${markerFor(this.token)}\n`);
+    }
     this.idle = setTimeout(() => this.dispose(), IDLE_MS);
     this.idle.unref?.();
   }
@@ -157,8 +193,14 @@ export class TerminalSession {
     this.partial[stream] = lines.pop() ?? "";
     for (const line of lines) {
       const at = line.indexOf(this.token);
-      if (at === -1) { this.push(stream, `${line}\n`); continue; }
-      if (at > 0) this.push(stream, line.slice(0, at));
+      // Still inside cmd.exe's startup banner: drop the line, and when the
+      // preamble's own marker arrives, drop that too and start reporting.
+      if (this.silent) {
+        if (at !== -1) this.silent = false;
+        continue;
+      }
+      if (at === -1) { this.push(stream, `${clean(line)}\n`); continue; }
+      if (at > 0) this.push(stream, clean(line.slice(0, at)));
       const [, code = "0", ...rest] = line.slice(at).trim().split(" ");
       const cwd = rest.join(" ");
       // An unexpanded `%CD%` is the shape a mis-echoed cmd.exe marker takes, and
