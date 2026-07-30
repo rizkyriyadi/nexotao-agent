@@ -21,16 +21,13 @@ That's it. The UI opens at `http://localhost:4319`. On first launch you'll be wa
 1. **Connect** your Nexotao API key
 2. **Pick a Claude model** (fetched live from your Nexotao account)
 3. **Open a real folder** on your machine (or start fresh)
-4. **Choose single- or multi-agent** — for multi-agent, an AI proposes a specialist team based on your project
 
 ## What you get
 
 - **Chat** — a coding agent that reads, edits, and runs files in your project (with approval prompts for anything that changes files).
-- **Runs** — a lead agent that splits a big task into specialist sub-agents running in parallel. Every run is durable: navigate away, refresh, or close the tab and come back — it keeps going and you can reopen its live progress any time.
-- **Agents** — your specialist team on its own page; click any agent to see every task it has worked on.
+- **Runs** — every run is durable: navigate away, refresh, or close the tab and come back — it keeps going and you can reopen its live progress any time.
 - **Board** — a lightweight task board; run any task with an agent in one click.
 - **Files** — the workspace as it actually is on disk, docked to the right of the prompt rather than filed away on a page of its own: a tree with git status, a reader that renders markdown, PDFs, images and code, and an editor for the text ones. While a run is in flight the agent writes into its own working copy, so the panel lets you switch between your project folder and that copy — the answer to "the agent said it wrote four files, my folder looks empty". Type `@` in the prompt to name a real file from that tree instead of one you remembered.
-- **Work** — the same tasks, organised rather than conversed with: five layouts (list, kanban, spreadsheet, calendar, timeline), custom workflow states, labels, priorities, estimates and dependencies, plus cycles, modules, markdown pages, an intake queue, and analytics. It sits beside the board, not in front of it — both read the same work items, so a card you drag here is the same one an agent picks up there.
 
 ## Where's my data?
 

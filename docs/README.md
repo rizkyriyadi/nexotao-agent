@@ -1,7 +1,7 @@
 # Nexotao Agents — Documentation
 
 Operator and end-user documentation for **Nexotao Agents** (npm package `nexotao`, version 0.2.0),
-a local, single-user coding-agent orchestrator with a Next.js web UI, powered by your Nexotao API
+a local, single-user coding agent with a Next.js web UI, powered by your Nexotao API
 key (the "Nexotao Gateway").
 
 Nexotao runs entirely on your own machine: it binds to `127.0.0.1`, stores its data under

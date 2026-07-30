@@ -43,8 +43,8 @@ redacted, and stored at each step.
 
 3. **Request construction.** The server assembles the model request: the conversation messages, the
    model you selected during onboarding, and the tool definitions (`list_dir`, `read_file`,
-   `write_file`, `edit_file`, `bash`, `grep`, `web_search`, `web_fetch`, and delegation tools for
-   multi-agent runs). A short system instruction identifies the local project root.
+   `write_file`, `edit_file`, `bash`, `grep`, `web_search`, `web_fetch`, and the read-only graph
+   tools). A short system instruction identifies the local project root.
 
 4. **API key attachment.** The request is sent to the Gateway with your Nexotao API key as the
    `x-api-key` authentication header. The Gateway exposes a standard `/v1/messages` HTTP endpoint;

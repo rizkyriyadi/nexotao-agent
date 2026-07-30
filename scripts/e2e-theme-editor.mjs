@@ -127,7 +127,7 @@ try {
   await shot("03-dark-board");
 
   // Every page, not just the one with the toggle on it.
-  for (const path of ["/", "/work", "/agents", "/projects", "/settings", "/inbox", "/work/analytics"]) {
+  for (const path of ["/", "/board", "/projects", "/settings", "/inbox"]) {
     await goto(path);
     await wait(900);
     const state = await readTheme();

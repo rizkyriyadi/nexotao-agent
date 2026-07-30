@@ -90,7 +90,7 @@ export function evaluateExecutionPolicy(policy: ExecutionPolicy, details: Policy
 
 /** Tool execution policy for a run mode. `agent` auto-approves (destructive
  *  actions are still gated by evaluateExecutionPolicy); `plan`/`ask` deny every
- *  mutation, leaving only the always-allowed read/control tools. */
+ *  mutation, leaving only the always-allowed read tools. */
 export function modeToPolicy(mode: AgentMode): ExecutionPolicy {
   return mode === "agent" ? "allow" : "deny";
 }

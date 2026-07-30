@@ -62,7 +62,7 @@ try {
     throw new Error(`no task ${rootId} on ${ORIGIN} — check you took the id from the right project`);
   }
 
-  // These checks describe a *settled* run that delegated. Pointed at a task that
+  // These checks describe a *settled* run. Pointed at a task that
   // is still going, every one of them fails for the same uninteresting reason —
   // which reads as four separate defects. Say so once and stop instead.
   const stillRunning = await page.evaluate(() => {
@@ -90,34 +90,21 @@ try {
     });
     check(Boolean(report), "the run closes with a Result block", report || "missing");
 
-    // 2. The hand-off panel in the transcript, and the sub-task list on the issue.
-    // Case-insensitive: these headings are uppercased in CSS, so innerText reads
-    // "HANDED OFF" no matter what the source says.
-    // Only a run that actually handed work off owes us a hand-off panel. A leaf
-    // worker task delegates nothing, so demanding one there fails a page that is
-    // behaving correctly — the same reason the link check below is conditional.
-    // Whether *this* task delegated is read from the board's own sub-task list.
-    const handoff = /handed off/i.test(body);
+    // 2. The sub-task list on the issue, and its links. Case-insensitive: the
+    // heading is uppercased in CSS, so innerText reads "SUB-TASKS" no matter
+    // what the source says.
+    //
+    // A task that broke nothing out legitimately has no list and no links, so
+    // both checks are conditional on the page claiming sub-tasks at all —
+    // asserting unconditionally would fail every leaf task.
     const subtasks = /sub-tasks/i.test(body);
-    const delegated = await page.evaluate(() =>
-      Array.from(document.querySelectorAll('a[href^="/board/"]')).some((a) => /\bNX-\d+\b/.test(a.innerText)));
-    if (delegated) {
-      check(handoff || subtasks, "delegated work is surfaced",
-        `transcript:${handoff ? "yes" : "no"} panel:${subtasks ? "yes" : "no"}`);
-    } else {
-      console.log("SKIP  hand-off panel — this task delegated nothing");
-    }
-
-    // 3. Those sub-tasks must be reachable — a ref the user can click through to.
     const links = await page.evaluate(() =>
       Array.from(document.querySelectorAll('a[href^="/board/"]')).map((a) => ({ href: a.getAttribute("href"), text: a.innerText.trim() })));
     const childLinks = links.filter((l) => l.href !== `/board/${rootId}`);
-    // A leaf task legitimately has none, so only a task that says it handed work
-    // off owes us links. Asserting unconditionally would fail every worker page.
-    if (handoff || subtasks) {
+    if (subtasks) {
       check(childLinks.length > 0, "sub-tasks render as followable links", `${childLinks.length} link(s)`);
     } else {
-      console.log("SKIP  sub-task links — this task delegated nothing");
+      console.log("SKIP  sub-task links — this task broke out no sub-tasks");
     }
 
     // 4. No false "Done": a run is either genuinely finished, paused, or failed —

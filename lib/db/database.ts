@@ -5,7 +5,7 @@ import { drizzle, type SQLJsDatabase } from "drizzle-orm/sql-js";
 import { DIR, ensureDir } from "../config";
 import { writeFileAtomic } from "../atomic-write";
 import { schema } from "./schema";
-import { DEFAULT_WORKFLOW_STATES, STATUS_TO_DEFAULT_STATE } from "../work-view";
+import { DEFAULT_WORKFLOW_STATES, STATUS_TO_DEFAULT_STATE } from "../board-columns";
 import initSqlJs from "sql.js/dist/sql-asm.js";
 
 const DATABASE_NAME = "nexotao.sqlite";
@@ -13,11 +13,11 @@ const LEGACY_FILES = ["projects.json", "sessions.json", "tasks.json", "agent-run
 
 export type Migration = { version: number; name: string; sql: string };
 
-/* The board columns and the status they map onto live in lib/work-view.ts, which
+/* The board columns and the status they map onto live in lib/board-columns.ts, which
    imports nothing — the client layouts need them too, and re-exporting from here
    would pull sql.js into the browser bundle. Re-exported for the existing
    callers that reach for them through the database module. */
-export { DEFAULT_WORKFLOW_STATES, STATUS_TO_DEFAULT_STATE, defaultStateId } from "../work-view";
+export { DEFAULT_WORKFLOW_STATES, STATUS_TO_DEFAULT_STATE, defaultStateId } from "../board-columns";
 
 /* Built from the same table at module load, so a column added to the default set
    is seeded and backfilled without a second edit here. */

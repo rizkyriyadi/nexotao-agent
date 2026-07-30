@@ -1,7 +1,7 @@
 // End-to-end browser suite for the public-beta critical flows. Boots the real
 // built server against a throwaway data dir, drives a real Chromium via
 // puppeteer-core, and asserts canonical server state for each flow:
-//   delegation, dependencies, approval, cancel, retry, review/done, restart.
+//   sub-tasks, dependencies, approval, cancel, retry, review/done, restart.
 //
 // Requires a built app (`npm run build`) and a Chromium resolvable by
 // scripts/e2e/browser.mjs (install: npx @puppeteer/browsers install chrome-headless-shell@stable).
@@ -160,29 +160,28 @@ async function main() {
     /* 3. The task page — the prompt-first surface itself.
 
        `cda50bd` replaced the old per-issue board with this composer, and the
-       delegation and dependency widgets this suite used to click went with it.
+       sub-task and dependency widgets this suite used to click went with it.
        Those flows are exercised below through the same endpoints the client
        calls, issued from inside the authenticated page so the session cookie and
        the Origin check apply exactly as they do to the app. That is a narrower
-       claim than a click — it does not prove a control is reachable — so the
-       rendering the surface *does* still have is asserted here first, and the
-       properties UI that replaced those widgets is covered by e2e-work.mjs. */
+       claim than a click — it does not prove a control is reachable. So the
+       rendering the surface *does* still have is asserted here first. */
     page = await visit(page, `http://${HOST}:${port}/board/${ids.root}?session_token=${token}`);
     await page.waitForSelector('textarea[aria-label="Prompt the lead agent"]');
     const taskPage = await page.evaluate(() => document.body.innerText);
     check("task page renders its title and composer", taskPage.includes("Ship public beta"));
     await page.screenshot({ path: join(artifacts, "02-task-page.png") });
 
-    // 4. Delegation — a child issue under the root.
+    // 4. Sub-tasks — a child issue under the root.
     const childResp = await pageJson(page, `/api/issues/${ids.root}`, {
       method: "POST", body: JSON.stringify({ action: "child", title: "Packaged install smoke" }),
     });
-    check("delegation request accepted", childResp.ok, `status ${childResp.status}`);
-    const delegated = await poll(async () => {
+    check("sub-task request accepted", childResp.ok, `status ${childResp.status}`);
+    const childCreated = await poll(async () => {
       const r = await pageJson(page, `/api/issues/${ids.root}`);
       return r.body?.children?.some((c) => c.title === "Packaged install smoke");
     });
-    check("delegation creates a child issue", delegated);
+    check("the child issue is created under the root", childCreated);
 
     // 5. Dependencies — record a blocker edge on the root.
     await pageJson(page, "/api/issues", { method: "PATCH", body: JSON.stringify({ id: ids.root, blockedBy: [ids.blocker] }) });
@@ -206,33 +205,15 @@ async function main() {
     });
     check("approval decision is persisted", approved);
 
-    /* 7. Review -> done, driven through the real State control.
+    /* 7. Review -> done, through the endpoint the board's own card writes to.
 
-       The one status transition with a surviving UI: the properties panel on
-       /work. It writes through PATCH /api/work/issues, so the lifecycle guard
-       applies to this click exactly as it would to a drag. */
-    page = await visit(page, `http://${HOST}:${port}/work?session_token=${token}`);
-    await settle(1200);
-    const opened = await page.evaluate((title) => {
-      const card = [...document.querySelectorAll("button, article, li")].find((el) => el.textContent?.includes(title));
-      if (!card) return false;
-      (card.querySelector("button") ?? card).click();
-      return true;
-    }, "Verify smoke matrix");
-    check("issue card opens the properties panel", opened);
-    await settle(700);
-
-    const moved = await page.evaluate(() => {
-      const select = document.querySelector('select[aria-label="State"]');
-      if (!select) return null;
-      const option = [...select.options].find((o) => /done/i.test(o.textContent ?? ""));
-      if (!option) return null;
-      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value").set;
-      setter.call(select, option.value);
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-      return option.textContent;
+       The lifecycle guard is what this asserts: `in_review -> done` is a legal
+       edge, and it is applied by the engine rather than by whichever surface
+       asked for it. */
+    const moveResp = await pageJson(page, "/api/issues", {
+      method: "PATCH", body: JSON.stringify({ id: ids.review, status: "done" }),
     });
-    check("State control offers a Done column", Boolean(moved), String(moved));
+    check("status change accepted", moveResp.ok, `status ${moveResp.status}`);
     const done = await poll(async () => (await pageJson(page, `/api/issues/${ids.review}`)).body?.issue?.status === "done");
     check("review issue transitions to done", done);
     await page.screenshot({ path: join(artifacts, "04-review-done.png") });
@@ -349,7 +330,7 @@ async function main() {
     const survivedReview = (await pageJson(page, `/api/issues/${ids.review}`)).body?.issue?.status === "done";
     const survivedChild = (await pageJson(page, `/api/issues/${ids.root}`)).body?.children?.some((c) => c.title === "Packaged install smoke");
     check("done status survives restart", survivedReview);
-    check("delegated child survives restart", survivedChild);
+    check("child issue survives restart", survivedChild);
     await page.screenshot({ path: join(artifacts, "05-restart-recovered.png") });
 
     await writeFile(join(artifacts, "e2e-results.json"), JSON.stringify({ ranAt: Date.now(), executablePath: browserPath, results }, null, 2));

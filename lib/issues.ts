@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { asc, eq, inArray } from "drizzle-orm";
 import { getDatabase, STATUS_TO_DEFAULT_STATE, defaultStateId } from "./db/database";
-import { agents, issueDependencies, issueLabels, issues, moduleIssues, workflowStates } from "./db/schema";
+import { agents, issueDependencies, issues, workflowStates } from "./db/schema";
 import { IssueDomainError, IssueLifecycleService, type IssueActor, type IssueStatus as LifecycleStatus } from "./issue-lifecycle";
 
 export type AgentRole = "lead" | "worker";
@@ -19,41 +19,31 @@ export type Issue = {
   priority: string; runMode: RunMode; blockedBy: string[]; runId: string | null; summary: string; createdAt: number; updatedAt: number;
   // Per-conversation model. Null means the project/agent default applies.
   model: string | null;
-  // Work-management fields. `stateId` is the board column; `status` above stays
-  // the engine's truth. Empty arrays rather than undefined so every consumer can
-  // map over them without a guard.
-  stateId: string | null; cycleId: string | null; moduleIds: string[]; labelIds: string[];
-  estimatePoint: number | null; startDate: number | null; targetDate: number | null; sequence: number | null;
-  intakeStatus: string | null; intakeSource: string | null;
+  // `stateId` is the board column the card sits in; `status` above stays the
+  // engine's truth about the work itself.
+  stateId: string | null; startDate: number | null; targetDate: number | null;
 };
 
 // `status` is projected because blocker attention needs it: a blocker assigned
 // to a paused or errored agent is not waiting, it is stuck, and defaulting the
 // status here would silently classify those as healthy.
 const agentFromRow = (row: typeof agents.$inferSelect): Agent => ({ id: row.id, projectId: row.projectId, name: row.name, role: row.role, scope: row.scope, avatar: row.avatar ?? null, reportsTo: row.reportsTo, status: row.status, createdAt: row.createdAt });
-function issueFromRow(row: typeof issues.$inferSelect, links: { blockedBy: string[]; labelIds: string[]; moduleIds: string[] }): Issue {
+function issueFromRow(row: typeof issues.$inferSelect, links: { blockedBy: string[] }): Issue {
   return { id: row.id, projectId: row.projectId, ref: row.identifier, title: row.title, detail: row.description, parentId: row.parentId,
     assigneeAgentId: row.assigneeAgentId, createdByAgentId: row.createdByAgentId, status: row.status as IssueStatusValue,
     stage: row.stage as IssueStage, priority: row.priority, runMode: (row.runMode as RunMode) ?? "agent", blockedBy: links.blockedBy,
     runId: row.checkoutRunId, summary: row.summary, createdAt: row.createdAt, updatedAt: row.updatedAt,
     model: row.model ?? null,
-    stateId: row.stateId ?? null, cycleId: row.cycleId ?? null, moduleIds: links.moduleIds, labelIds: links.labelIds,
-    estimatePoint: row.estimatePoint ?? null, startDate: row.startDate ?? null, targetDate: row.targetDate ?? null,
-    sequence: row.sequence ?? null, intakeStatus: row.intakeStatus ?? null, intakeSource: row.intakeSource ?? null };
+    stateId: row.stateId ?? null, startDate: row.startDate ?? null, targetDate: row.targetDate ?? null };
 }
 async function hydrate(rows: Array<typeof issues.$inferSelect>) {
   const database = await getDatabase();
   const ids = rows.map((row) => row.id);
   if (!ids.length) return [];
-  const { deps, labelRows, moduleRows } = database.read((db) => ({
-    deps: db.select().from(issueDependencies).where(inArray(issueDependencies.issueId, ids)).all(),
-    labelRows: db.select().from(issueLabels).where(inArray(issueLabels.issueId, ids)).all(),
-    moduleRows: db.select().from(moduleIssues).where(inArray(moduleIssues.issueId, ids)).all(),
-  }));
+  const deps = database.read((db) =>
+    db.select().from(issueDependencies).where(inArray(issueDependencies.issueId, ids)).all());
   return rows.map((row) => issueFromRow(row, {
     blockedBy: deps.filter((dep) => dep.issueId === row.id).map((dep) => dep.blockerIssueId),
-    labelIds: labelRows.filter((link) => link.issueId === row.id).map((link) => link.labelId),
-    moduleIds: moduleRows.filter((link) => link.issueId === row.id).map((link) => link.moduleId),
   }));
 }
 
@@ -127,7 +117,7 @@ export async function createIssue(input: {
   // that row may have been moved since, so only fill a column that is still empty.
   // The column is resolved against the rows that actually exist — a project may
   // have none yet, and an issue with no column still renders, placed by its status
-  // (see resolveStateId in lib/work-model.ts).
+  // (see resolveStateId in lib/board-columns.ts).
   const preferred = input.stateId ?? row.stateId ?? defaultStateId(input.projectId, STATUS_TO_DEFAULT_STATE[row.status] ?? "backlog");
   const stateId = database.read((db) => db.select({ id: workflowStates.id }).from(workflowStates).where(eq(workflowStates.id, preferred)).get())?.id ?? null;
   await database.write((db) => {

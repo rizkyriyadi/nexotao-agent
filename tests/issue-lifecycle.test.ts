@@ -3,18 +3,19 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { eq } from "drizzle-orm";
 import { openDatabase, type AppDatabase } from "../lib/db/database";
-import { activityLog, agents, heartbeatRuns, projects, wakeupRequests } from "../lib/db/schema";
+import { activityLog, agents, heartbeatRuns, issues as issuesTable, projects, wakeupRequests } from "../lib/db/schema";
 import { IssueDomainError, IssueLifecycleService } from "../lib/issue-lifecycle";
 
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-issue-test-"));
   const database = await openDatabase(path.join(dir, "nexotao.sqlite"), { migrateJson: false });
   await database.write((db) => {
-    db.insert(projects).values({ id: "project", name: "Project", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run();
+    db.insert(projects).values({ id: "project", name: "Project", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run();
     db.insert(agents).values([
-      { id: "agent-a", projectId: "project", name: "Agent A", role: "worker", scope: "A", createdAt: 2, updatedAt: 2 },
-      { id: "agent-b", projectId: "project", name: "Agent B", role: "worker", scope: "B", createdAt: 3, updatedAt: 3 },
+      { id: "agent-a", projectId: "project", name: "Agent A", role: "lead", scope: "A", createdAt: 2, updatedAt: 2 },
+      { id: "agent-b", projectId: "project", name: "Agent B", role: "lead", scope: "B", createdAt: 3, updatedAt: 3 },
     ]).run();
   });
   return { dir, database, lifecycle: new IssueLifecycleService(database) };
@@ -79,7 +80,7 @@ test("the final blocker queues exactly one durable eligible wakeup", async () =>
   } finally { await cleanup(dir, database); }
 });
 
-test("create and delegate requests are idempotent", async () => {
+test("a retried create returns the issue the first attempt made", async () => {
   const { dir, database, lifecycle } = await fixture();
   try {
     const first = await lifecycle.create({ projectId: "project", title: "Root", idempotencyKey: "root-request", now: 10 });
@@ -89,9 +90,65 @@ test("create and delegate requests are idempotent", async () => {
       lifecycle.create({ projectId: "project", title: "Different", idempotencyKey: "root-request", now: 30 }),
       (error: unknown) => error instanceof IssueDomainError && error.code === "conflict",
     );
-    const child = await lifecycle.create({ projectId: "project", parentId: first.id, title: "Child", idempotencyKey: "delegate-1", now: 40 });
-    const childRetry = await lifecycle.create({ projectId: "project", parentId: first.id, title: "Child", idempotencyKey: "delegate-1", now: 50 });
+    const child = await lifecycle.create({ projectId: "project", parentId: first.id, title: "Child", idempotencyKey: "sub-1", now: 40 });
+    const childRetry = await lifecycle.create({ projectId: "project", parentId: first.id, title: "Child", idempotencyKey: "sub-1", now: 50 });
     assert.equal(childRetry.id, child.id);
+  } finally { await cleanup(dir, database); }
+});
+
+/* ── the statuses nothing outside the engine may write ───────────────────────
+ * Salvaged from the deleted work-board suite, where these were phrased as drag
+ * gestures. The rule is not about dragging: `in_progress` means a run holds the
+ * checkout lock, so anything that sets it without taking that lock leaves the
+ * board claiming work is running while no run exists. Stated here, next to the
+ * transition table it constrains. */
+
+test("in_progress is reachable only through checkout, never through a transition", async () => {
+  const { dir, database, lifecycle } = await fixture();
+  try {
+    // Every status a caller could be sitting in, cast past the signature that
+    // already excludes `in_progress` — the type keeps honest callers out, and
+    // this keeps the runtime table from quietly growing an edge that lets a
+    // dishonest one in.
+    for (const from of ["backlog", "todo", "in_review", "blocked"] as const) {
+      const issue = await lifecycle.create({ projectId: "project", title: `From ${from}`, status: from === "blocked" ? "backlog" : from, now: 10 });
+      await assert.rejects(
+        lifecycle.transition(issue.id, "in_progress" as never, { type: "user" }, 20),
+        (error: unknown) => error instanceof IssueDomainError && error.code === "invalid_transition",
+        `${from} must not have an edge to in_progress`,
+      );
+    }
+    // Checkout is the one door, and it does set the status.
+    const runnable = await lifecycle.create({ projectId: "project", title: "Real start", status: "todo", assigneeAgentId: "agent-a", now: 30 });
+    assert.equal((await lifecycle.checkout(runnable.id, "agent-a", "run-1", 31)).status, "in_progress");
+  } finally { await cleanup(dir, database); }
+});
+
+test("skipping the queue is refused: backlog work cannot jump straight to done", async () => {
+  const { dir, database, lifecycle } = await fixture();
+  try {
+    // `backlog → done` is not in the transition table: work has to be picked up
+    // before it can be finished.
+    const issue = await lifecycle.create({ projectId: "project", title: "Skip ahead", status: "backlog", now: 10 });
+    await assert.rejects(
+      lifecycle.transition(issue.id, "done", { type: "user" }, 20),
+      (error: unknown) => error instanceof IssueDomainError && error.code === "invalid_transition",
+    );
+    assert.equal(database.read((db) => db.select().from(issuesTable).where(eq(issuesTable.id, issue.id)).get())?.status, "backlog");
+  } finally { await cleanup(dir, database); }
+});
+
+test("blocked work cannot be talked into todo while its blockers are unmet", async () => {
+  const { dir, database, lifecycle } = await fixture();
+  try {
+    const blocker = await lifecycle.create({ projectId: "project", title: "Blocker", status: "todo", now: 10 });
+    const dependent = await lifecycle.create({
+      projectId: "project", title: "Dependent", status: "backlog", blockerIds: [blocker.id], now: 11,
+    });
+    assert.equal(dependent.status, "blocked", "an unmet blocker makes the lifecycle park the issue");
+    await assert.rejects(lifecycle.transition(dependent.id, "todo", { type: "user" }, 20));
+    assert.equal(database.read((db) => db.select().from(issuesTable).where(eq(issuesTable.id, dependent.id)).get())?.status, "blocked",
+      "nothing outside the scheduler may start blocked work");
   } finally { await cleanup(dir, database); }
 });
 

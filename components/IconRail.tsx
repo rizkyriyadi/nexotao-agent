@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import {
-  Scissors, LayoutGrid, Columns3, Boxes, Settings, CircleHelp, Inbox as InboxIcon, Table2,
+  Scissors, LayoutGrid, Columns3, Boxes, Settings, CircleHelp, Inbox as InboxIcon,
 } from "lucide-react";
 import { Tooltip, TooltipTrigger, TooltipContent } from "./ui/tooltip";
 import { ThemeToggle } from "./Theme";
@@ -11,17 +11,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { useInboxSignal } from "./inbox/useInboxSignal";
 
 // One control panel: the board is where every task and run lives — there is no
-// longer a separate chat session or runs surface. `/work` sits beside it rather
-// than replacing it: the same issues, organised instead of conversed with.
+// separate chat session, runs surface, or work manager.
 //
-// Files are not here. They are docked to the right of the prompt on the board
-// and on every task, because you open a file *because of* what the agent just
-// said — and a destination you navigate to costs you your place in that
+// Files are not here either. They are docked to the right of the prompt on the
+// board and on every task, because you open a file *because of* what the agent
+// just said — and a destination you navigate to costs you your place in that
 // conversation to check a single claim.
 const NAV = [
   { id: "home", href: "/", label: "Overview", icon: LayoutGrid },
   { id: "board", href: "/board", label: "Control Panel", icon: Columns3 },
-  { id: "work", href: "/work", label: "Work Items", icon: Table2 },
   { id: "inbox", href: "/inbox", label: "Attention", icon: InboxIcon },
   { id: "projects", href: "/projects", label: "Projects", icon: Boxes },
 ];

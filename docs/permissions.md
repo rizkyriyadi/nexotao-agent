@@ -18,8 +18,7 @@ Actions are classified by the tool being called:
 
 | Action class | Tools | Default under `ask` |
 | --- | --- | --- |
-| `read` | `list_dir`, `read_file`, `grep` | Auto-allowed |
-| `control` | `spawn_agents`, `delegate` | Auto-allowed |
+| `read` | `list_dir`, `read_file`, `grep`, `graph_query`, `graph_path`, `graph_explain` | Auto-allowed |
 | `write` | `write_file`, `edit_file` | Requires approval |
 | `exec` | `bash` | Requires approval |
 | `network` | `web_search`, `web_fetch` | Requires approval |

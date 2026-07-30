@@ -2,10 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  LayoutGrid, Columns3, Boxes, Settings, Plus, FolderPlus,
-  Table2, CalendarRange, Layers, FileText, Inbox, ChartNoAxesColumn,
-} from "lucide-react";
+import { LayoutGrid, Columns3, Boxes, Settings, Plus, FolderPlus, Inbox } from "lucide-react";
 import {
   CommandDialog, CommandInput, CommandList, CommandEmpty, CommandGroup, CommandItem, CommandShortcut,
 } from "./ui/command";
@@ -35,18 +32,9 @@ export function CommandPalette() {
         <CommandGroup heading="Go to">
           <CommandItem onSelect={() => go("/")}><LayoutGrid className="size-4 text-pebble" /> Overview</CommandItem>
           <CommandItem onSelect={() => go("/board")}><Columns3 className="size-4 text-pebble" /> Control Panel</CommandItem>
+          <CommandItem onSelect={() => go("/inbox")}><Inbox className="size-4 text-pebble" /> Attention</CommandItem>
           <CommandItem onSelect={() => go("/projects")}><Boxes className="size-4 text-pebble" /> Projects</CommandItem>
           <CommandItem onSelect={() => go("/settings")}><Settings className="size-4 text-pebble" /> Settings</CommandItem>
-        </CommandGroup>
-        {/* Its own group: the work surface has six rooms, and folding them into
-            "Go to" would bury the five top-level destinations above. */}
-        <CommandGroup heading="Work">
-          <CommandItem onSelect={() => go("/work")}><Table2 className="size-4 text-pebble" /> Work Items</CommandItem>
-          <CommandItem onSelect={() => go("/work/cycles")}><CalendarRange className="size-4 text-pebble" /> Cycles</CommandItem>
-          <CommandItem onSelect={() => go("/work/modules")}><Layers className="size-4 text-pebble" /> Modules</CommandItem>
-          <CommandItem onSelect={() => go("/work/pages")}><FileText className="size-4 text-pebble" /> Pages</CommandItem>
-          <CommandItem onSelect={() => go("/work/intake")}><Inbox className="size-4 text-pebble" /> Intake</CommandItem>
-          <CommandItem onSelect={() => go("/work/analytics")}><ChartNoAxesColumn className="size-4 text-pebble" /> Analytics</CommandItem>
         </CommandGroup>
         <CommandGroup heading="Actions">
           <CommandItem onSelect={() => go("/board")}>

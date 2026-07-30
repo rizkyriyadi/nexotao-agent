@@ -22,7 +22,6 @@ import {
 import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runtime";
 import { GitWorkspaceManager } from "./git-workspace";
 import { isBlockerResolved } from "./blocker-attention";
-import { recordCycleSnapshots } from "./work-analytics";
 
 /** How long a run start will wait for its code index to catch up before going
  *  ahead anyway. A warm re-index measures ~0.1–0.6 s, so this is nearly never
@@ -66,10 +65,6 @@ export async function submitGoal(projectId: string, text: string, mode: I.RunMod
 
 /** Evaluate all issues and start any that are ready (assigned, unblocked, idle). */
 export async function tick(projectId: string) {
-  // Burn-down needs a daily total, not an event stream, and a tick is the only
-  // moment we know the project is being worked. Failing to record a point must
-  // never stop work from starting, so this is deliberately fire-and-forget.
-  recordCycleSnapshots(projectId).catch(() => {});
   const issues = await I.listIssues(projectId);
   const byId = new Map(issues.map((i) => [i.id, i]));
   const runtime = await heartbeatRuntime();
