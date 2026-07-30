@@ -88,15 +88,17 @@ covers these areas:
 - **Projects & sessions** — `projects`, `sessions` (chat history), `tasks`.
 - **Runs & events** — `run_records`, `agent_runs`, `heartbeat_runs`, `run_events` (redacted per-run
   event history), `wakeup_requests`.
-- **Agents** — `agents`, `agent_config_revisions`.
-- **Issues & work** — `issues`, `issue_dependencies`, `issue_comments`, `issue_documents`,
-  `documents`, `document_revisions`, `issue_mutation_requests`.
+- **Agents** — `agents`.
+- **Issues & board** — `issues`, `issue_dependencies`, `issue_comments`, `issue_documents`,
+  `documents`, `document_revisions`, `issue_mutation_requests`, `workflow_states` (board columns).
 - **Git workspaces** — `git_workspaces` and workspace columns on issues/runs, for isolated branches.
 - **Governance & cost** — `approvals`, `cost_events`, `activity_log` (append-only audit), and
   `legacy_json_migrations`.
 
-Migrations are additive and each runs inside a transaction; a failed migration rolls back and aborts
-startup rather than leaving a partial schema.
+Each migration runs inside its own transaction; a failed one rolls back and aborts startup rather
+than leaving a partial schema. Migrations are usually additive, but a retired feature is removed
+rather than left behind — version 11 drops the multi-agent and work-management tables and columns,
+and the data in them is not recoverable afterwards.
 
 ### Redacted-at-rest
 
