@@ -294,6 +294,55 @@ ${seedDefaultStatesSql()}
   sql: `
 ALTER TABLE issues ADD COLUMN model TEXT;
 `,
+}, {
+  version: 11,
+  name: "single-agent",
+  /* Retires the multi-agent system and the work-management suite. Both were
+     reachable only from surfaces that no longer exist, and leaving their tables
+     behind would mean every future migration reasoning about columns nothing
+     reads.
+
+     `workflow_states` and `issues.state_id` survive: they are the board's own
+     columns. So do `start_date` / `target_date` — plain issue metadata rather
+     than cycle machinery.
+
+     Ordering is load-bearing. SQLite refuses to drop a column an index still
+     mentions ("error in index …: no such column"), so every DROP INDEX comes
+     before the DROP COLUMN it frees. */
+  sql: `
+DROP INDEX IF EXISTS issues_cycle_idx;
+DROP INDEX IF EXISTS issue_labels_label_idx;
+DROP INDEX IF EXISTS cycles_project_start_idx;
+DROP INDEX IF EXISTS modules_project_idx;
+DROP INDEX IF EXISTS module_issues_issue_idx;
+DROP INDEX IF EXISTS issue_relations_related_idx;
+DROP INDEX IF EXISTS pages_project_updated_idx;
+DROP INDEX IF EXISTS agent_config_revisions_agent_created_idx;
+DROP INDEX IF EXISTS agent_config_revisions_agent_revision_uq;
+
+DROP TABLE IF EXISTS cycle_snapshots;
+DROP TABLE IF EXISTS issue_relations;
+DROP TABLE IF EXISTS module_issues;
+DROP TABLE IF EXISTS modules;
+DROP TABLE IF EXISTS issue_labels;
+DROP TABLE IF EXISTS labels;
+DROP TABLE IF EXISTS cycles;
+DROP TABLE IF EXISTS saved_views;
+DROP TABLE IF EXISTS pages;
+DROP TABLE IF EXISTS agent_config_revisions;
+
+ALTER TABLE issues DROP COLUMN created_by_agent_id;
+ALTER TABLE issues DROP COLUMN cycle_id;
+ALTER TABLE issues DROP COLUMN estimate_point;
+ALTER TABLE issues DROP COLUMN intake_status;
+ALTER TABLE issues DROP COLUMN intake_source;
+ALTER TABLE issues DROP COLUMN sequence;
+ALTER TABLE agents DROP COLUMN reports_to;
+ALTER TABLE agents DROP COLUMN project_access;
+ALTER TABLE agents DROP COLUMN concurrency;
+ALTER TABLE projects DROP COLUMN mode;
+ALTER TABLE projects DROP COLUMN agent_specs;
+`,
 }];
 
 // Applies pending migrations, each in its own IMMEDIATE transaction so a failing
@@ -386,13 +435,13 @@ async function migrateLegacyJson(db: Database, dir: string) {
   const issues = await readLegacy<any>(dir, "issues.json", "issues");
   db.run("BEGIN IMMEDIATE");
   try {
-    for (const p of projects) db.run("INSERT OR IGNORE INTO projects VALUES (?, ?, ?, ?, ?, ?)", [p.id, p.name, p.path, p.mode, JSON.stringify(p.agents ?? []), p.createdAt]);
+    for (const p of projects) db.run("INSERT OR IGNORE INTO projects (id, name, path, created_at) VALUES (?, ?, ?, ?)", [p.id, p.name, p.path, p.createdAt]);
     for (const s of sessions) db.run("INSERT OR IGNORE INTO sessions VALUES (?, ?, ?, ?, ?, ?)", [s.id, s.projectId, s.title, JSON.stringify(s.messages ?? []), s.createdAt, s.updatedAt]);
     for (const t of tasks) db.run("INSERT OR IGNORE INTO tasks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [t.id, t.ref, t.projectId, t.title, t.col, t.runId ?? null, t.agent ?? null, t.summary ?? null, t.createdAt, t.updatedAt ?? t.createdAt]);
     for (const r of agentRuns) db.run("INSERT OR IGNORE INTO agent_runs VALUES (?, ?, ?, ?, ?, ?, ?)", [r.id, r.projectId, r.agent, r.task, r.summary, r.ok ? 1 : 0, r.ts]);
     for (const r of runRecords) db.run("INSERT OR IGNORE INTO run_records VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [r.id, r.projectId, r.kind, r.title, r.status, JSON.stringify(r.events ?? []), r.createdAt, r.updatedAt]);
-    for (const a of agents) db.run("INSERT OR IGNORE INTO agents (id, project_id, name, role, scope, reports_to, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", [a.id, a.projectId, a.name, a.role, a.scope, a.reportsTo ?? null, a.createdAt, a.createdAt]);
-    for (const i of issues) db.run("INSERT OR IGNORE INTO issues (id, project_id, identifier, parent_id, title, description, status, stage, assignee_agent_id, created_by_agent_id, checkout_run_id, execution_locked_at, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [i.id, i.projectId, i.ref, i.parentId ?? null, i.title, i.detail ?? "", i.status, i.stage, i.assigneeAgentId ?? null, i.createdByAgentId ?? null, i.runId ?? null, i.runId ? i.updatedAt : null, i.summary ?? "", i.createdAt, i.updatedAt]);
+    for (const a of agents) db.run("INSERT OR IGNORE INTO agents (id, project_id, name, role, scope, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)", [a.id, a.projectId, a.name, a.role, a.scope, a.createdAt, a.createdAt]);
+    for (const i of issues) db.run("INSERT OR IGNORE INTO issues (id, project_id, identifier, parent_id, title, description, status, stage, assignee_agent_id, checkout_run_id, execution_locked_at, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", [i.id, i.projectId, i.ref, i.parentId ?? null, i.title, i.detail ?? "", i.status, i.stage, i.assigneeAgentId ?? null, i.runId ?? null, i.runId ? i.updatedAt : null, i.summary ?? "", i.createdAt, i.updatedAt]);
     for (const i of issues) for (const blocker of i.blockedBy ?? []) db.run("INSERT OR IGNORE INTO issue_dependencies VALUES (?, ?, ?)", [i.id, blocker, i.createdAt]);
     db.run("INSERT INTO legacy_json_migrations VALUES ('json-v1', ?, ?, ?)", [present.length ? backup : "", present.length, completedAt]);
     db.run("COMMIT");

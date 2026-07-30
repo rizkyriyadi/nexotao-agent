@@ -133,7 +133,7 @@ async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-blocker-test-"));
   const database = await openDatabase(path.join(dir, "nexotao.sqlite"), { migrateJson: false });
   await database.write((db) => {
-    db.insert(projects).values({ id: "project", name: "Project", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run();
+    db.insert(projects).values({ id: "project", name: "Project", path: dir, createdAt: 1 }).run();
     db.insert(agents).values([
       { id: "agent-a", projectId: "project", name: "Agent A", role: "worker", scope: "A", createdAt: 2, updatedAt: 2 },
     ]).run();
@@ -180,14 +180,14 @@ test("a task parked in backlog with unmet blockers is derived as blocked", async
 function boardAgent(id: string, status: string): Agent {
   return {
     id, projectId: "p", name: `Agent ${id}`, role: "worker",
-    scope: "", avatar: null, reportsTo: null, status, createdAt: 1,
+    scope: "", avatar: null, status, createdAt: 1,
   };
 }
 
 function boardIssue(partial: Partial<Issue> & Pick<Issue, "id">): Issue {
   return {
     projectId: "p", ref: `NX-${partial.id}`, title: partial.id, detail: "", parentId: null,
-    assigneeAgentId: "a", createdByAgentId: null, status: "todo", stage: "execute",
+    assigneeAgentId: "a", status: "todo", stage: "execute",
     priority: "medium", runMode: "agent", blockedBy: [], runId: null, summary: "",
     createdAt: 1, updatedAt: 1, model: null,
     stateId: null, startDate: null, targetDate: null,

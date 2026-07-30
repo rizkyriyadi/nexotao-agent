@@ -15,7 +15,7 @@ import { RUN_RESULT_EVENT_TYPE, TEXT_DELTA_EVENT_TYPES } from "../lib/run-transc
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-cancel-test-"));
   const database = await openDatabase(path.join(dir, "nexotao.sqlite"), { migrateJson: false });
-  await database.write((db) => db.insert(projects).values({ id: "p", name: "Cancel", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+  await database.write((db) => db.insert(projects).values({ id: "p", name: "Cancel", path: dir, createdAt: 1 }).run());
   const repositories = new ControlPlaneRepositories(database);
   await repositories.agents.insert({ id: "a", projectId: "p", name: "Agent", role: "worker", scope: "Cancel", createdAt: 2, updatedAt: 2 });
   await repositories.issues.insert({ id: "i", projectId: "p", identifier: "NX-1", title: "Task", status: "todo", assigneeAgentId: "a", createdAt: 3, updatedAt: 3 });

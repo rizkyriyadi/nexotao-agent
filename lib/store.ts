@@ -30,10 +30,7 @@ export async function addProject(input: Omit<Project, "id" | "createdAt">): Prom
   if (existing) return existing;
   const project: Project = { ...input, id: randomUUID(), createdAt: Date.now() };
   await database.write((db) => {
-    // `mode` and `agent_specs` are leftovers of the multi-agent system: NOT NULL
-    // columns that nothing reads any more. They are filled with their only
-    // remaining value until the migration that drops them lands.
-    db.insert(projects).values({ id: project.id, name: project.name, path: project.path, mode: "single", agentSpecs: [], createdAt: project.createdAt }).run();
+    db.insert(projects).values({ id: project.id, name: project.name, path: project.path, createdAt: project.createdAt }).run();
     // Seed the board columns in the same transaction as the project. The v9
     // migration only reached projects that existed when it ran; a project created
     // afterwards would otherwise open on an empty board.

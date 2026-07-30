@@ -128,7 +128,7 @@ export class IssueLifecycleService {
 
   create(input: {
     projectId: string; title: string; description?: string; parentId?: string | null; assigneeAgentId?: string | null;
-    createdByAgentId?: string | null; status?: IssueStatus; stage?: string; priority?: string; runMode?: string; blockerIds?: string[];
+    status?: IssueStatus; stage?: string; priority?: string; runMode?: string; blockerIds?: string[];
     idempotencyKey?: string; actor?: IssueActor; now?: number;
   }) {
     return this.database.write((db) => {
@@ -138,7 +138,7 @@ export class IssueLifecycleService {
       const blockerIds = [...new Set(input.blockerIds ?? [])].sort();
       const normalized = {
         title: input.title.trim() || "Untitled", description: input.description ?? "", parentId: input.parentId ?? null,
-        assigneeAgentId: input.assigneeAgentId ?? null, createdByAgentId: input.createdByAgentId ?? null,
+        assigneeAgentId: input.assigneeAgentId ?? null,
         status: input.status ?? "todo", stage: input.stage ?? "execute", priority: input.priority ?? "medium",
         runMode: input.runMode ?? "agent", blockerIds,
       };
@@ -154,7 +154,6 @@ export class IssueLifecycleService {
         }
       }
       if (normalized.assigneeAgentId) ensureAgent(db, input.projectId, normalized.assigneeAgentId);
-      if (normalized.createdByAgentId) ensureAgent(db, input.projectId, normalized.createdByAgentId);
       if (normalized.parentId) {
         const parent = db.select().from(issues).where(eq(issues.id, normalized.parentId)).get();
         if (!parent || parent.projectId !== input.projectId) throw new IssueDomainError("not_found", "Parent issue was not found in this project");
@@ -173,7 +172,7 @@ export class IssueLifecycleService {
       const row = {
         id, projectId: input.projectId, identifier: `NX-${next}`, parentId: normalized.parentId, title: normalized.title,
         description: normalized.description, status, stage: normalized.stage, priority: normalized.priority, runMode: normalized.runMode,
-        assigneeAgentId: normalized.assigneeAgentId, createdByAgentId: normalized.createdByAgentId, summary: "", createdAt: now, updatedAt: now,
+        assigneeAgentId: normalized.assigneeAgentId, summary: "", createdAt: now, updatedAt: now,
       };
       db.insert(issues).values(row).run();
       for (const blockerIssueId of blockerIds) db.insert(issueDependencies).values({ issueId: id, blockerIssueId, createdAt: now }).run();

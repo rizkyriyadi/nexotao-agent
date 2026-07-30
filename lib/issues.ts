@@ -5,7 +5,7 @@ import { agents, issueDependencies, issues, workflowStates } from "./db/schema";
 import { IssueDomainError, IssueLifecycleService, type IssueActor, type IssueStatus as LifecycleStatus } from "./issue-lifecycle";
 
 export type AgentRole = "lead" | "worker";
-export type Agent = { id: string; projectId: string; name: string; role: AgentRole; scope: string; avatar: string | null; reportsTo: string | null; status: string; createdAt: number };
+export type Agent = { id: string; projectId: string; name: string; role: AgentRole; scope: string; avatar: string | null; status: string; createdAt: number };
 /** Re-exported from the lifecycle, which owns the transition table; declaring the
  *  union twice let the two drift and the board render a status the engine
  *  rejected. */
@@ -15,7 +15,7 @@ export type IssueStage = "plan" | "execute" | "integrate";
 export type RunMode = "agent" | "plan" | "ask";
 export type Issue = {
   id: string; projectId: string; ref: string; title: string; detail: string; parentId: string | null;
-  assigneeAgentId: string | null; createdByAgentId: string | null; status: IssueStatusValue; stage: IssueStage;
+  assigneeAgentId: string | null; status: IssueStatusValue; stage: IssueStage;
   priority: string; runMode: RunMode; blockedBy: string[]; runId: string | null; summary: string; createdAt: number; updatedAt: number;
   // Per-conversation model. Null means the project/agent default applies.
   model: string | null;
@@ -27,10 +27,10 @@ export type Issue = {
 // `status` is projected because blocker attention needs it: a blocker assigned
 // to a paused or errored agent is not waiting, it is stuck, and defaulting the
 // status here would silently classify those as healthy.
-const agentFromRow = (row: typeof agents.$inferSelect): Agent => ({ id: row.id, projectId: row.projectId, name: row.name, role: row.role, scope: row.scope, avatar: row.avatar ?? null, reportsTo: row.reportsTo, status: row.status, createdAt: row.createdAt });
+const agentFromRow = (row: typeof agents.$inferSelect): Agent => ({ id: row.id, projectId: row.projectId, name: row.name, role: row.role, scope: row.scope, avatar: row.avatar ?? null, status: row.status, createdAt: row.createdAt });
 function issueFromRow(row: typeof issues.$inferSelect, links: { blockedBy: string[] }): Issue {
   return { id: row.id, projectId: row.projectId, ref: row.identifier, title: row.title, detail: row.description, parentId: row.parentId,
-    assigneeAgentId: row.assigneeAgentId, createdByAgentId: row.createdByAgentId, status: row.status as IssueStatusValue,
+    assigneeAgentId: row.assigneeAgentId, status: row.status as IssueStatusValue,
     stage: row.stage as IssueStage, priority: row.priority, runMode: (row.runMode as RunMode) ?? "agent", blockedBy: links.blockedBy,
     runId: row.checkoutRunId, summary: row.summary, createdAt: row.createdAt, updatedAt: row.updatedAt,
     model: row.model ?? null,
@@ -75,7 +75,7 @@ export async function seedAgents(projectId: string): Promise<Agent[]> {
     const existing = db.select().from(agents).where(eq(agents.projectId, projectId)).orderBy(asc(agents.createdAt)).all();
     if (existing.length) return existing.map(agentFromRow);
     const now = Date.now();
-    const lead: Agent = { id: randomUUID(), projectId, name: "Hutao", role: "lead", scope: "Handles your requests end-to-end — answers, plans, and builds", avatar: null, reportsTo: null, status: "idle", createdAt: now };
+    const lead: Agent = { id: randomUUID(), projectId, name: "Hutao", role: "lead", scope: "Handles your requests end-to-end — answers, plans, and builds", avatar: null, status: "idle", createdAt: now };
     db.insert(agents).values({ ...lead, updatedAt: lead.createdAt }).run();
     return [lead];
   });
@@ -96,21 +96,19 @@ export async function childrenOf(parentId: string) {
 }
 export async function createIssue(input: {
   projectId: string; title: string; detail?: string; parentId?: string | null; assigneeAgentId?: string | null;
-  createdByAgentId?: string | null; status?: IssueStatusValue; stage?: IssueStage; blockedBy?: string[];
+  status?: IssueStatusValue; stage?: IssueStage; blockedBy?: string[];
   priority?: string; runMode?: RunMode; model?: string | null;
-  stateId?: string | null; cycleId?: string | null; estimatePoint?: number | null;
-  startDate?: number | null; targetDate?: number | null; sequence?: number | null;
-  intakeStatus?: string | null; intakeSource?: string | null;
+  stateId?: string | null; startDate?: number | null; targetDate?: number | null;
   idempotencyKey?: string; actor?: IssueActor;
 }): Promise<Issue> {
   const database = await getDatabase();
   const row = await new IssueLifecycleService(database).create({
     projectId: input.projectId, title: input.title, description: input.detail, parentId: input.parentId,
-    assigneeAgentId: input.assigneeAgentId, createdByAgentId: input.createdByAgentId, status: input.status,
+    assigneeAgentId: input.assigneeAgentId, status: input.status,
     stage: input.stage, priority: input.priority, runMode: input.runMode, blockerIds: input.blockedBy, idempotencyKey: input.idempotencyKey, actor: input.actor,
   });
-  // The lifecycle owns `status`; the board column and the rest of the work fields
-  // are applied here so the lifecycle never has to know about them. Without an
+  // The lifecycle owns `status`; the board column and the scheduling dates are
+  // applied here so the lifecycle never has to know about them. Without an
   // explicit column, the card lands in the default one for its status — that is
   // what keeps agent-created issues visible on the board.
   // `create` is idempotent: an existing key returns the row already stored, and
@@ -124,13 +122,8 @@ export async function createIssue(input: {
     db.update(issues).set({
       stateId,
       ...(input.model !== undefined ? { model: input.model } : {}),
-      ...(input.cycleId !== undefined ? { cycleId: input.cycleId } : {}),
-      ...(input.estimatePoint !== undefined ? { estimatePoint: input.estimatePoint } : {}),
       ...(input.startDate !== undefined ? { startDate: input.startDate } : {}),
       ...(input.targetDate !== undefined ? { targetDate: input.targetDate } : {}),
-      ...(input.sequence !== undefined ? { sequence: input.sequence } : {}),
-      ...(input.intakeStatus !== undefined ? { intakeStatus: input.intakeStatus } : {}),
-      ...(input.intakeSource !== undefined ? { intakeSource: input.intakeSource } : {}),
     }).where(eq(issues.id, row.id)).run();
   });
   return (await getIssue(row.id))!;
@@ -149,7 +142,6 @@ export async function updateIssue(
     db.update(issues).set({
       ...(patch.title !== undefined ? { title: patch.title } : {}), ...(patch.detail !== undefined ? { description: patch.detail } : {}),
       ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
-      ...(patch.createdByAgentId !== undefined ? { createdByAgentId: patch.createdByAgentId } : {}),
       ...(patch.stage !== undefined ? { stage: patch.stage } : {}),
       ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
       ...(patch.model !== undefined ? { model: patch.model } : {}),

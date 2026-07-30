@@ -120,7 +120,7 @@ test("approval resolution is persistent, idempotent, and resumes once", async ()
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-approval-test-"));
   const database = await openDatabase(path.join(dir, "db.sqlite"), { migrateJson: false });
   try {
-    await database.write((db) => db.insert(projects).values({ id: "p", name: "P", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run());
+    await database.write((db) => db.insert(projects).values({ id: "p", name: "P", path: dir, createdAt: 1 }).run());
     const repositories = new ControlPlaneRepositories(database);
     const run = createRun("run-active", undefined, { projectId: "p" });
     const approval = await repositories.createApproval({
@@ -154,7 +154,7 @@ test("expiring stale execution approvals leaves non-execution approvals pending"
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-approval-scope-"));
   const database = await openDatabase(path.join(dir, "db.sqlite"), { migrateJson: false });
   try {
-    await database.write((db) => db.insert(projects).values({ id: "p", name: "P", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run());
+    await database.write((db) => db.insert(projects).values({ id: "p", name: "P", path: dir, createdAt: 1 }).run());
     const repositories = new ControlPlaneRepositories(database);
     const plan = await repositories.createApproval({
       type: "plan", projectId: "p", issueId: null, payload: { summary: "Approve the rollout" }, status: "pending",

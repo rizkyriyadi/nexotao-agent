@@ -30,7 +30,7 @@ const quiet = { graphDir: () => path.join(tmpdir(), "nexotao-absent-graph-dir"),
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-governance-"));
   const database = await openDatabase(path.join(dir, "db.sqlite"), { migrateJson: false });
-  await database.write((db) => db.insert(projects).values({ id: "p", name: "Governance", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run());
+  await database.write((db) => db.insert(projects).values({ id: "p", name: "Governance", path: dir, createdAt: 1 }).run());
   return { dir, database };
 }
 

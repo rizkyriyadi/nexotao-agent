@@ -52,7 +52,7 @@ test("an injected fault inside a write transaction rolls back and does not wedge
   const file = path.join(dir, "nexotao.sqlite");
   try {
     const database = await openDatabase(file, { migrateJson: false });
-    await database.write((db) => db.insert(projects).values({ id: "p", name: "Fault", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+    await database.write((db) => db.insert(projects).values({ id: "p", name: "Fault", path: dir, createdAt: 1 }).run());
 
     // Inject a fault after a valid mutation: the transaction must roll the row back.
     await assert.rejects(
@@ -81,7 +81,7 @@ test("a crash mid-run keeps events durable and replays from the cursor without g
   const file = path.join(dir, "nexotao.sqlite");
   try {
     const database = await openDatabase(file, { migrateJson: false });
-    await database.write((db) => db.insert(projects).values({ id: "p", name: "Crash", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+    await database.write((db) => db.insert(projects).values({ id: "p", name: "Crash", path: dir, createdAt: 1 }).run());
     let repositories = new ControlPlaneRepositories(database);
     await repositories.agents.insert({ id: "a", projectId: "p", name: "Agent", role: "worker", scope: "x", createdAt: 2, updatedAt: 2 });
     await repositories.issues.insert({ id: "i", projectId: "p", identifier: "NX-1", title: "Crash", status: "in_progress", assigneeAgentId: "a", createdAt: 3, updatedAt: 3 });

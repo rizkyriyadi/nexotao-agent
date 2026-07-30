@@ -56,7 +56,7 @@ export async function submitGoal(projectId: string, text: string, mode: I.RunMod
   }
   const root = await I.createIssue({
     projectId, title: text, detail: text,
-    assigneeAgentId: lead?.id ?? null, createdByAgentId: null,
+    assigneeAgentId: lead?.id ?? null,
     status: lead ? "todo" : "backlog", stage: "execute", runMode: mode, model: model ?? null, idempotencyKey,
   });
   tick(projectId);

@@ -41,7 +41,7 @@ async function fixture() {
 
   const database = await openDatabase(path.join(dir, "nexotao.sqlite"), { migrateJson: false });
   await database.write((db) => {
-    db.insert(projects).values({ id: "project", name: "Project", path: repositoryPath, mode: "multi", agentSpecs: [], createdAt: 1 }).run();
+    db.insert(projects).values({ id: "project", name: "Project", path: repositoryPath, createdAt: 1 }).run();
     db.insert(agents).values(["one", "two", "worker", "lead-bad", "lead-good", "clean", "ship", "moved", "idle", "held", "rewound", "clash"].map((id, index) => ({
       id: `agent-${id}`, projectId: "project", name: id, role: id.startsWith("lead") ? "lead" as const : "worker" as const,
       scope: id, createdAt: index + 2, updatedAt: index + 2,

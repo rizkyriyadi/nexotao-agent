@@ -12,7 +12,7 @@ import { MAX_RUN_EVENT_BYTES, publishRunEvent, RunEventDomainError } from "../li
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-events-test-"));
   const database = await openDatabase(path.join(dir, "events.sqlite"), { migrateJson: false });
-  await database.write((db) => db.insert(projects).values({ id: "p", name: "Events", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+  await database.write((db) => db.insert(projects).values({ id: "p", name: "Events", path: dir, createdAt: 1 }).run());
   const repositories = new ControlPlaneRepositories(database);
   await repositories.agents.insert({ id: "a", projectId: "p", name: "Realtime", role: "worker", scope: "SSE", createdAt: 2, updatedAt: 2 });
   await repositories.issues.insert({ id: "i", projectId: "p", identifier: "NX-1", title: "Stream", status: "in_progress", assigneeAgentId: "a", createdAt: 3, updatedAt: 3 });

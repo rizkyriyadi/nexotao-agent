@@ -12,7 +12,7 @@ async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-issue-test-"));
   const database = await openDatabase(path.join(dir, "nexotao.sqlite"), { migrateJson: false });
   await database.write((db) => {
-    db.insert(projects).values({ id: "project", name: "Project", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run();
+    db.insert(projects).values({ id: "project", name: "Project", path: dir, createdAt: 1 }).run();
     db.insert(agents).values([
       { id: "agent-a", projectId: "project", name: "Agent A", role: "lead", scope: "A", createdAt: 2, updatedAt: 2 },
       { id: "agent-b", projectId: "project", name: "Agent B", role: "lead", scope: "B", createdAt: 3, updatedAt: 3 },

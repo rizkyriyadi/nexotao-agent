@@ -22,7 +22,7 @@ after(async () => {
 
 test("buildWorkGraph emits task/run/agent nodes and child/blockedBy/references edges", async () => {
   const db = await getDatabase();
-  await db.write((d) => d.insert(schema.projects).values({ id: "p1", name: "Nexotao", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+  await db.write((d) => d.insert(schema.projects).values({ id: "p1", name: "Nexotao", path: dir, createdAt: 1 }).run());
   // NEXA-27 (parent) -> NEXA-28 (child, blocked by NEXA-14, references NEXA-14 in text); NEXA-14 done earlier.
   await db.write((d) => d.insert(schema.issues).values({ id: "i1", projectId: "p1", identifier: "NEXA-27", title: "Graphify", status: "in_review", createdAt: 1, updatedAt: 1 }).run());
   await db.write((d) => d.insert(schema.issues).values({ id: "i2", projectId: "p1", identifier: "NEXA-28", parentId: "i1", title: "Graph engine", description: "Reuses the ledger approach from NEXA-14.", status: "in_progress", createdAt: 2, updatedAt: 2 }).run());
@@ -30,7 +30,7 @@ test("buildWorkGraph emits task/run/agent nodes and child/blockedBy/references e
   await db.write((d) => d.insert(schema.issueDependencies).values({ issueId: "i2", blockerIssueId: "i3", createdAt: 2 }).run());
   await db.write((d) => d.insert(schema.agentRuns).values({ id: "r1", projectId: "p1", agent: "chief of staff", task: "Build the NEXA-28 engine", summary: "wrote lib/graphify.ts", ok: true, ts: 3 }).run());
   // A second project's issue must not leak into p1's graph.
-  await db.write((d) => d.insert(schema.projects).values({ id: "p2", name: "Other", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run());
+  await db.write((d) => d.insert(schema.projects).values({ id: "p2", name: "Other", path: dir, createdAt: 1 }).run());
   await db.write((d) => d.insert(schema.issues).values({ id: "o1", projectId: "p2", identifier: "OTHER-1", title: "Unrelated", status: "todo", createdAt: 1, updatedAt: 1 }).run());
 
   const { graph, file } = await buildWorkGraph("p1");
@@ -73,7 +73,7 @@ test("buildWorkGraph emits task/run/agent nodes and child/blockedBy/references e
 
 test("buildWorkGraph emits session nodes and memory-link edges from [[slug]] refs", async () => {
   const db = await getDatabase();
-  await db.write((d) => d.insert(schema.projects).values({ id: "p3", name: "Sessions", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+  await db.write((d) => d.insert(schema.projects).values({ id: "p3", name: "Sessions", path: dir, createdAt: 1 }).run());
   // An issue whose summary carries a [[slug]] memory link.
   await db.write((d) => d.insert(schema.issues).values({ id: "i3a", projectId: "p3", identifier: "NEXA-30", title: "Incremental indexing", summary: "Builds on [[nexa-27-graphify]] design.", status: "in_progress", createdAt: 1, updatedAt: 1 }).run());
   // A session that references the issue and links a memory in its messages.
@@ -92,7 +92,7 @@ test("buildWorkGraph emits session nodes and memory-link edges from [[slug]] ref
 
 test("appendRunToWorkGraph appends one run without a full rebuild and dedupes", async () => {
   const db = await getDatabase();
-  await db.write((d) => d.insert(schema.projects).values({ id: "p4", name: "Append", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+  await db.write((d) => d.insert(schema.projects).values({ id: "p4", name: "Append", path: dir, createdAt: 1 }).run());
   await db.write((d) => d.insert(schema.issues).values({ id: "i4", projectId: "p4", identifier: "NEXA-30", title: "Incremental indexing", status: "in_progress", createdAt: 1, updatedAt: 1 }).run());
 
   // Seed the graph (no runs yet), then append a finished run incrementally.
@@ -124,7 +124,7 @@ test("appendRunToWorkGraph appends one run without a full rebuild and dedupes", 
 
 test("appendRunToWorkGraph seeds a full build when no graph exists yet", async () => {
   const db = await getDatabase();
-  await db.write((d) => d.insert(schema.projects).values({ id: "p5", name: "Cold", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+  await db.write((d) => d.insert(schema.projects).values({ id: "p5", name: "Cold", path: dir, createdAt: 1 }).run());
   await db.write((d) => d.insert(schema.issues).values({ id: "i5", projectId: "p5", identifier: "NEXA-30", title: "Incremental indexing", status: "done", createdAt: 1, updatedAt: 1 }).run());
   // The run row exists in the store (addAgentRun ran) but no work.json yet.
   await db.write((d) => d.insert(schema.agentRuns).values({ id: "r5", projectId: "p5", agent: "chief of staff", task: "Ship NEXA-30", summary: "done", ok: true, ts: 5 }).run());

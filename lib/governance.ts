@@ -9,7 +9,7 @@ import { promises as fs } from "node:fs";
 import { and, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./db/database";
 import {
-  activityLog, agentConfigRevisions, agentRuns, agents, approvals, documentRevisions,
+  activityLog, agentRuns, agents, approvals, documentRevisions,
   documents, gitWorkspaces, heartbeatRuns, issueComments, issueDependencies, issueDocuments,
   issueMutationRequests, issues, projects, runEvents, runRecords, sessions, tasks, wakeupRequests,
 } from "./db/schema";
@@ -135,7 +135,6 @@ export function exportProjectData(database: AppDatabase, projectId: string, now 
     return {
       project,
       agents: agentRows,
-      agentConfigRevisions: agentIds.length ? chunk(agentIds).flatMap((ids) => db.select().from(agentConfigRevisions).where(inArray(agentConfigRevisions.agentId, ids)).all()) : [],
       issues: issueRows,
       issueDependencies: issueIds.length ? chunk(issueIds).flatMap((ids) => db.select().from(issueDependencies).where(inArray(issueDependencies.issueId, ids)).all()) : [],
       issueMutationRequests: db.select().from(issueMutationRequests).where(eq(issueMutationRequests.projectId, projectId)).all(),
@@ -269,7 +268,6 @@ export async function deleteProjectData(
       comments: inSet(issueIds, (ids) => db.select({ id: issueComments.id }).from(issueComments).where(inArray(issueComments.issueId, ids)).all()),
       dependencies: inSet(issueIds, (ids) => db.select({ id: issueDependencies.issueId }).from(issueDependencies).where(inArray(issueDependencies.issueId, ids)).all()),
       approvals: approvalRows.length,
-      agentConfigRevisions: inSet(agentIds, (ids) => db.select({ id: agentConfigRevisions.id }).from(agentConfigRevisions).where(inArray(agentConfigRevisions.agentId, ids)).all()),
       wakeupRequests: inSet(agentIds, (ids) => db.select({ id: wakeupRequests.id }).from(wakeupRequests).where(inArray(wakeupRequests.agentId, ids)).all()),
       gitWorkspaces: db.select({ id: gitWorkspaces.id }).from(gitWorkspaces).where(eq(gitWorkspaces.projectId, projectId)).all().length,
       sessions: db.select({ id: sessions.id }).from(sessions).where(eq(sessions.projectId, projectId)).all().length,

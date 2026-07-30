@@ -236,9 +236,11 @@ export class ControlPlaneRepositories {
         // a previous failure still picks up the next task — otherwise one bad run
         // wedges the queue forever and the work just sits there looking queued.
         if (!agent || HUMAN_GATED_AGENT_STATUS.includes(agent.status)) continue;
-        const concurrency = Math.max(1, agent.concurrency);
+        // One run at a time per agent. A second concurrent run would have the two
+        // sharing a workspace and a session, so the queue holds the next wakeup
+        // until the current one finishes rather than interleaving them.
         const active = db.select().from(heartbeatRuns).where(and(eq(heartbeatRuns.agentId, candidate.agentId), inArray(heartbeatRuns.status, ["running", "waiting"]))).all().length;
-        if (active >= concurrency) continue;
+        if (active >= 1) continue;
         const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupId, candidate.id)).get();
         if (!heartbeat) continue;
         const runId = heartbeat.id;

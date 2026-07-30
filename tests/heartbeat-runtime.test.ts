@@ -14,7 +14,7 @@ import { NexotaoGatewayAdapter } from "../lib/runtime-adapter";
 async function fixture() {
   const dir = await mkdtemp(path.join(tmpdir(), "nexotao-heartbeat-test-"));
   const database = await openDatabase(path.join(dir, "nexotao.sqlite"), { migrateJson: false });
-  await database.write((db) => db.insert(projects).values({ id: "p", name: "Runtime", path: dir, mode: "single", agentSpecs: [], createdAt: 1 }).run());
+  await database.write((db) => db.insert(projects).values({ id: "p", name: "Runtime", path: dir, createdAt: 1 }).run());
   const repositories = new ControlPlaneRepositories(database);
   await repositories.agents.insert({ id: "a", projectId: "p", name: "Agent", role: "worker", scope: "Runtime", runtimeConfig: { concurrency: 1 }, createdAt: 2, updatedAt: 2 });
   for (const [id, identifier] of [["i1", "NX-1"], ["i2", "NX-2"]]) {

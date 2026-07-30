@@ -14,7 +14,7 @@ test("control-plane records survive a database restart", async () => {
   const file = path.join(dir, "nexotao.sqlite");
   try {
     let database = await openDatabase(file, { migrateJson: false });
-    await database.write((db) => db.insert(projects).values({ id: "project-1", name: "Example", path: dir, mode: "multi", agentSpecs: [], createdAt: 1 }).run());
+    await database.write((db) => db.insert(projects).values({ id: "project-1", name: "Example", path: dir, createdAt: 1 }).run());
     let repositories = new ControlPlaneRepositories(database);
     await repositories.agents.insert({ id: "agent-1", projectId: "project-1", name: "Lead", role: "lead", scope: "Lead", createdAt: 2, updatedAt: 2 });
     await repositories.issues.insert({ id: "issue-1", projectId: "project-1", identifier: "NX-1", title: "Persist", status: "todo", assigneeAgentId: "agent-1", createdAt: 3, updatedAt: 3 });
@@ -52,8 +52,8 @@ test("legacy JSON migration is idempotent and creates a recoverable backup", asy
   const file = path.join(dir, "nexotao.sqlite");
   try {
     await writeFile(path.join(dir, "projects.json"), JSON.stringify({ projects: [{ id: "p", name: "Legacy", path: dir, mode: "multi", agents: [], createdAt: 1 }] }));
-    await writeFile(path.join(dir, "agents.json"), JSON.stringify({ agents: [{ id: "a", projectId: "p", name: "Lead", role: "lead", scope: "Lead", reportsTo: null, createdAt: 2 }] }));
-    await writeFile(path.join(dir, "issues.json"), JSON.stringify({ issues: [{ id: "i", projectId: "p", ref: "NX-1", title: "Legacy issue", detail: "kept", parentId: null, assigneeAgentId: "a", createdByAgentId: "a", status: "todo", stage: "execute", blockedBy: [], runId: null, summary: "", createdAt: 3, updatedAt: 3 }] }));
+    await writeFile(path.join(dir, "agents.json"), JSON.stringify({ agents: [{ id: "a", projectId: "p", name: "Lead", role: "lead", scope: "Lead", createdAt: 2 }] }));
+    await writeFile(path.join(dir, "issues.json"), JSON.stringify({ issues: [{ id: "i", projectId: "p", ref: "NX-1", title: "Legacy issue", detail: "kept", parentId: null, assigneeAgentId: "a", status: "todo", stage: "execute", blockedBy: [], runId: null, summary: "", createdAt: 3, updatedAt: 3 }] }));
     let database = await openDatabase(file);
     assert.equal(new ControlPlaneRepositories(database).issues.get("i")?.description, "kept");
     await database.close();
