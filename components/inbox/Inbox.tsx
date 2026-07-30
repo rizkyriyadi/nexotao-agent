@@ -28,15 +28,17 @@ export function InboxPage() {
 
   return <main className="scroll-thin min-w-0 flex-1 overflow-y-auto p-6 lg:p-8">
     <div className="mx-auto max-w-5xl">
-      <div className="mb-7"><p className="label text-electric-indigo">Trust center</p><h1 className="mt-1 font-serif text-3xl text-charcoal">Approval Inbox</h1><p className="mt-2 text-sm text-pebble">Decisions and exceptions that need a human.</p></div>
-      {!total && <div className="rounded-2xl border border-line bg-raise/60 p-10 text-center text-sm text-pebble">Inbox zero. No action is waiting.</div>}
-      <Section title="Pending approvals" count={data.approvals.length} icon={<ShieldAlert className="size-4" />}>
+      <div className="mb-7"><p className="label text-electric-indigo">Attention</p><h1 className="mt-1 font-serif text-3xl text-charcoal">Needs you</h1><p className="mt-2 text-sm text-pebble">Runs that stopped and tasks waiting on a decision. Agents run on their own — switch a run to Ask or Plan mode to hold one back.</p></div>
+      {!total && <div className="rounded-2xl border border-line bg-raise/60 p-10 text-center text-sm text-pebble">Nothing is waiting on you.</div>}
+      {/* Agent mode no longer stops mid-run for a prompt, so this queue is
+          normally empty; it stays for the approvals a task can still carry. */}
+      {data.approvals.length > 0 && <Section title="Waiting on a decision" count={data.approvals.length} icon={<ShieldAlert className="size-4" />}>
         {data.approvals.map((item) => <article id={`approval-${item.id}`} key={item.id} className="rounded-2xl border border-line bg-raise/70 p-4">
           <div className="flex flex-wrap items-start justify-between gap-3"><div><div className="flex items-center gap-2"><Risk value={item.risk} /><b className="text-sm capitalize">{item.action}</b>{item.issue && <span className="text-xs text-pebble">{item.issue}</span>}</div><p className="mt-2 break-all font-mono text-xs text-charcoal">{item.target || "Unspecified target"}</p></div><Link href={item.href} className="text-pebble hover:text-charcoal"><ExternalLink className="size-4" /></Link></div>
           <pre className="scroll-thin mt-3 max-h-40 overflow-auto whitespace-pre-wrap rounded-xl bg-code-surface p-3 font-mono text-xs text-bark-grey">{item.preview || "No preview"}</pre>
           <div className="mt-3 flex justify-end gap-2"><Button variant="outline" size="sm" disabled={busy === item.id} onClick={() => void decide(item.id, "deny")}><X className="mr-1 size-3.5" />Deny</Button><Button size="sm" disabled={busy === item.id} onClick={() => void decide(item.id, "allow")}><Check className="mr-1 size-3.5" />Allow once</Button></div>
         </article>)}
-      </Section>
+      </Section>}
       <div className="mt-6 grid gap-6 lg:grid-cols-2">
         <Section title="Tasks" count={data.issues.length} icon={<AlertTriangle className="size-4" />}>{data.issues.map((item) => <Row key={item.id} href={item.href} title={`${item.identifier} · ${item.title}`} meta={`${item.status.replace("_", " ")} · ${item.priority}`} capitalizeMeta />)}</Section>
         <Section title="Failed or stale runs" count={data.runs.length} icon={<Clock3 className="size-4" />}>{data.runs.map((item) => <Row key={item.id} href={item.href} title={item.status} meta={item.error || item.id.slice(0, 8)} />)}</Section>

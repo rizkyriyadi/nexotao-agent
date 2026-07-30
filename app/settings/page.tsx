@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
-import { Switch } from "@/components/ui/switch";
 import { SearchKeyRow } from "@/components/settings/SearchKeyRow";
+import { ModeRow } from "@/components/settings/ModeRow";
 import { ModelRow } from "@/components/settings/ModelRow";
 import { ApiKeyRow } from "@/components/settings/ApiKeyRow";
 import { DataControls } from "@/components/settings/DataControls";
@@ -57,15 +57,16 @@ export default function Settings() {
             </Row>
           </Section>
 
-          <Section title="Safety">
-            <Row label="Ask before commands & edits" hint="The approval prompt is the safety model. Recommended.">
-              <Switch defaultChecked aria-label="Ask before commands and edits" />
-            </Row>
-            <Row label="Safe mode — Docker sandbox" hint="Run tools in a throwaway container. Slower; for untrusted repos.">
-              <Switch aria-label="Safe mode — Docker sandbox" />
-            </Row>
-            <Row label="Egress allow-list" hint="Domains the sandbox may reach. Deny-all by default.">
-              <span className="font-mono text-[12px] text-bark-grey">npmjs.org, github.com</span>
+          {/* No approval toggle here. These are agents: Agent mode runs on its
+              own, and the way to hold one back is to run it in Ask or Plan mode,
+              which is a per-run choice in the composer rather than a global
+              setting. The three switches that used to sit here were wired to
+              nothing at all — no state, no config key, no reader — so they
+              promised a Docker sandbox and an egress allow-list that do not
+              exist, and an approval prompt that Agent mode never showed. */}
+          <Section title="Execution">
+            <Row label="Default mode" hint="Agent runs on its own. Switch a run to Plan or Ask in the composer to keep it read-only.">
+              <ModeRow />
             </Row>
           </Section>
 

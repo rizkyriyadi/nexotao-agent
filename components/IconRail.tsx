@@ -23,7 +23,7 @@ const NAV = [
   { id: "board", href: "/board", label: "Control Panel", icon: Columns3 },
   { id: "work", href: "/work", label: "Work Items", icon: Table2 },
   { id: "team-room", href: "/team-room", label: "Live Team Room", icon: Users },
-  { id: "inbox", href: "/inbox", label: "Approval Inbox", icon: InboxIcon },
+  { id: "inbox", href: "/inbox", label: "Attention", icon: InboxIcon },
   { id: "agents", href: "/agents", label: "Agents", icon: Bot },
   { id: "marketplace", href: "/marketplace", label: "Marketplace", icon: Store },
   { id: "graph", href: "/graph", label: "Knowledge Graph", icon: Share2 },

@@ -8,10 +8,13 @@ import { getRun, type Run } from "./run-manager";
 export type ExecutionPolicy = "ask" | "allow" | "deny";
 /** Paperclip-style run modes. `agent` runs autonomously (auto-approve edits
  *  and commands), `plan` investigates read-only and writes a plan, `ask` just
- *  answers questions. Modes map onto the execution policy below. */
-export type AgentMode = "agent" | "plan" | "ask";
-export const AGENT_MODES: readonly AgentMode[] = ["agent", "plan", "ask"];
-export const DEFAULT_MODE: AgentMode = "agent";
+ *  answers questions. Modes map onto the execution policy below.
+ *
+ *  Defined in `./agent-mode` so the browser can import them without this
+ *  module's database dependencies coming with them; re-exported here so every
+ *  existing server-side import keeps working. */
+export { AGENT_MODES, DEFAULT_MODE, type AgentMode } from "./agent-mode";
+import type { AgentMode } from "./agent-mode";
 export type PolicyAction = "read" | "write" | "exec" | "network" | "destructive" | "control";
 export type PolicyRisk = "low" | "medium" | "high";
 export type PolicyDetails = { action: PolicyAction; target: string; risk: PolicyRisk; preview: string };
@@ -76,10 +79,13 @@ export function evaluateExecutionPolicy(policy: ExecutionPolicy, details: Policy
   // of "ask" still prompts: that mode is about the user vetting each call, not
   // about what the run promised.
   if (policy === "deny" && details.action === "network") return "allow";
-  // Auto ("allow") mode still routes genuinely catastrophic actions (rm -rf,
-  // mkfs, dd, shutdown, …) through an explicit approval prompt. Routine
-  // repo-scoped commands run without a prompt.
-  if (policy === "allow" && details.action === "destructive") return "ask";
+  // Agent mode runs on its own, including the destructive commands that used to
+  // be pulled aside for a prompt. These are agents: the way to stop one acting
+  // is to run it in Ask or Plan mode, not to have Agent mode stop halfway and
+  // wait for a click nobody was watching for. `describeToolAction` still marks
+  // rm -rf, mkfs, dd and shutdown as destructive and high risk, so they remain
+  // legible in the audit trail — the classification is kept, the interruption
+  // is not.
   return policy;
 }
 
