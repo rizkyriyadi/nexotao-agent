@@ -13,7 +13,7 @@ export type LogItem =
   | { kind: "text"; text: string }
   | { kind: "tool"; id: string; name: string; target: string; status: "running" | "done" | "error"; display?: string; input?: unknown; output?: string }
   | { kind: "event"; tone: "neutral" | "success" | "error"; label: string; detail?: string }
-  // The agent's closing report — the one block that tells the user what happened.
+  // Only for a run that hit its step limit: what it finished, what it did not.
   | { kind: "summary"; text: string }
   // The before-picture of the folder could not be taken, so this run has no
   // Revert behind it. Emitted before the agent starts, because it is a warning.
@@ -160,17 +160,18 @@ function ToolBlock({ items }: { items: ToolItem[] }) {
   );
 }
 
-/* ── closing report ──────────────────────────────────────────── */
+/* ── what was left undone ────────────────────────────────────── */
 
-/** The agent's report back to the user, written after the work in a turn of its
- *  own. Set apart from the running commentary above it because it is the part
- *  the user actually came for — previously there was no such block at all, and a
- *  run just stopped mid-thought. */
+/** Written only when the run hit its step limit: the text above it stops in the
+ *  middle of a thought, so this says what got done, what did not, and what to do
+ *  next. A run that finished does not produce one — its own closing words are
+ *  already the answer, and restating them under a heading read as a second,
+ *  slightly different reply the user had to reconcile against the first. */
 function SummaryBlock({ text }: { text: string }) {
   return (
-    <div className="rounded-xl border border-electric-indigo/25 bg-mist-lavender/30 px-3.5 py-3">
-      <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-electric-indigo">
-        <Flag className="size-3" /> Result
+    <div className="rounded-xl border border-amber/40 bg-amber/[0.07] px-3.5 py-3">
+      <p className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-bark-grey">
+        <Flag className="size-3" /> Where this run stopped
       </p>
       <div className="text-[13.5px] leading-relaxed text-charcoal"><Markdown>{text}</Markdown></div>
     </div>

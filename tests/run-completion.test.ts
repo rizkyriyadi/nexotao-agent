@@ -40,14 +40,28 @@ test("an unfinished task lands in review rather than done", () => {
   assert.equal(settledIssueStatus({ ok: true, truncated: true, requeue: true }), "in_review");
 });
 
-/* ── the closing report ──────────────────────────────────────────────────── */
+/* ── the report on a run that stopped short ──────────────────────────────────
+ * There was a time when every run ended with one of these, finished or not. It
+ * cost a second pass over the whole conversation to be told the same thing the
+ * agent had just said in its own last paragraph, and the user read it as a
+ * second, subtly different answer to reconcile against the first. Only a run
+ * that ran out of steps has anything left to add. */
 
-test("the closing summary is its own event, not another text delta", () => {
-  // Deltas are appended as they stream; the summary is written afterwards in a
-  // turn of its own. Were it a delta the transcript would append it to whatever
+test("the report is its own event, not another text delta", () => {
+  // Deltas are appended as they stream; this is written afterwards in a turn of
+  // its own. Were it a delta the transcript would append it to whatever
   // half-sentence preceded it instead of setting it apart.
   assert.ok(!TEXT_DELTA_EVENT_TYPES.has(RUN_SUMMARY_EVENT_TYPE));
   assert.ok(TEXT_DELTA_EVENT_TYPES.has("reasoning_summary"));
+});
+
+test("only a run that ran out of steps gets one", () => {
+  // The agent's system prompt already has it close with a summary of its own, so
+  // a finished run has answered. Asking again bought a paraphrase, per run, at
+  // the price of one full-conversation request.
+  const writesReport = (completion: string) => completion === "truncated";
+  assert.ok(writesReport("truncated"), "its text stops mid-thought — nothing else can say what is left");
+  assert.ok(!writesReport("complete"));
 });
 
 /* ── a run with no way back ──────────────────────────────────────────────────

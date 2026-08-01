@@ -167,23 +167,28 @@ export async function toolLoop(opts: {
   return { text: full, completion: "truncated" };
 }
 
-/** One final turn with no tools, asking the agent to report back. Its own words,
- *  written knowing the work is over — which is what the user actually wants at
- *  the end of a run, and what a stream of mid-task thinking never gave them.
+/** One final turn with no tools, for a run that stopped mid-task: what got done,
+ *  what did not, and the one step to take next.
+ *
+ *  Only for that case. A run that finished has already answered — the system
+ *  prompt tells the agent to close with a summary of its own — and asking the
+ *  model to summarise its own summary bought a second copy of the same answer in
+ *  different words, at the price of one full-conversation request per run. A run
+ *  cut off at the step limit is the opposite: the text so far is not an answer,
+ *  it stops in the middle of a thought, and nothing else in the transcript can
+ *  say what was left undone.
+ *
  *  Never throws: a run that did the work must not fail on its epilogue. */
-async function writeClosingSummary(opts: {
+async function writeUnfinishedReport(opts: {
   run: Run;
   apiKey: string;
   model: string;
   system: string;
   convo: Msg[];
   thread: string;
-  truncated: boolean;
 }): Promise<string> {
-  const { run, apiKey, model, system, convo, thread, truncated } = opts;
-  const ask = truncated
-    ? "You have run out of steps for this run. Write a short report for the user: what you completed, what is still unfinished, and the single next step. Plain prose, no tools."
-    : "The work is done. Write a short report for the user: what you did, anything they should know, and what to check. Plain prose, no tools.";
+  const { run, apiKey, model, system, convo, thread } = opts;
+  const ask = "You have run out of steps for this run. Write a short report for the user: what you completed, what is still unfinished, and the single next step. Plain prose, no tools.";
   try {
     const turn = await streamAssistantTurn({
       apiKey, model, system,
@@ -236,10 +241,10 @@ export async function runAgent(opts: { run: Run; messages: Msg[]; model: string;
       onProgress: (full) => persist(full),
     });
     // Even in chat, a run that stopped mid-task owes the user a word about it.
-    const summary = await writeClosingSummary({
-      run: opts.run, apiKey: opts.apiKey, model: opts.model, system, convo,
-      thread: "agent", truncated: completion === "truncated",
-    });
+    // One that finished does not: its own last turn is already the answer.
+    const summary = completion === "truncated"
+      ? await writeUnfinishedReport({ run: opts.run, apiKey: opts.apiKey, model: opts.model, system, convo, thread: "agent" })
+      : "";
     if (summary) opts.run.push({ type: "summary", text: summary, thread: "agent" });
     const reply = [text, summary].filter(Boolean).join("\n\n");
     persist(reply || "(no response)", true);
@@ -308,12 +313,13 @@ export async function runIssueAgent(opts: {
     handlers: {},
   });
 
-  // The closing report is the whole point of the run for the user: it is written
-  // after the work, knowing how it went, instead of trailing off mid-thought.
-  const summary = await writeClosingSummary({
-    run: opts.run, apiKey: opts.apiKey, model: opts.model, system, convo,
-    thread: "lead", truncated: completion === "truncated",
-  });
+  // Only a run that ran out of steps gets an epilogue. A finished one has said
+  // its piece — the system prompt has it close with a summary — and a second
+  // pass over the same conversation returned the same answer reworded, which
+  // read as noise the user had to reconcile against what they had just read.
+  const summary = completion === "truncated"
+    ? await writeUnfinishedReport({ run: opts.run, apiKey: opts.apiKey, model: opts.model, system, convo, thread: "lead" })
+    : "";
   if (summary) opts.run.push({ type: "summary", text: summary, thread: "lead" });
 
   return { text: text || "(done)", summary, completion };
