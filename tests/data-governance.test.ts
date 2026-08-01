@@ -200,8 +200,11 @@ test("deleting a project removes its graph files and code index, and a failed pu
     assert.equal(outcome.deleted.codeIndex, 1, "and its code index with it");
     assert.deepEqual(dropped, ["p"], "the index dropped is the one keyed by this project");
     assert.equal(await stat(graphDir).then(() => true, () => false), false, "nothing is left on disk");
-    // The user is told about the one thing we deliberately do not touch.
-    assert.match(outcome.integrityNote, /worktrees/);
+    // The user is told about the trace we leave inside their own repository and
+    // about the one thing we deliberately do not touch — the files themselves,
+    // which are theirs and stay exactly where the run put them.
+    assert.match(outcome.integrityNote, /refs\/nexotao\//);
+    assert.match(outcome.integrityNote, /left exactly as they are/);
     // The existing row counts still ride in the same record, so the settings
     // page's Object.values reduce picks the new keys up unchanged.
     assert.equal(outcome.deleted.agents, 0);

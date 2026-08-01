@@ -259,19 +259,19 @@ export type IssueAgentMode =
   | "lead-plan-doc" // Plan mode: the agent investigates read-only and writes a plan.
   | "lead-ask";     // Ask mode: the agent answers read-only, changing nothing.
 
-/** Rewrite any absolute path into the run's own workspace as a project-relative
- *  one, for text that outlives the run.
+/** Rewrite any absolute path into the project folder as a project-relative one,
+ *  for text that outlives the run.
  *
- *  Every run gets its own copy of the project, at a path that stops existing
- *  once the run is cleaned up. Text quoting "/…/worktrees/nx-12-<runId>/API.md"
- *  therefore points a later reader — the next run, or the user in their own
- *  folder — at a directory that is not there. The relative path is the one that
- *  stays true, so it is rewritten on the way out. */
+ *  A summary quoting "/Users/someone/code/api/API.md" is a fact about one
+ *  machine. It reads as noise to anyone whose checkout is somewhere else, and it
+ *  is the kind of thing a later run will copy into a file it writes. "./API.md"
+ *  is the same fact, still true on every machine, so it is rewritten on the way
+ *  out. */
 export function relativizeWorkspacePaths(detail: string, root: string): string {
   const trimmed = root.replace(/[\\/]+$/, "");
   if (!trimmed) return detail;
-  // On Windows the root arrives as `D:\…\worktrees\nx-12-<runId>` while the
-  // model, told to write POSIX paths, may echo either separator back — so both
+  // On Windows the root arrives as `D:\Users\someone\code\api` while the model,
+  // told to write POSIX paths, may echo either separator back — so both
   // spellings of the same root are stripped. Matching only `/` left every
   // Windows path untouched, which is the failure this function exists to stop.
   const spellings = new Set([trimmed, trimmed.replace(/\//g, "\\"), trimmed.replace(/\\/g, "/")]);

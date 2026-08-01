@@ -3,7 +3,8 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { openDatabase } from "../lib/db/database";
+import initSqlJs from "sql.js/dist/sql-asm.js";
+import { applyMigrations, migrations, openDatabase } from "../lib/db/database";
 import { ControlPlaneRepositories } from "../lib/db/repositories";
 import { projects } from "../lib/db/schema";
 
@@ -64,4 +65,87 @@ test("legacy JSON migration is idempotent and creates a recoverable backup", asy
     assert.match(await readFile(path.join(dir, "backups", backups[0], "issues.json"), "utf8"), /Legacy issue/);
     await database.close();
   } finally { await rm(dir, { recursive: true, force: true }); }
+});
+
+/* ── migration 12: the worktree columns go, the snapshot columns arrive ───────
+ * Every install that has ever run a task is on version 11 with a `git_workspaces`
+ * row per run and a branch name on every issue. Those rows describe worktrees
+ * this release stops creating, on branches nothing will ever merge — but they
+ * sit in the same tables as the user's actual work, so the interesting question
+ * is not whether they are dropped. It is whether everything beside them survives
+ * being dropped, on SQLite, where a DROP COLUMN rewrites the table. */
+
+const columnsOf = (raw: any, table: string): string[] =>
+  (raw.exec(`PRAGMA table_info(${table})`)[0]?.values ?? []).map((row: unknown[]) => String(row[1]));
+
+const tableExists = (raw: any, table: string) =>
+  Boolean(raw.exec(`SELECT name FROM sqlite_master WHERE type='table' AND name='${table}'`)[0]?.values.length);
+
+/** A database at version 11 with one project's worth of real work in it, plus
+ *  the worktree bookkeeping migration 12 exists to remove. */
+async function databaseAtV11() {
+  const SQL = await initSqlJs();
+  const raw = new SQL.Database();
+  applyMigrations(raw, migrations.filter((m) => m.version <= 11));
+  raw.run("INSERT INTO projects (id, name, path, created_at) VALUES ('p', 'Example', '/tmp/example', 1)");
+  raw.run("INSERT INTO agents (id, project_id, name, role, scope, created_at, updated_at) VALUES ('a', 'p', 'Hutao', 'lead', 'Lead', 2, 2)");
+  raw.run(`INSERT INTO issues (id, project_id, identifier, title, status, summary, created_at, updated_at,
+    workspace_path, workspace_branch, workspace_base_commit, workspace_commit, verification_status)
+    VALUES ('i', 'p', 'NX-1', 'Ship it', 'in_review', 'done the thing', 3, 3,
+    '/home/u/.nexotao/worktrees/abc/nx-1', 'nexotao/nx-1/run-1', 'aaa', 'bbb', 'passed')`);
+  raw.run(`INSERT INTO heartbeat_runs (id, agent_id, issue_id, source, status, started_at, workspace_path, workspace_branch)
+    VALUES ('run-1', 'a', 'i', 'assignment', 'done', 4, '/home/u/.nexotao/worktrees/abc/nx-1', 'nexotao/nx-1/run-1')`);
+  raw.run(`INSERT INTO git_workspaces (id, project_id, issue_id, run_id, repository_path, workspace_path, branch, target_branch, base_commit, state, created_at, updated_at)
+    VALUES ('w', 'p', 'i', 'run-1', '/home/u/code/app', '/home/u/.nexotao/worktrees/abc/nx-1', 'nexotao/nx-1/run-1', 'main', 'aaa', 'ready', 5, 5)`);
+  return raw;
+}
+
+test("migration 12 retires the worktree bookkeeping and leaves the work beside it", async () => {
+  const raw = await databaseAtV11();
+  try {
+    assert.ok(tableExists(raw, "git_workspaces"), "the fixture really is a version-11 database");
+
+    applyMigrations(raw, migrations);
+
+    assert.equal(tableExists(raw, "git_workspaces"), false);
+    for (const column of ["workspace_path", "workspace_branch", "workspace_base_commit", "workspace_commit", "verification_status"]) {
+      assert.ok(!columnsOf(raw, "issues").includes(column), `issues.${column} is gone`);
+    }
+    for (const column of ["workspace_path", "workspace_branch"]) {
+      assert.ok(!columnsOf(raw, "heartbeat_runs").includes(column), `heartbeat_runs.${column} is gone`);
+    }
+    assert.ok(columnsOf(raw, "heartbeat_runs").includes("snapshot_commit"));
+    assert.ok(columnsOf(raw, "heartbeat_runs").includes("snapshot_head"));
+
+    // The rows themselves — a DROP COLUMN rewrites the table, so this is the
+    // assertion that matters: the user's issue and its run are still there, with
+    // the fields they had, and the issue is still parked where the run left it.
+    const issue = raw.exec("SELECT identifier, title, status, summary FROM issues WHERE id = 'i'")[0]?.values[0];
+    assert.deepEqual(issue, ["NX-1", "Ship it", "in_review", "done the thing"]);
+    const run = raw.exec("SELECT agent_id, issue_id, status, snapshot_commit FROM heartbeat_runs WHERE id = 'run-1'")[0]?.values[0];
+    assert.deepEqual(run, ["a", "i", "done", null], "the new columns start empty rather than invented");
+
+    // And a snapshot can actually be recorded against that run — the column is a
+    // real column, not just a name in PRAGMA output.
+    raw.run("UPDATE heartbeat_runs SET snapshot_commit = 'cafe', snapshot_head = 'beef' WHERE id = 'run-1'");
+    assert.deepEqual(
+      raw.exec("SELECT snapshot_commit, snapshot_head FROM heartbeat_runs WHERE id = 'run-1'")[0]?.values[0],
+      ["cafe", "beef"],
+    );
+  } finally { raw.close(); }
+});
+
+test("migration 12 runs once, however many times the app starts", async () => {
+  const raw = await databaseAtV11();
+  try {
+    applyMigrations(raw, migrations);
+    // The second pass is the one that would throw: `DROP COLUMN` on a column that
+    // is already gone is an error, and `ADD COLUMN` on one that already exists is
+    // a duplicate. Nothing here is guarded by IF EXISTS — the version table is
+    // what makes it safe, so this is a test of that table.
+    applyMigrations(raw, migrations);
+    applyMigrations(raw, migrations);
+    assert.deepEqual(raw.exec("SELECT COUNT(*) FROM schema_migrations WHERE version = 12")[0]?.values[0], [1]);
+    assert.deepEqual(raw.exec("SELECT identifier FROM issues WHERE id = 'i'")[0]?.values[0], ["NX-1"]);
+  } finally { raw.close(); }
 });

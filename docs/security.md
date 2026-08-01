@@ -26,9 +26,15 @@ Gateway itself.
 - **Loopback binding.** The CLI starts the server bound to `127.0.0.1` on port `4319` (override with
   `PORT`). It does not listen on any external interface.
 - **Host validation.** Every request must carry a `Host` header matching the expected host
-  (`NEXOTAO_ALLOWED_HOST`, e.g. `127.0.0.1:4319`); mismatches are rejected with `403`.
+  (`NEXOTAO_ALLOWED_HOST`, e.g. `127.0.0.1:4319`); mismatches are rejected with `403`. The loopback
+  names `127.0.0.1`, `localhost` and `::1` are treated as the same host **on the same port**, so
+  typing either one reaches the app. This does not widen exposure — the server still listens only on
+  loopback — and a different port is still a different server. Because the session cookie is scoped
+  to one host name, a navigation arriving on an alias is redirected to the canonical host so the
+  cookie applies.
 - **Origin validation.** State-changing requests (non-GET/HEAD/OPTIONS) must present an `Origin`
-  matching the local host, defending against cross-site request forgery from a browser tab.
+  whose scheme and authority match the host serving the page, defending against cross-site request
+  forgery from a browser tab. The `Origin` is parsed rather than string-compared.
 - **Request-size limits.** State-changing requests must declare a `Content-Length`; requests without
   one are rejected (`411`) and requests over the limit (`NEXOTAO_MAX_REQUEST_BYTES`, default 8 MiB)
   are rejected (`413`).

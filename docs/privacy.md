@@ -18,12 +18,31 @@ Contents:
 | `config.json` | Local configuration: your Nexotao API key, selected model, onboarding state, active project, an optional web-search key, and retention settings. Written with file mode `0600`. |
 | `nexotao.sqlite` | The application database: projects, sessions, tasks, runs, agents, issues, approvals, cost events, and the redacted activity log. Written with file mode `0600`. |
 | `graph/<projectId>/` | The project's work-history graph: tasks, runs, agents, and the links between them. |
-| `worktrees/` | Throwaway git checkouts, one per run, so a run never edits your working tree directly. |
+| `worktrees/` | Only on installs that ran a version before 0.18. Throwaway git checkouts, one per run, from when runs did not edit your folder directly. Nothing writes here any more; `nexotao uninstall` still releases whatever is left. |
 | `tools/` | The optional code-index CLI, if you chose to install it. |
 | `backups/json-v1-<timestamp>/` | A one-time backup of legacy JSON files created during migration to SQLite (if applicable). |
 
 The data directory is created with mode `0700` (owner-only). See [storage.md](storage.md) for schema
 detail and portability.
+
+**What lives inside your own repository.** Runs edit your project folder directly, and the only way
+back is a before-picture taken first. That picture is stored where the files are: a dangling commit
+under `refs/nexotao/snapshots/<runId>` in your repository, one per run. It is built with git plumbing
+against a throwaway index, so nothing you can see moves — not your working tree, not your staged
+changes, not `HEAD`, not any branch, and `git status` / `git branch` / `git log` are unchanged by it.
+
+Two consequences worth stating plainly, because they are the only traces Nexotao leaves outside its
+own data directory:
+
+- These refs are **visible** in your repository. `git for-each-ref refs/nexotao/` lists them.
+- They **travel with a mirror push**. An ordinary `git push` ignores them, but `git push --mirror`
+  copies every ref, including these. If you mirror a repository to a host where the run's
+  intermediate state should not go, delete them first: `git for-each-ref --format='%(refname)'
+  refs/nexotao/ | xargs -n1 git update-ref -d`.
+
+They are collected on their own: refs whose task is still waiting for your review are held so Revert
+stays available, and the rest are dropped once they are older than 14 days. Deleting a project
+removes its refs, and `nexotao uninstall` removes them from every repository it knows about.
 
 **One exception.** If you install the optional code index, it stores a symbol-level map of your
 source — function and class names, file and line ranges, and the call graph between them — in
@@ -86,23 +105,27 @@ You have two levels of deletion:
    explicit confirmation and returns a report of exactly what was removed and what was retained. The
    append-only audit activity is intentionally retained as the durable record of what happened; all
    other project records — including redacted run events and document history — are removed. The
-   project's graph directory and its code index are removed with it. Git worktrees are keyed by
-   repository rather than by project, so they are left in place and the report says so.
+   project's graph directory, its code index, and the `refs/nexotao/` refs in its folder are removed
+   with it. Files a run wrote into that folder are yours and are left exactly as they are; the report
+   says so.
 2. **Full removal.** Stop the app and run `nexotao uninstall`. It shows exactly what it will
-   remove, asks you to type `UNINSTALL`, and stops without deleting anything if a worktree still
-   holds uncommitted work (`--force` overrides, `--dry-run` shows the plan and stops). It then
-   releases every managed worktree back to the repository that owns it, deletes the data directory
-   (`~/.nexotao` or your `NEXOTAO_DATA_DIR`) including the database, configuration, your API key,
-   work graphs and backups, removes only the `nexotao-idx-*` files from
+   remove, asks you to type `UNINSTALL`, and stops without deleting anything if an old worktree
+   still holds uncommitted work (`--force` overrides, `--dry-run` shows the plan and stops). It then
+   hands back what it left inside your repositories — the `refs/nexotao/` refs in every project it
+   knows about, and any worktrees and `nexotao/*` branches left by versions before 0.18 — deletes
+   the data directory (`~/.nexotao` or your `NEXOTAO_DATA_DIR`) including the database,
+   configuration, your API key, work graphs and backups, removes only the `nexotao-idx-*` files from
    `~/.cache/codebase-memory-mcp/`, and uninstalls the npm package. Your own code, commits and
    branches are not touched, and neither are code indexes in that cache that Nexotao did not create.
 
-   Removing the data directory by hand is not equivalent. Nexotao registers Git worktrees inside
-   your own repositories, and deleting those directories without releasing them first leaves each
-   affected repository with a stranded worktree registry and dangling `nexotao/*` branches. If you
-   do remove things manually, run `git worktree remove --force <path>`, `git worktree prune` and
-   `git branch -D nexotao/…` in each repository first, and delete only the `nexotao-idx-*` files
-   from the shared cache — anything else there belongs to your own tooling.
+   Removing the data directory by hand is not equivalent. What Nexotao leaves inside your own
+   repositories is not in that folder — the undo refs above, plus a stranded worktree registry and
+   dangling `nexotao/*` branches if you ever ran a version before 0.18 — and deleting the database
+   destroys the only record of which repositories those are. If you do remove things manually, first
+   run `git for-each-ref --format='%(refname)' refs/nexotao/ | xargs -n1 git update-ref -d` in each
+   project folder (plus `git worktree remove --force <path>`, `git worktree prune` and
+   `git branch -D nexotao/…` if you have worktrees), and delete only the `nexotao-idx-*` files from
+   the shared cache — anything else there belongs to your own tooling.
 
 ## Exporting your data
 

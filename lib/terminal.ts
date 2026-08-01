@@ -125,8 +125,9 @@ function shellCommand(): [string, string[]] {
  *  A cwd that no longer exists fails the spawn with `spawn <shell> ENOENT` —
  *  naming the shell, not the folder, because that is the file `execve` reports.
  *  Read literally it sends everyone hunting for a missing shell binary that is
- *  sitting right there. It happens for an ordinary reason: the panel opens on a
- *  run's worktree, and a worktree is removed when its run is cleaned up.
+ *  sitting right there. It happens for an ordinary reason: the panel opens on
+ *  the project folder, and a folder can be moved, renamed or deleted between the
+ *  time the project was registered and the time someone opens a terminal in it.
  *
  *  Falling back to the home directory keeps the terminal usable, and the note
  *  says which folder went missing so the substitution is visible rather than a

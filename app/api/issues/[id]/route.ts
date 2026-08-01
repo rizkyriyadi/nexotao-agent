@@ -11,6 +11,8 @@ import {
 import { createIssue, getIssue, listAgents, listIssues } from "@/lib/issues";
 import { getActiveProject } from "@/lib/store";
 import { readPendingWakeups, resolveBlockedAttention } from "@/lib/blocker-attention-source";
+import { changedSince } from "@/lib/run-snapshot";
+import { expandHome } from "@/lib/paths";
 
 export const runtime = "nodejs";
 
@@ -45,8 +47,24 @@ export async function GET(_request: Request, context: Context) {
     id, allIssues, agents, readPendingWakeups(database, allIssues.map((candidate) => candidate.id)),
   );
 
+  // A count, not the diff. This response is polled every couple of seconds and
+  // a hundred files of before-and-after text has no business riding along with
+  // it; the panel fetches the real diff from `/changes` when it is opened.
+  //
+  // Sent whatever the status is. A task in `auto` mode finishes as `done` and
+  // still has changes to show and revert, and `in_review` is also where a run
+  // that merely ran out of steps lands, with nothing to decide at all — so the
+  // client must never infer one from the other.
+  const snapshotRun = repositories.latestSnapshotForIssue(id);
+  const changes = snapshotRun?.snapshotCommit
+    ? await changedSince(expandHome(project.path), snapshotRun.snapshotCommit, snapshotRun.id)
+      .then((files) => ({ available: true, fileCount: files.length, runId: snapshotRun.id }))
+      .catch(() => ({ available: false, fileCount: 0, runId: snapshotRun.id }))
+    : null;
+
   return NextResponse.json({
     issue,
+    changes,
     project: { id: project.id, name: project.name, path: project.path, branch },
     agents,
     issues: allIssues,
@@ -94,6 +112,11 @@ export async function POST(request: Request, context: Context) {
     });
     return NextResponse.json({ child }, { status: 201 });
   }
+
+  // Keep / Revert / Revert & retry live at `/changes`, next to the diff they act
+  // on. They used to be here as `approve` / `request-changes`, back when the
+  // decision was about a commit waiting to land rather than files already in the
+  // user's folder.
 
   if (body.action === "approval" && typeof body.approvalId === "string" && (body.decision === "approved" || body.decision === "rejected")) {
     const current = database.read((db) => db.select().from(approvals).where(and(eq(approvals.id, body.approvalId as string), eq(approvals.issueId, id))).get());

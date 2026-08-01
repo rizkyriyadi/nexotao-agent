@@ -40,6 +40,10 @@ export class DurableHeartbeatRuntime {
   async initialize() {
     if (this.initialized) return;
     await this.repositories.recoverOrphanedHeartbeats();
+    // Immediately after recovery and before the first drain: a run that took the
+    // process down with it has just been requeued with its attempt count intact,
+    // and this is what stops the next claim from taking the server down again.
+    await this.repositories.abandonExhaustedHeartbeats();
     // Requeued work keeps its checkout; anything still `in_progress` behind a
     // run that will never resume is released here, so a restart never leaves a
     // task falsely reporting as running.
@@ -128,8 +132,11 @@ export class DurableHeartbeatRuntime {
     return true;
   }
 
+  /** A person asking for a retry gets a fresh attempt budget: they have usually
+   *  changed something, and refusing to run because an earlier crash used up the
+   *  count would leave them with a button that does nothing. */
   async retry(runId: string, availableAt: number, error?: string) {
-    const requeued = await this.repositories.requeueHeartbeat(runId, availableAt, error);
+    const requeued = await this.repositories.requeueHeartbeat(runId, availableAt, error, true);
     if (requeued) void this.drain();
     return requeued;
   }

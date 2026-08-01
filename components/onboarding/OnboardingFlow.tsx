@@ -36,8 +36,11 @@ export function OnboardingFlow() {
 
   const [saving, setSaving] = useState(false);
 
-  const projectName = choice === "fresh" ? name : browsePath.split("/").filter(Boolean).pop() || "project";
-  const projectPath = choice === "fresh" ? `~/code/${name}` : browsePath;
+  // The browser sends back whatever separator the host OS uses, so splitting on
+  // "/" alone turned every Windows path into one long folder name.
+  const folderName = browsePath.split(/[/\\]/).filter(Boolean).pop() || "project";
+  const projectName = choice === "fresh" ? name.trim() || "my-app" : folderName;
+  const projectPath = choice === "fresh" ? `~/code/${projectName}` : browsePath;
 
   useEffect(() => {
     fetch("/api/models")
@@ -71,7 +74,7 @@ export function OnboardingFlow() {
   async function finish() {
     setSaving(true);
     try {
-      await fetch("/api/config", {
+      const response = await fetch("/api/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -81,9 +84,18 @@ export function OnboardingFlow() {
           project: { name: projectName, path: projectPath },
         }),
       });
+      // A failed save used to fall straight through to the redirect: home saw
+      // `onboarded: false`, bounced back here, and the typed key was gone with
+      // no error ever shown. Stay on the step and say what happened instead.
+      if (!response.ok) {
+        const reason = await response.json().then((d) => d?.error).catch(() => null);
+        toast.error(reason || `Couldn't save your setup (${response.status}).`);
+        setSaving(false);
+        return;
+      }
       router.push("/");
     } catch {
-      toast.error("Couldn't save config.");
+      toast.error("Couldn't reach the local server. Is it still running?");
       setSaving(false);
     }
   }

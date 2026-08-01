@@ -31,10 +31,12 @@ const SOURCE_CAP = 4_000;
 /**
  * Which project's index answers for a run rooted at `root`.
  *
- * Runs execute in throwaway worktrees, so the run root is usually not any
- * project's path — canonicalRoot maps it back to the owning repo first. The
- * active project is a fallback, not the primary answer: in a workspace with
- * several projects the active one may not be the one this run is executing in.
+ * A run's root is the project folder, so this is usually a direct match — but
+ * the folder can be a subdirectory or a linked worktree of a repository the
+ * project is registered under, so canonicalRoot maps it to the owning repo
+ * first. The active project is a fallback, not the primary answer: in a
+ * workspace with several projects the active one may not be the one this run is
+ * executing in.
  */
 export async function resolveProjectId(root: string): Promise<string | null> {
   try {

@@ -19,9 +19,11 @@
 // reclaims only the supervisor, the workers survive it. Boot runs this again.
 // The reported end state was Windows error `0xC000012D` — STATUS_COMMITMENT_LIMIT,
 // the whole machine out of committed memory — after which the shell could no
-// longer fork at all: `CreateProcessW failed`, and git dying mid-`worktree add`
-// with "Could not reset index file to revision 'HEAD'" because it could not get
-// memory to write a five-thousand-entry index.
+// longer fork at all: `CreateProcessW failed`, and git, which that version ran to
+// provision a worktree per run, dying with "Could not reset index file to
+// revision 'HEAD'" because it could not get memory to write a five-thousand-entry
+// index. Runs no longer provision anything, but the indexer still forks per core
+// and the timeout still has to reach every one of them.
 //
 // `taskkill /T` is the Windows equivalent of signalling a process group: it
 // walks the child list the kernel already maintains and terminates the tree.

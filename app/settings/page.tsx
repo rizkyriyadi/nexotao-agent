@@ -2,6 +2,7 @@ import Link from "next/link";
 import { AppShell } from "@/components/AppShell";
 import { SearchKeyRow } from "@/components/settings/SearchKeyRow";
 import { ModeRow } from "@/components/settings/ModeRow";
+import { ReviewModeRow } from "@/components/settings/ReviewModeRow";
 import { ModelRow } from "@/components/settings/ModelRow";
 import { ApiKeyRow } from "@/components/settings/ApiKeyRow";
 import { CodeIndexRow } from "@/components/settings/CodeIndexRow";
@@ -78,6 +79,9 @@ export default function Settings() {
           <Section title="Execution">
             <Row label="Default mode" hint="Agent runs on its own. Switch a run to Plan or Ask in the composer to keep it read-only.">
               <ModeRow />
+            </Row>
+            <Row label="After a run" hint="Review: the task waits for you to look at what changed. Auto: the task finishes on its own — the diff and Revert are still there, they just stop waiting.">
+              <ReviewModeRow />
             </Row>
           </Section>
 

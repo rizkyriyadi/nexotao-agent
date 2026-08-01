@@ -10,7 +10,12 @@ export const runtime = "nodejs";
  *  The folder is resolved server-side from the same `activeRoot` the file tree
  *  uses, never from a path in the request body: a terminal that spawns wherever
  *  the client asks is a shell on the whole machine handed to anything that can
- *  reach the port. */
+ *  reach the port.
+ *
+ *  That folder is now always the project the user has open. It used to be the
+ *  running task's worktree, which is why `npm test` in this panel failed with
+ *  nothing installed — `git worktree add` checks out tracked files only, so
+ *  `node_modules/` and `.env` were never there. */
 export async function POST(request: Request) {
   let body: Record<string, unknown>;
   try { body = await request.json(); } catch { return NextResponse.json({ error: "Invalid JSON" }, { status: 400 }); }

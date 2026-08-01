@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import type { LogItem } from "./transcript";
 import {
-  RUN_EXCLUSION_EVENT_TYPE, RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
-  TEXT_DELTA_EVENT_TYPES, runOutcomeChip,
+  RUN_EXCLUSION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_REVIEW_EVENT_TYPE,
+  RUN_SNAPSHOT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, TEXT_DELTA_EVENT_TYPES, runOutcomeChip,
 } from "@/lib/run-transcript";
 
 export type Approval = { runId: string; id: string; name: string; input: any } | null;
@@ -77,17 +77,22 @@ export function useRunStream(runId: string | null | undefined, opts?: { live?: b
         const text = String(e.summary ?? "").trim();
         if (text) setLog((prev) => prev.some((i) => i.kind === "summary") ? prev : [...prev, { kind: "summary", text }]);
       }
-      // Written after the agent stopped, so it lands below the closing report —
-      // which is exactly where it belongs: "here is what I did" then "and here is
-      // why you can't see it in your folder yet".
-      else if (type === RUN_INTEGRATION_EVENT_TYPE) {
-        const branch = String(e.branch ?? "").trim();
+      // Emitted before the agent starts, so it lands at the top of the run —
+      // which is right: "there is no way back from what follows" is a warning,
+      // not a result.
+      else if (type === RUN_SNAPSHOT_EVENT_TYPE) {
         const reason = String(e.reason ?? "").trim();
-        if (branch && reason) setLog((prev) => prev.some((i) => i.kind === "integration") ? prev : [...prev, { kind: "integration", branch, reason }]);
+        if (reason) setLog((prev) => prev.some((i) => i.kind === "snapshot") ? prev : [...prev, { kind: "snapshot", reason, detail: String(e.detail ?? "").trim() }]);
       }
-      // Also written after the agent stopped. Sits above the integration block:
-      // "these files were held back" is about the commit, which is the thing the
-      // integration block then reports on the fate of.
+      // Written after the agent stopped, so it lands below the closing report:
+      // "here is what I did", then "and here is what you need to decide".
+      else if (type === RUN_REVIEW_EVENT_TYPE) {
+        const files = Array.isArray(e.files) ? e.files.map(String).filter(Boolean) : [];
+        if (files.length) setLog((prev) => prev.some((i) => i.kind === "review") ? prev : [...prev, { kind: "review", files }]);
+      }
+      // Also written after the agent stopped, and independent of the review
+      // block: a run whose every write was refused produces no review block at
+      // all, which is exactly the case this one has to cover.
       else if (type === RUN_EXCLUSION_EVENT_TYPE) {
         const files = Array.isArray(e.files) ? e.files.map(String).filter(Boolean) : [];
         if (files.length) setLog((prev) => prev.some((i) => i.kind === "exclusion") ? prev : [...prev, { kind: "exclusion", files }]);

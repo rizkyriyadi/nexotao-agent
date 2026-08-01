@@ -17,9 +17,33 @@ The directory is created with mode `0700` (owner-only) and re-chmodded on write.
 | `config.json` | Local configuration: API key, selected model, onboarding state, active project, optional search key, retention settings. Mode `0600`. |
 | `nexotao.sqlite` | The application database (SQLite). Mode `0600`. |
 | `graph/<projectId>/work.json` | The project's work-history graph — tasks, runs, agents and the links between them. Rebuilt on demand and removed when the project is deleted. |
-| `worktrees/<repoHash>/<run>/` | Throwaway git worktrees, one per run, keyed by repository. Shared between projects that point at the same repository, so they are **not** removed when a project is deleted — see [Deleting a project](#deleting-a-project). |
+| `tmp/index-<runId>-<pid>` | A throwaway git index, held only for the length of one plumbing command. It exists so that recording a snapshot never writes your real `.git/index` and never disturbs what you have staged. Removed immediately; a leftover is inert. |
+| `worktrees/<repoHash>/<run>/` | **Legacy.** Throwaway git worktrees, one per run, from before 0.18 — nothing writes here any more. Present only if you ran an older version, and released by `nexotao uninstall`. |
 | `tools/` | The optional code-index CLI, if you installed it from the graph page. Nothing else is ever installed here. |
 | `backups/json-v1-<timestamp>/` | One-time backup of legacy JSON files taken during migration to SQLite (only present if you upgraded from a JSON-storage version). Mode `0700`, files `0600`. |
+
+### One thing stored inside your own repository
+
+Runs edit your project folder directly, so the undo has to be taken before the run starts. It is
+stored where the files are, not under the data directory:
+
+| Path | Contents |
+| --- | --- |
+| `<project>/.git/refs/nexotao/snapshots/<runId>` | A dangling commit recording the folder exactly as it stood before that run — committed, staged, modified and untracked alike. One per run. |
+
+Written with git plumbing (`add -A` against the throwaway index above, `write-tree`, `commit-tree`,
+`update-ref`), so nothing you can see moves: not your working tree, not your index, not `HEAD`, not
+any branch. `git status`, `git branch` and `git log` are unchanged by it. It is visible in
+`git for-each-ref refs/nexotao/` and is copied by `git push --mirror` — see
+[privacy.md](privacy.md#what-is-stored-and-where).
+
+`add -A` honours `.gitignore`, so ignored paths are neither recorded nor restorable. That is the
+right trade — nobody wants `node_modules` in a snapshot tree — but it is a real limit, and the
+Changes panel states it.
+
+Collected by the app itself: a ref whose task is still waiting for your review is held, so Revert
+stays available for as long as the decision is open; the rest are dropped once they are older than
+14 days.
 
 ### One directory outside the data directory
 
@@ -45,9 +69,11 @@ If you never install the code index, this directory does not exist.
 ### Deleting a project
 
 Deleting a project from Settings → Data removes its database rows, its `graph/<projectId>/`
-directory, and its `nexotao-idx-` code index. It leaves the append-only activity log (the durable
-audit trail) and any git worktrees under `worktrees/`, because those are keyed by repository rather
-than by project. If no other project uses that repository, remove them with `git worktree prune`.
+directory, its `nexotao-idx-` code index, and the `refs/nexotao/` refs in its folder. It leaves the
+append-only activity log (the durable audit trail), and it leaves the files themselves — everything
+a run wrote into your folder is yours and stays exactly where it is. Legacy worktrees under
+`worktrees/` are keyed by repository rather than by project and are left in place; `nexotao
+uninstall` releases them, or `git worktree prune` does.
 
 ### Removing everything
 
@@ -56,16 +82,24 @@ than by project. If no other project uses that repository, remove them with `git
 
 | step | what it touches |
 |---|---|
-| release worktrees | `git worktree remove --force` + `prune` in each owning repository, then `git branch -D` for `nexotao/*` branches only |
+| release legacy worktrees | `git worktree remove --force` + `prune` in each owning repository, then `git branch -D` for `nexotao/*` branches only. Nothing to do unless you ran a version before 0.18. |
+| release the undo refs | `git update-ref -d` for every ref under `refs/nexotao/`, in each repository it can find — from the worktree scan above and from the `projects` table. Only that namespace; nothing under `refs/heads/`, no commits, no working tree. |
 | delete the data directory | `~/.nexotao` (or `NEXOTAO_DATA_DIR`), plus `~/.nexotao/tools` when the data directory was moved elsewhere |
 | sweep the code index | only `nexotao-idx-*` files in `~/.cache/codebase-memory-mcp/` — never the directory, never a file without that prefix |
 | uninstall the package | `npm uninstall -g nexotao`. A root-owned global prefix makes this fail; the command prints the `sudo` line to finish it rather than escalating on its own. |
 
-**The order matters and is the reason this is a command rather than a documented procedure.**
-Deleting the data directory first pulls worktree directories out from under Git and leaves every
+**The order matters and is the reason this is a command rather than a documented procedure.** What
+Nexotao leaves inside your repositories is not in the data directory, and the database is the only
+record of which repositories those are. Deleting it first strands the undo refs for good — and, on
+an install that predates 0.18, pulls worktree directories out from under Git and leaves every
 repository you have run against with a stranded registry and dangling branches.
 
-It stops before deleting anything if a worktree still holds uncommitted work, naming the files.
+Reading the `projects` table for that last step needs `node:sqlite`, which arrived in Node 22.5. On
+an older Node the uninstall proceeds without it: everything else is removed, and the undo refs are
+still cleaned from any repository the worktree scan found. Refs in a repository known only to the
+database survive; the manual command in [privacy.md](privacy.md#deleting-your-data) clears them.
+
+It stops before deleting anything if a legacy worktree still holds uncommitted work, naming the files.
 `--force` proceeds anyway, `--dry-run` prints the plan and exits, `--keep-package` leaves the npm
 package installed, and it refuses to run while the app is still serving on its port.
 

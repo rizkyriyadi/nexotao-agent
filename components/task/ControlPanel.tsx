@@ -162,7 +162,6 @@ export function ControlPanel() {
         root={workspace.root}
         tree={workspace.tree}
         truncated={workspace.truncated}
-        notice={workspace.notice}
         loading={workspace.loading}
         error={workspace.error}
         onReload={workspace.reload}

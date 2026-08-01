@@ -214,8 +214,9 @@ export async function executeTool(
       }
       // The graph tools answer from two layers — the project's code index and its
       // work history — merged in lib/graph-answer.ts. `root` is what tells that
-      // module which project is asking; a run executes in a worktree, so it maps
-      // the root back to the canonical repo before looking anything up.
+      // module which project is asking; it maps the root back to the repository
+      // that owns it before looking anything up, so a project opened at a
+      // subdirectory still finds its own index.
       case "graph_query": {
         const r = await answerGraphQuery(String(input.question ?? ""), root);
         return { ok: r.ok, output: r.text, display: r.display };

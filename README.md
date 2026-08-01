@@ -27,7 +27,8 @@ That's it. The UI opens at `http://localhost:4319`. On first launch you'll be wa
 - **Chat** — a coding agent that reads, edits, and runs files in your project (with approval prompts for anything that changes files).
 - **Runs** — every run is durable: navigate away, refresh, or close the tab and come back — it keeps going and you can reopen its live progress any time.
 - **Board** — a lightweight task board; run any task with an agent in one click.
-- **Files** — the workspace as it actually is on disk, docked to the right of the prompt rather than filed away on a page of its own: a tree with git status, a reader that renders markdown, PDFs, images and code, and an editor for the text ones. While a run is in flight the agent writes into its own working copy, so the panel lets you switch between your project folder and that copy — the answer to "the agent said it wrote four files, my folder looks empty". Type `@` in the prompt to name a real file from that tree instead of one you remembered.
+- **Files** — the workspace as it actually is on disk, docked to the right of the prompt rather than filed away on a page of its own: a tree with git status, a reader that renders markdown, PDFs, images and code, and an editor for the text ones. Runs edit that folder directly — the same one your editor, your terminal and your `npm test` are pointed at — so what the panel shows is simply your project. Type `@` in the prompt to name a real file from that tree instead of one you remembered.
+- **Undo** — before each run, Nexotao records your folder exactly as it stands (committed, staged, modified and untracked alike) as a hidden commit under `refs/nexotao/snapshots/`. Nothing you can see moves: not your working tree, not your index, not HEAD, not a branch. Afterwards you get a diff of what changed and a Revert button. Files excluded by `.gitignore` are not covered.
 
 ## Where's my data?
 
@@ -42,14 +43,14 @@ nexotao uninstall --dry-run  # print the plan and stop, changing nothing
 
 It shows you exactly what it will remove and waits for you to type `UNINSTALL`. Then, in this order:
 
-1. **Releases the Git worktrees** Nexotao registered inside your own repositories, and deletes only its own `nexotao/*` branches.
+1. **Hands back what it left in your repositories** — the undo points under `refs/nexotao/`, and (from versions before 0.18) any Git worktrees it registered, along with its own `nexotao/*` branches. Only that namespace: nothing under `refs/heads/`, no commits, no working tree.
 2. **Deletes the data directory** — `~/.nexotao` (or your `NEXOTAO_DATA_DIR`): database, settings, API key, work graphs, backups.
 3. **Sweeps its code indexes** — only the `nexotao-idx-*` files in `~/.cache/codebase-memory-mcp/`, never that directory and never a file it did not create.
 4. **Uninstalls the package** — `npm uninstall -g nexotao`. If your global prefix needs root, it prints the `sudo` line to finish rather than escalating on its own.
 
-Your code, commits and branches are never touched. If a worktree still holds uncommitted work, the command names the files and stops without deleting anything; `--force` proceeds anyway. `--keep-package` leaves the npm package installed.
+Your code, commits and branches are never touched — including files a run wrote into your folder, which are yours and stay exactly where they are. If an old worktree still holds uncommitted work, the command names the files and stops without deleting anything; `--force` proceeds anyway. `--keep-package` leaves the npm package installed.
 
-**Deleting `~/.nexotao` by hand is not equivalent.** Nexotao registers worktrees inside your repositories, so removing those directories without releasing them first leaves every repository you have run against with a stranded worktree registry and dangling branches. That order is the reason this is a command rather than a documented procedure.
+**Deleting `~/.nexotao` by hand is not equivalent.** What Nexotao leaves inside your own repositories is not in that folder: undo refs in every project you have run against, plus stranded worktree registrations and dangling branches if you ever ran a version before 0.18. Removing the data directory first destroys the only record of where those are. That order is the reason this is a command rather than a documented procedure.
 
 The database uses SQLite through a Drizzle repository boundary. The packaged driver is the SQL.js embedded JavaScript build, which works on every supported Node platform without native compilation. Because this driver does not expose durable WAL mode, commits are serialized and the exported database is replaced atomically. The repository contract stays driver-independent so a native WAL driver can replace it after Linux, macOS, and Windows packaging smoke tests pass.
 

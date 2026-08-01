@@ -152,6 +152,151 @@ test("blocked work cannot be talked into todo while its blockers are unmet", asy
   } finally { await cleanup(dir, database); }
 });
 
+/* ── one edit, one transaction ───────────────────────────────────────────────
+ * A single user action — rename this, move it there, assign it to them — used
+ * to be four separate writes. Whatever the lifecycle refused, everything before
+ * it in that sequence had already committed, so the user got an error message
+ * about one field and a silent change to the others. */
+
+test("an edit the lifecycle refuses changes nothing at all", async () => {
+  const { dir, database, lifecycle } = await fixture();
+  try {
+    const issue = await lifecycle.create({ projectId: "project", title: "Original", status: "backlog", now: 10 });
+
+    // `backlog → done` is not an edge. The rename rides along with it and must
+    // go down with it.
+    await assert.rejects(
+      lifecycle.edit({ issueId: issue.id, fields: { title: "Renamed" }, status: "done", actor: { type: "user" }, now: 20 }),
+      (error: unknown) => error instanceof IssueDomainError && error.code === "invalid_transition",
+    );
+    const after = database.read((db) => db.select().from(issuesTable).where(eq(issuesTable.id, issue.id)).get())!;
+    assert.equal(after.title, "Original", "the rename must not survive the rejected status change");
+    assert.equal(after.status, "backlog");
+
+    // And an edit that is legal all the way through lands whole.
+    const edited = await lifecycle.edit({
+      issueId: issue.id, fields: { title: "Renamed", priority: "high" },
+      assigneeAgentId: "agent-a", status: "todo", actor: { type: "user" }, now: 30,
+    });
+    assert.equal(edited.title, "Renamed");
+    assert.equal(edited.priority, "high");
+    assert.equal(edited.assigneeAgentId, "agent-a");
+    assert.equal(edited.status, "todo");
+  } finally { await cleanup(dir, database); }
+});
+
+test("a status set alongside the blockers that contradict it defers to the blockers", async () => {
+  const { dir, database, lifecycle } = await fixture();
+  try {
+    const blocker = await lifecycle.create({ projectId: "project", title: "Blocker", status: "todo", now: 10 });
+    const issue = await lifecycle.create({ projectId: "project", title: "Work", status: "backlog", assigneeAgentId: "agent-a", now: 11 });
+
+    // Asking for `todo` while adding an unmet blocker in the same edit. Applied
+    // in sequence the blocker wins and parks it — the point is that the status
+    // check sees the blocker this edit is adding, not the empty set it started
+    // with, so the edit is accepted rather than throwing on a stale read.
+    const edited = await lifecycle.edit({
+      issueId: issue.id, blockerIds: [blocker.id], status: "todo", actor: { type: "user" }, now: 20,
+    });
+    assert.equal(edited.status, "blocked");
+    assert.equal(
+      database.read((db) => db.select().from(wakeupRequests).all()).length, 0,
+      "and nothing was queued to run work that cannot run",
+    );
+  } finally { await cleanup(dir, database); }
+});
+
+test("an issue cannot be re-parented under its own descendant", async () => {
+  const { dir, database, lifecycle } = await fixture();
+  try {
+    const parent = await lifecycle.create({ projectId: "project", title: "Epic", status: "backlog", now: 10 });
+    const child = await lifecycle.create({ projectId: "project", title: "Sub", parentId: parent.id, status: "backlog", now: 11 });
+
+    // Nothing validated a re-parent, so this was accepted — and every walk up
+    // the tree afterwards ran until it ran out of stack.
+    await assert.rejects(
+      lifecycle.edit({ issueId: parent.id, fields: { parentId: child.id }, actor: { type: "user" }, now: 20 }),
+      (error: unknown) => error instanceof IssueDomainError && error.code === "validation",
+    );
+    await assert.rejects(
+      lifecycle.edit({ issueId: parent.id, fields: { parentId: parent.id }, actor: { type: "user" }, now: 21 }),
+      (error: unknown) => error instanceof IssueDomainError && error.code === "validation",
+    );
+    await assert.rejects(
+      lifecycle.edit({ issueId: child.id, fields: { parentId: "no-such-issue" }, actor: { type: "user" }, now: 22 }),
+      (error: unknown) => error instanceof IssueDomainError && error.code === "not_found",
+    );
+    assert.equal(database.read((db) => db.select().from(issuesTable).where(eq(issuesTable.id, parent.id)).get())?.parentId, null);
+
+    // Moving a task to a genuine parent is still ordinary work.
+    const sibling = await lifecycle.create({ projectId: "project", title: "Other epic", status: "backlog", now: 30 });
+    assert.equal((await lifecycle.edit({ issueId: child.id, fields: { parentId: sibling.id }, actor: { type: "user" }, now: 31 })).parentId, sibling.id);
+  } finally { await cleanup(dir, database); }
+});
+
+/* ── reopening ───────────────────────────────────────────────────────────────
+ * A follow-up message on a finished task is the one thing allowed to move work
+ * out of a terminal status, and it goes through its own table for that reason.
+ * `reopen` used to write the row directly, so the transition table said `done`
+ * was final while the code next to it disagreed — and the disagreement was
+ * invisible until something reopened from a status that had already given up
+ * its checkout. */
+
+test("reopening a finished task clears the traces of it having finished", async () => {
+  const { dir, database, lifecycle } = await fixture();
+  try {
+    const issue = await lifecycle.create({ projectId: "project", title: "Ship it", status: "todo", assigneeAgentId: "agent-a", now: 10 });
+    await lifecycle.checkout(issue.id, "agent-a", "run-1", 11);
+    await lifecycle.transition(issue.id, "done", { type: "agent", id: "agent-a", runId: "run-1" }, 12);
+
+    const reopened = await lifecycle.reopen(issue.id, { type: "user" }, "plan", 20);
+    assert.equal(reopened.status, "todo");
+    assert.equal(reopened.runMode, "plan", "the follow-up can change how the next run answers");
+    // A task that is runnable again but still stamped with the day it finished
+    // reads as done to everything that sorts or filters on completion.
+    assert.equal(reopened.completedAt, null);
+    assert.equal(reopened.checkoutRunId, null);
+    assert.ok(database.read((db) => db.select().from(activityLog).all()).some((row) => row.action === "issue.reopened"));
+
+    // Cancelled work comes back the same way — the user changed their mind.
+    const dropped = await lifecycle.create({ projectId: "project", title: "Never mind", status: "todo", now: 30 });
+    await lifecycle.transition(dropped.id, "cancelled", { type: "user" }, 31);
+    const revived = await lifecycle.reopen(dropped.id, { type: "user" }, undefined, 32);
+    assert.equal(revived.status, "todo");
+    assert.equal(revived.cancelledAt, null);
+  } finally { await cleanup(dir, database); }
+});
+
+test("reopening a live task carries the follow-up rather than restarting it", async () => {
+  const { dir, database, lifecycle } = await fixture();
+  try {
+    const issue = await lifecycle.create({ projectId: "project", title: "Mid-flight", status: "todo", assigneeAgentId: "agent-a", now: 10 });
+    await lifecycle.checkout(issue.id, "agent-a", "run-1", 11);
+
+    const reopened = await lifecycle.reopen(issue.id, { type: "user" }, "ask", 20);
+    assert.equal(reopened.status, "in_progress", "the run keeps going");
+    assert.equal(reopened.checkoutRunId, "run-1", "and keeps its checkout — clearing it would let a second run start on top of the live one");
+    assert.equal(reopened.runMode, "ask");
+  } finally { await cleanup(dir, database); }
+});
+
+test("a reopened task with unmet blockers goes back to blocked, not to runnable", async () => {
+  const { dir, database, lifecycle } = await fixture();
+  try {
+    const blocker = await lifecycle.create({ projectId: "project", title: "Blocker", status: "todo", now: 10 });
+    const dependent = await lifecycle.create({ projectId: "project", title: "Dependent", status: "todo", now: 11 });
+    await lifecycle.transition(dependent.id, "cancelled", { type: "user" }, 12);
+    await lifecycle.setDependencies(dependent.id, [blocker.id], { type: "user" }, 13);
+
+    const reopened = await lifecycle.reopen(dependent.id, { type: "user" }, undefined, 20);
+    assert.equal(reopened.status, "blocked", "reopening must not smuggle work past its blockers");
+    assert.equal(
+      database.read((db) => db.select().from(wakeupRequests).all()).length, 0,
+      "and nothing is queued to run it",
+    );
+  } finally { await cleanup(dir, database); }
+});
+
 test("recovery is deterministic, idempotent, and audited with other lock mutations", async () => {
   const { dir, database, lifecycle } = await fixture();
   try {

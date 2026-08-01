@@ -115,17 +115,18 @@ test("an existing index reports its size without re-indexing anything", async ()
   assert.equal(await codeIndexStatus("p9", { exec: absent as any }), null);
 });
 
-/* ── one index per project, whatever tree the run is in ──────────────────────
- * Every lead-execute run works in a throwaway git worktree. Indexing that path
- * would register a project keyed by a directory deleted minutes later: one dead
- * multi-MB index per run, accumulating forever in a cache directory the user was
- * never told about. */
+/* ── one index per project, whatever tree it was opened at ───────────────────
+ * The folder a user adds as a project need not be the repository root. It can be
+ * a subdirectory, or one of their own linked worktrees — checking out a release
+ * branch beside main is an ordinary thing to do. Indexing the path as given
+ * would key a second multi-MB index to the same source, in a cache directory
+ * they were never told about, and leave the two disagreeing about the same code. */
 
-test("a run indexes its project's canonical repo, never the worktree it executes in", async () => {
+test("a project opened at a linked worktree still indexes the repo that owns it", async () => {
   resetCodeIndexCaches();
   const rec = recorder(() => envelope({ project: codeIndexName("p1"), nodes: 12, edges: 30 }));
-  const worktree = "/home/u/.nexotao/worktrees/abc123/nx-12-9b7ddca6";
-  // Stand in for git: the worktree's --git-common-dir points at the owning repo.
+  const worktree = "/home/u/code/my-app-release";
+  // Stand in for git: a linked worktree's --git-common-dir points at the owning repo.
   const git = async () => ({ code: 0, stdout: "/home/u/code/my-app/.git\n", stderr: "" });
   const canonical = await canonicalRoot(worktree, { exec: git as any });
   assert.equal(canonical, "/home/u/code/my-app");
@@ -135,7 +136,7 @@ test("a run indexes its project's canonical repo, never the worktree it executes
   const sent = JSON.parse(rec.calls[0].stdin);
   assert.equal(sent.repo_path, "/home/u/code/my-app");
   assert.equal(sent.name, `${INDEX_PREFIX}p1`);
-  assert.ok(!rec.calls[0].stdin.includes("worktrees"), "the worktree path must not reach the indexer");
+  assert.ok(!rec.calls[0].stdin.includes("my-app-release"), "the path as opened must not reach the indexer");
 });
 
 /* ── two indexers, one SQLite file ───────────────────────────────────────────

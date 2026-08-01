@@ -3,9 +3,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowLeft, Ban, GitBranch, Loader2, PanelRight, Play, Plus, Sparkles } from "lucide-react";
+import { ArrowLeft, Ban, Check, ChevronRight, FileDiff, GitBranch, Loader2, PanelRight, Play, Plus, RotateCcw, Sparkles, Undo2 } from "lucide-react";
 import { Button } from "../ui/button";
 import { Composer, type RunMode } from "./Composer";
+import { DiffBlock } from "./DiffBlock";
 import { Transcript, STATUS_LABEL, statusDot, TOOL_LABEL, type RunPhase } from "./transcript";
 import { useRunStream } from "./use-run-stream";
 import { WorkspaceDock } from "../files/WorkspaceDock";
@@ -23,7 +24,26 @@ type Run = { id: string; status: string; startedAt: number | null; queuedAt: num
 type AgentLite = { id: string; name: string; avatar?: string | null };
 type DocLite = { key: string; body?: string | null };
 type ChildLite = { id: string; ref: string; title: string; status: string; assigneeAgentId: string | null };
-type Detail = { issue: Issue; comments: Comment[]; runs: Run[]; agents: AgentLite[]; documents: DocLite[]; children: ChildLite[] };
+/** How much this task's last run changed in the folder — a count, because the
+ *  issue endpoint is polled every 2.5 s and the diff itself is fetched from
+ *  `/changes` only when the user opens it. Null means no run has taken a
+ *  before-picture yet, which is also the shape an `in_review` task has when its
+ *  run merely ran out of steps and left nothing to decide. */
+type Changes = { available: boolean; fileCount: number; runId: string };
+/** The diff itself, fetched from `/changes` on demand. Mirrors that route's
+ *  response — see `app/api/issues/[id]/changes/route.ts`. */
+type ChangeFile = {
+  path: string; oldPath?: string; status: "A" | "M" | "D" | "R";
+  oldText: string; newText: string; binary?: boolean; truncated?: boolean;
+};
+type ChangesResponse = {
+  snapshot: { available: boolean; reason?: string };
+  runId: string | null;
+  files: ChangeFile[];
+  truncated: boolean;
+  commits: { count: number; from: string; to: string } | null;
+};
+type Detail = { issue: Issue; changes: Changes | null; comments: Comment[]; runs: Run[]; agents: AgentLite[]; documents: DocLite[]; children: ChildLite[] };
 
 type Decision = { q: string; options: string[] };
 
@@ -78,6 +98,8 @@ export function TaskView({ id }: { id: string }) {
   const [answers, setAnswers] = useState<Record<number, string>>({});
   const [othering, setOthering] = useState<Record<number, boolean>>({});
   const [dock, setDock] = useState(true);
+  const [deciding, setDeciding] = useState(false);
+  const [changeText, setChangeText] = useState("");
   const poller = useRef<ReturnType<typeof setInterval> | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const modeTouched = useRef(false);
@@ -100,7 +122,7 @@ export function TaskView({ id }: { id: string }) {
       if (r.status === 404) { setNotFound(true); return; }
       const d = await r.json();
       if (d?.issue) {
-        setDetail({ issue: d.issue, comments: d.comments ?? [], runs: d.runs ?? [], agents: d.agents ?? [], documents: d.documents ?? [], children: d.children ?? [] });
+        setDetail({ issue: d.issue, changes: d.changes ?? null, comments: d.comments ?? [], runs: d.runs ?? [], agents: d.agents ?? [], documents: d.documents ?? [], children: d.children ?? [] });
         if (!modeTouched.current) setMode((d.issue.runMode as RunMode) ?? "agent");
         // Poll-driven, so a stale response must never overwrite a choice the
         // user just made — the same guard the mode selector uses.
@@ -153,6 +175,33 @@ export function TaskView({ id }: { id: string }) {
       setSending(false);
     }
   }, [input, sending, postMessage]);
+
+  // Keep / Revert / Revert & retry. One handler because they are one decision
+  // with three answers, and because all three must reload: the panel disappears
+  // either way, and leaving it up after a click reads as the button not having
+  // worked.
+  //
+  // None of them moves files into the project — the run already wrote them
+  // there. What they decide is whether the folder stays that way.
+  const decide = useCallback(async (action: "keep" | "revert" | "revert-retry", reason?: string) => {
+    if (deciding) return;
+    setDeciding(true);
+    try {
+      const r = await fetch(`/api/issues/${id}/changes`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, ...(reason ? { reason } : {}) }),
+      });
+      const payload = await r.json().catch(() => ({} as any));
+      if (!r.ok) throw new Error(payload?.error || "Couldn't apply your decision");
+      toast.success(action === "keep" ? "Kept" : action === "revert" ? "Reverted" : "Sent back to Hutao");
+      setChangeText("");
+      await load();
+    } catch (err: any) {
+      toast.error(String(err?.message ?? err));
+    } finally {
+      setDeciding(false);
+    }
+  }, [deciding, id, load]);
 
   const cancel = useCallback(async (runId: string) => {
     if (cancelling) return;
@@ -292,6 +341,20 @@ export function TaskView({ id }: { id: string }) {
             <SubTasks tasks={detail!.children} agents={detail!.agents} onOpen={(childId) => router.push(`/board/${childId}`)} />
           )}
 
+          {detail!.changes?.available && detail!.changes.fileCount > 0 && !occupied && (
+            <ChangesPanel
+              issueId={id}
+              runId={detail!.changes.runId}
+              fileCount={detail!.changes.fileCount}
+              reason={changeText}
+              onReason={setChangeText}
+              onKeep={() => void decide("keep")}
+              onRevert={() => void decide("revert")}
+              onRevertRetry={() => void decide("revert-retry", changeText.trim())}
+              disabled={deciding}
+            />
+          )}
+
           {showPlanActions && (
             <PlanActions
               decisions={decisions}
@@ -333,7 +396,6 @@ export function TaskView({ id }: { id: string }) {
         root={workspace.root}
         tree={workspace.tree}
         truncated={workspace.truncated}
-        notice={workspace.notice}
         loading={workspace.loading}
         error={workspace.error}
         onReload={workspace.reload}
@@ -435,6 +497,130 @@ function SubTasks({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+const STATUS_WORD: Record<ChangeFile["status"], string> = { A: "new", M: "changed", D: "deleted", R: "renamed" };
+
+/** What the run did to the user's folder, and the three things they can do about
+ *  it. The files are already on disk — this is not a request to let work land,
+ *  it is the undo button and the prompt to look before the offer expires.
+ *
+ *  The diff is fetched on expand rather than with the task, because the task is
+ *  polled every 2.5 s and a hundred files of before-and-after text has no
+ *  business riding along with it. Fetched once per open, not polled: a diff that
+ *  re-renders under the reader while they are reading it is worse than one that
+ *  is a few seconds stale, and the buttons re-read it server-side anyway. */
+function ChangesPanel({
+  issueId, runId, fileCount, reason, onReason, onKeep, onRevert, onRevertRetry, disabled,
+}: {
+  issueId: string;
+  runId: string;
+  fileCount: number;
+  reason: string;
+  onReason: (value: string) => void;
+  onKeep: () => void;
+  onRevert: () => void;
+  onRevertRetry: () => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [diff, setDiff] = useState<ChangesResponse | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => { setOpen(false); setDiff(null); }, [runId]);
+
+  useEffect(() => {
+    if (!open || diff || loading) return;
+    setLoading(true);
+    fetch(`/api/issues/${issueId}/changes`)
+      .then((r) => r.json())
+      .then((d) => setDiff(d))
+      .catch(() => toast.error("Couldn't load the diff"))
+      .finally(() => setLoading(false));
+  }, [open, diff, loading, issueId]);
+
+  return (
+    <div className="ml-11 rounded-3xl border border-sapphire-link/30 bg-sapphire-link/[0.05] p-4 shadow-sm">
+      <div className="flex items-center gap-2 text-[13px] font-medium text-charcoal">
+        <FileDiff className="size-4 text-sapphire-link" /> Changes in your project folder
+      </div>
+      <p className="mt-1.5 text-[12.5px] leading-relaxed text-bark-grey">
+        {fileCount === 1 ? "One file" : `${fileCount} files`} changed. They are already on disk — keep them,
+        or put the folder back the way it was.
+      </p>
+
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="mt-2 inline-flex items-center gap-1 text-[12.5px] font-medium text-sapphire-link hover:underline"
+      >
+        <ChevronRight className={`size-3.5 transition-transform ${open ? "rotate-90" : ""}`} />
+        {open ? "Hide the diff" : "Show the diff"}
+      </button>
+
+      {open && (
+        <div className="mt-2 space-y-2">
+          {loading && <p className="flex items-center gap-1.5 text-[12.5px] text-pebble"><Loader2 className="size-3.5 animate-spin" /> Reading your folder…</p>}
+          {diff && !diff.snapshot.available && (
+            <p className="text-[12.5px] text-bark-grey">The diff is unavailable{diff.snapshot.reason ? ` (${diff.snapshot.reason})` : ""}.</p>
+          )}
+          {diff?.files.map((file) => (
+            <div key={file.path}>
+              {file.binary || file.truncated ? (
+                <p className="rounded-lg border border-line bg-code-surface px-2.5 py-1.5 font-mono text-[11px] text-bark-grey">
+                  {file.path} — {STATUS_WORD[file.status]} ({file.binary ? "binary" : "too large to show"})
+                </p>
+              ) : (
+                <DiffBlock path={file.oldPath ? `${file.oldPath} → ${file.path}` : file.path} oldText={file.oldText} newText={file.newText} className="" />
+              )}
+            </div>
+          ))}
+          {diff?.truncated && <p className="text-[11.5px] text-pebble">Only the first {diff.files.length} files are shown.</p>}
+        </div>
+      )}
+
+      {/* Revert restores file contents. It deliberately does not move HEAD: the
+          commits may not all be the agent's, and rewinding a branch on someone's
+          behalf is not a thing to do from a button. */}
+      {diff?.commits && diff.commits.count > 0 && (
+        <div className="mt-3 rounded-xl border border-amber/40 bg-amber/[0.07] px-3 py-2.5">
+          <p className="text-[12.5px] leading-relaxed text-charcoal">
+            The agent also made {diff.commits.count === 1 ? "one commit" : `${diff.commits.count} commits`} in this repo.
+            Revert puts your files back but leaves the commits in history. To drop those too:
+          </p>
+          <code className="mt-1.5 block overflow-x-auto rounded-lg bg-veil px-2 py-1.5 font-mono text-[11.5px] text-charcoal">
+            git reset --hard {diff.commits.from}
+          </code>
+          <p className="mt-1 text-[11.5px] text-bark-grey">Check <span className="font-mono">git log</span> first.</p>
+        </div>
+      )}
+
+      <textarea
+        value={reason}
+        onChange={(e) => onReason(e.target.value)}
+        rows={2}
+        placeholder="What should change? (only needed if you're sending it back)"
+        className="mt-3 w-full resize-none rounded-lg border border-line-strong bg-paper-white px-3 py-2 text-[13px] text-charcoal outline-none focus:border-sapphire-link"
+      />
+      <div className="mt-2.5 flex flex-wrap gap-2">
+        <Button size="sm" className="gap-1.5" onClick={onKeep} disabled={disabled}>
+          <Check className="size-3.5" /> Keep
+        </Button>
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={onRevert} disabled={disabled}>
+          <Undo2 className="size-3.5" /> Revert
+        </Button>
+        <Button size="sm" variant="outline" className="gap-1.5" onClick={onRevertRetry} disabled={disabled || !reason.trim()}>
+          <RotateCcw className="size-3.5" /> Revert &amp; retry
+        </Button>
+      </div>
+      {/* An honest limit, stated where the button is rather than in the docs:
+          `git add -A` honours .gitignore, so ignored files were never recorded
+          and Revert will walk straight past them. */}
+      <p className="mt-2 text-[11.5px] leading-relaxed text-pebble">
+        Revert covers tracked and untracked files. Files excluded by <span className="font-mono">.gitignore</span> are not.
+      </p>
     </div>
   );
 }

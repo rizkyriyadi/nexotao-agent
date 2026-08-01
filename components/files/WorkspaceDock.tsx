@@ -15,7 +15,6 @@ import { FilePreviewPane } from "./FilePreview";
 import { TerminalPane } from "./TerminalPane";
 import { DOCK_MIN, useDockWidth } from "./useDockWidth";
 import type { TreeNode, WorkspaceRoot } from "@/lib/workspace-files";
-import type { WorkspaceNotice } from "./use-workspace";
 
 /** Top-level folders start open. Landing on a wall of collapsed folders makes a
  *  small project look empty, which is the impression this panel exists to fix. */
@@ -24,12 +23,11 @@ function initialExpansion(tree: TreeNode[]) {
 }
 
 export function WorkspaceDock({
-  root, tree, truncated, notice, loading, error, onReload, onClose,
+  root, tree, truncated, loading, error, onReload, onClose,
 }: {
   root: WorkspaceRoot | null;
   tree: TreeNode[];
   truncated: boolean;
-  notice: WorkspaceNotice | null;
   loading: boolean;
   error: string | null;
   onReload: () => void;
@@ -152,23 +150,7 @@ export function WorkspaceDock({
           {truncated
             ? `${fileCount.toLocaleString()} files shown — the tree was capped`
             : `${fileCount.toLocaleString()} file${fileCount === 1 ? "" : "s"}`}
-          {root?.kind === "worktree" && <span className="ml-1 text-amber">· live run copy</span>}
         </p>
-
-        {/* Work that finished but never reached this folder. Without this the
-            files simply are not here and nothing says why — the user watched the
-            agent write them, so the only available conclusion is that it lied. */}
-        {notice && (
-          <div className="rounded-lg border border-amber/30 bg-amber/5 px-2 py-1.5">
-            <p className="text-[10.5px] leading-relaxed text-charcoal">
-              <span className="font-medium">{notice.reference}</span>&rsquo;s work is not in this folder — {notice.reason}.
-            </p>
-            <p className="mt-1 text-[10.5px] text-pebble">
-              It is saved on <code className="break-all font-mono text-[10px] text-charcoal">{notice.branch}</code>. Bring it in with{" "}
-              <code className="break-all font-mono text-[10px] text-charcoal">git merge {notice.branch}</code>.
-            </p>
-          </div>
-        )}
       </div>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-auto px-2 pb-4">
@@ -227,9 +209,9 @@ function Shell({
 }
 
 /** Files and the shell are two views of one folder, so they are tabs on the same
- *  panel rather than two places to be. The terminal opens in whatever folder the
- *  tree is showing — including a live run's worktree, which is the folder you
- *  actually want a shell in while watching an agent work. */
+ *  panel rather than two places to be. That folder is the project the user has
+ *  open — the same one runs write into — so a shell here is a shell where the
+ *  work is happening, with everything already installed in it. */
 function DockHeader({ onClose, tab, onTab }: { onClose: () => void; tab?: "files" | "terminal"; onTab?: (next: "files" | "terminal") => void }) {
   if (!tab || !onTab) {
     return (

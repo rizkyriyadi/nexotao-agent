@@ -10,7 +10,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./db/database";
 import {
   activityLog, agentRuns, agents, approvals, documentRevisions,
-  documents, gitWorkspaces, heartbeatRuns, issueComments, issueDependencies, issueDocuments,
+  documents, heartbeatRuns, issueComments, issueDependencies, issueDocuments,
   issueMutationRequests, issues, projects, runEvents, runRecords, sessions, tasks, wakeupRequests,
 } from "./db/schema";
 import { redactValue } from "./redact";
@@ -147,7 +147,6 @@ export function exportProjectData(database: AppDatabase, projectId: string, now 
       runEvents: runIds.length ? chunk(runIds).flatMap((ids) => db.select().from(runEvents).where(inArray(runEvents.runId, ids)).all()) : [],
       approvals: approvalRows,
       activity: activityIds.length ? chunk(activityIds).flatMap((ids) => db.select().from(activityLog).where(inArray(activityLog.entityId, ids)).all()) : [],
-      gitWorkspaces: db.select().from(gitWorkspaces).where(eq(gitWorkspaces.projectId, projectId)).all(),
       sessions: db.select().from(sessions).where(eq(sessions.projectId, projectId)).all(),
       tasks: db.select().from(tasks).where(eq(tasks.projectId, projectId)).all(),
       agentRuns: db.select().from(agentRuns).where(eq(agentRuns.projectId, projectId)).all(),
@@ -179,30 +178,36 @@ export class DataControlError extends Error {
 export type PurgeDeps = {
   graphDir?: (projectId: string) => string;
   dropCodeIndex?: (projectId: string) => Promise<boolean>;
+  /** The project's folder, captured before the row was deleted. Snapshot refs
+   *  live inside that repository, not under NEXOTAO_DATA_DIR, so there is no way
+   *  to find them again once the path is gone. */
+  projectPath?: string | null;
 };
 
 /**
- * Remove a deleted project's on-disk artifacts: the work-history graph it wrote
- * under `~/.nexotao/graph/<projectId>/`, and the symbol index the code layer
- * keeps in the CLI's shared cache. Neither cascades off the project row, so
- * before this both survived a deletion the user was told was complete — and the
- * code index is a symbol-level map of their source sitting in a directory
- * outside NEXOTAO_DATA_DIR entirely.
+ * Remove a deleted project's artifacts outside its database rows: the
+ * work-history graph under `~/.nexotao/graph/<projectId>/`, the symbol index the
+ * code layer keeps in the CLI's shared cache, and the snapshot refs its runs
+ * left in the user's own repository. None of the three cascades off the project
+ * row, so before this all survived a deletion the user was told was complete —
+ * and the code index is a symbol-level map of their source sitting in a
+ * directory outside NEXOTAO_DATA_DIR entirely.
+ *
+ * The snapshot refs are the one artifact written into a folder the user owns. It
+ * is theirs, and `refs/nexotao/snapshots/*` in it is ours: leaving those behind
+ * after a deletion would mean the app is still visible in `git for-each-ref` on a
+ * project it claims to have forgotten. Only that namespace is touched — nothing
+ * under `refs/heads/`, no commits, no working tree.
  *
  * Each step is independently guarded and this never throws. A cache file held
  * open by another process must not turn a confirmed deletion into a failure;
  * the counts simply report 0 and the rows are gone regardless.
- *
- * Worktrees are deliberately NOT removed: `~/.nexotao/worktrees/<repoHash>/` is
- * keyed by repository, so two projects on one repo share it, and deleting it
- * without `git worktree prune` strands the repo's own registry. The note says
- * so by name rather than leaving the user to discover the directory.
  */
 export async function purgeProjectArtifacts(
   projectId: string,
   deps: PurgeDeps = {},
 ): Promise<{ deleted: Record<string, number>; note: string }> {
-  const deleted: Record<string, number> = { workGraph: 0, codeIndex: 0 };
+  const deleted: Record<string, number> = { workGraph: 0, codeIndex: 0, snapshotRefs: 0 };
 
   try {
     const dir = deps.graphDir ? deps.graphDir(projectId) : (await import("./graph-data")).graphDir(projectId);
@@ -216,9 +221,21 @@ export async function purgeProjectArtifacts(
     if (await drop(projectId)) deleted.codeIndex = 1;
   } catch { /* the index is optional; its absence is the normal case */ }
 
+  if (deps.projectPath) {
+    try {
+      const { dropSnapshot, listSnapshots } = await import("./run-snapshot");
+      const { expandHome } = await import("./paths");
+      const root = expandHome(deps.projectPath);
+      for (const { runId } of await listSnapshots(root)) {
+        await dropSnapshot(root, runId);
+        deleted.snapshotRefs += 1;
+      }
+    } catch { /* folder moved, not a repo any more, or git unavailable */ }
+  }
+
   return {
     deleted,
-    note: " Local graph files and the code index for this project were removed. Git worktrees under ~/.nexotao/worktrees/ are shared per repository and are left in place; remove them with `git worktree prune` if no other project uses that repository.",
+    note: " Local graph files, the code index, and the snapshot refs under refs/nexotao/ in the project folder were removed. Files the agent wrote into that folder are yours and are left exactly as they are.",
   };
 }
 
@@ -240,9 +257,13 @@ export async function deleteProjectData(
   now = Date.now(),
 ): Promise<DeletionOutcome> {
   if (!options.confirm) throw new DataControlError("confirmation_required", "Deletion requires explicit confirmation");
+  // Read out before the write deletes the row: the snapshot refs to collect live
+  // in that folder, and after the cascade there is nothing left that names it.
+  let projectPath: string | null = null;
   const outcome = await database.write((db) => {
     const project = db.select().from(projects).where(eq(projects.id, projectId)).get();
     if (!project) throw new DataControlError("not_found", "Project not found");
+    projectPath = project.path ?? null;
 
     const agentRows = db.select({ id: agents.id }).from(agents).where(eq(agents.projectId, projectId)).all();
     const issueRows = db.select({ id: issues.id }).from(issues).where(eq(issues.projectId, projectId)).all();
@@ -269,7 +290,6 @@ export async function deleteProjectData(
       dependencies: inSet(issueIds, (ids) => db.select({ id: issueDependencies.issueId }).from(issueDependencies).where(inArray(issueDependencies.issueId, ids)).all()),
       approvals: approvalRows.length,
       wakeupRequests: inSet(agentIds, (ids) => db.select({ id: wakeupRequests.id }).from(wakeupRequests).where(inArray(wakeupRequests.agentId, ids)).all()),
-      gitWorkspaces: db.select({ id: gitWorkspaces.id }).from(gitWorkspaces).where(eq(gitWorkspaces.projectId, projectId)).all().length,
       sessions: db.select({ id: sessions.id }).from(sessions).where(eq(sessions.projectId, projectId)).all().length,
       tasks: db.select({ id: tasks.id }).from(tasks).where(eq(tasks.projectId, projectId)).all().length,
       agentRuns: db.select({ id: agentRuns.id }).from(agentRuns).where(eq(agentRuns.projectId, projectId)).all().length,
@@ -282,8 +302,8 @@ export async function deleteProjectData(
     for (const ids of chunk(documentIds)) db.delete(documentRevisions).where(inArray(documentRevisions.documentId, ids)).run();
     for (const ids of chunk(documentIds)) db.delete(documents).where(inArray(documents.id, ids)).run();
     // Cascades the rest: agents, issues (+ links, comments, deps, mutation
-    // requests), heartbeat runs, wakeups, approvals, config revisions, git
-    // workspaces, sessions, tasks, agent runs, run records.
+    // requests), heartbeat runs, wakeups, approvals, config revisions,
+    // sessions, tasks, agent runs, run records.
     db.delete(projects).where(eq(projects.id, projectId)).run();
 
     return {
@@ -297,7 +317,7 @@ export async function deleteProjectData(
     } satisfies DeletionOutcome;
   });
 
-  const purged = await purgeProjectArtifacts(projectId, options.purge);
+  const purged = await purgeProjectArtifacts(projectId, { projectPath, ...options.purge });
   return {
     ...outcome,
     deleted: { ...outcome.deleted, ...purged.deleted },

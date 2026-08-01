@@ -343,6 +343,37 @@ ALTER TABLE agents DROP COLUMN concurrency;
 ALTER TABLE projects DROP COLUMN mode;
 ALTER TABLE projects DROP COLUMN agent_specs;
 `,
+}, {
+  version: 12,
+  name: "direct-execution",
+  /* Retires per-run git worktrees. Runs now edit the folder the user has open,
+     and the safety net is a snapshot ref (`refs/nexotao/snapshots/<runId>`)
+     recorded in their own repository rather than a separate checkout.
+
+     Nothing recoverable is lost. Every `git_workspaces` row points at a worktree
+     directory this release stops creating, and the `issues` columns hold a
+     branch name and a SHA on a branch that will never be merged now that the
+     integration flow they described is gone.
+
+     Ordering is load-bearing for the same reason it was in migration 11: SQLite
+     refuses to drop a column an index still mentions, so DROP INDEX precedes the
+     DROP COLUMN it frees. `git_workspaces_run_uq` and `_path_uq` are inline
+     UNIQUE constraints — sqlite_autoindex entries — so they go with the table. */
+  sql: `
+DROP INDEX IF EXISTS git_workspaces_state_idx;
+DROP TABLE IF EXISTS git_workspaces;
+
+ALTER TABLE issues DROP COLUMN workspace_path;
+ALTER TABLE issues DROP COLUMN workspace_branch;
+ALTER TABLE issues DROP COLUMN workspace_base_commit;
+ALTER TABLE issues DROP COLUMN workspace_commit;
+ALTER TABLE issues DROP COLUMN verification_status;
+
+ALTER TABLE heartbeat_runs DROP COLUMN workspace_path;
+ALTER TABLE heartbeat_runs DROP COLUMN workspace_branch;
+ALTER TABLE heartbeat_runs ADD COLUMN snapshot_commit TEXT;
+ALTER TABLE heartbeat_runs ADD COLUMN snapshot_head TEXT;
+`,
 }];
 
 // Applies pending migrations, each in its own IMMEDIATE transaction so a failing

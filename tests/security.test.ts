@@ -76,6 +76,41 @@ test("the token handshake keeps the browser on https and marks the cookie secure
   assert.doesNotMatch(localRes.headers.get("set-cookie") ?? "", /Secure/);
 });
 
+test("treats localhost and 127.0.0.1 as the same local host", () => {
+  process.env.NEXOTAO_SESSION_TOKEN = token;
+  process.env.NEXOTAO_ALLOWED_HOST = "127.0.0.1:4319";
+  delete process.env.NEXOTAO_MAX_REQUEST_BYTES;
+
+  // The README tells people to open `localhost:4319`; the CLI advertises
+  // `127.0.0.1:4319`. Both have to reach the same app.
+  // A browser on the alias holds no cookie for it — the session was minted for
+  // `127.0.0.1` — so a plain navigation is sent to the canonical host, where
+  // that cookie applies, rather than being refused.
+  const named = new NextRequest("http://localhost:4319/board", { headers: { host: "localhost:4319" } });
+  const redirect = proxy(named);
+  assert.equal(redirect.status, 307);
+  assert.equal(redirect.headers.get("location"), "http://127.0.0.1:4319/board");
+
+  const write = new NextRequest("http://localhost:4319/api/config", {
+    method: "POST",
+    headers: { host: "localhost:4319", origin: "http://localhost:4319", cookie: `nexotao_session=${token}`, "content-length": "2" },
+    body: "{}",
+  });
+  assert.equal(proxy(write).status, 200);
+
+  // A different port is a different server, alias or not.
+  const otherPort = new NextRequest("http://localhost:9999/api/config", { headers: { host: "localhost:9999" } });
+  assert.equal(proxy(otherPort).status, 403);
+
+  // And the alias must not let a foreign origin drive that tab.
+  const foreign = new NextRequest("http://localhost:4319/api/config", {
+    method: "POST",
+    headers: { host: "localhost:4319", origin: "http://127.0.0.1:9999", cookie: `nexotao_session=${token}`, "content-length": "2" },
+    body: "{}",
+  });
+  assert.equal(proxy(foreign).status, 403);
+});
+
 test("enforces mutation request size", () => {
   process.env.NEXOTAO_SESSION_TOKEN = token;
   process.env.NEXOTAO_ALLOWED_HOST = "127.0.0.1:4319";

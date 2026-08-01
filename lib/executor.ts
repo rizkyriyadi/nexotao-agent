@@ -16,12 +16,14 @@ import { getDatabase } from "./db/database";
 import { ControlPlaneRepositories, type ClaimedHeartbeat, type WakeupReason } from "./db/repositories";
 import { RunEventDomainError } from "./run-events";
 import {
-  RUN_EXCLUSION_EVENT_TYPE, RUN_INTEGRATION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE,
-  settledIssueStatus,
+  awaitsReview, RUN_EXCLUSION_EVENT_TYPE, RUN_RESULT_EVENT_TYPE, RUN_REVIEW_EVENT_TYPE,
+  RUN_SNAPSHOT_EVENT_TYPE, RUN_SUMMARY_EVENT_TYPE, settledIssueStatus,
 } from "./run-transcript";
 import { DurableHeartbeatRuntime, type HeartbeatContext } from "./heartbeat-runtime";
-import { GitWorkspaceManager } from "./git-workspace";
+import { capture, changedSince, sweepSnapshots } from "./run-snapshot";
+import { agentWriteGuard } from "./run-guards";
 import { isBlockerResolved } from "./blocker-attention";
+import { hasUnansweredFollowUp, openConversation } from "./follow-ups";
 
 /** How long a run start will wait for its code index to catch up before going
  *  ahead anyway. A warm re-index measures ~0.1–0.6 s, so this is nearly never
@@ -95,6 +97,31 @@ export async function resumeQueuedWork() {
   const runtime = await heartbeatRuntime();
   await runtime.initialize();
   for (const project of await listProjects()) await tick(project.id).catch(() => {});
+  // Boot is the one moment nothing is mid-write, so it is where a snapshot left
+  // by a process that died — the case no post-run sweep can ever reach — gets
+  // collected. Fire-and-forget: startup must not wait on git.
+  void sweepRunSnapshots();
+}
+
+/** Collect the snapshot refs of runs nobody is waiting on any more.
+ *
+ *  One ref is minted per run and nothing else ever removes them, so without this
+ *  a task the user followed up on a dozen times leaves a dozen dangling commits
+ *  pinned in their repository for good. Refs whose task is still parked in
+ *  review are held — that is precisely what keeps Revert on offer — and the rest
+ *  age out. */
+async function sweepRunSnapshots(projectId?: string) {
+  try {
+    const repositories = new ControlPlaneRepositories(await getDatabase());
+    const held = repositories.snapshotRunIdsInReview(projectId);
+    for (const project of await listProjects()) {
+      if (projectId && project.id !== projectId) continue;
+      await sweepSnapshots(expandHome(project.path), held).catch(() => undefined);
+    }
+  } catch {
+    // Housekeeping. A repository that will not release a ref is untidy, not
+    // broken, and must never take a run down with it.
+  }
 }
 
 export async function triggerHeartbeat(input: { agentId: string; issueId?: string | null; reason: WakeupReason; eventId: string; availableAt?: number }) {
@@ -143,7 +170,6 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     const model = issue.model ?? (await I.getAgentModel(agent.id)) ?? defaultModel;
     const database = await getDatabase();
     const repositories = new ControlPlaneRepositories(database);
-    const workspaceManager = new GitWorkspaceManager(repositories);
     const run = createRun(runId, undefined, { kind: "chat", title: issue.title, projectId });
     let eventWrites = Promise.resolve();
     const stopMirroring = run.subscribe((event) => {
@@ -156,46 +182,51 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     });
     const cancel = () => run.cancel(heartbeat.signal.reason instanceof Error ? heartbeat.signal.reason.message : "Cancelled by runtime");
     heartbeat.signal.addEventListener("abort", cancel, { once: true });
-    const startedAt = Date.now();
     run.push({ type: "run", runId });
     run.push({ type: "status", status: "running" });
 
     // The agent handles the task directly in the mode the user picked: `ask`
-    // answers read-only, `plan` writes a plan read-only, `agent` builds it in an
-    // isolated workspace.
+    // answers read-only, `plan` writes a plan read-only, `agent` builds it in
+    // the user's own project folder.
     const mode: import("./agent").IssueAgentMode =
       issue.runMode === "ask" ? "lead-ask" : issue.runMode === "plan" ? "lead-plan-doc" : "lead-execute";
     const writesFiles = mode === "lead-execute";
     if (heartbeat.signal.aborted) cancel();
 
-    let executionRoot = root;
-    let beforeMutation: ((tool: { name: string; input: unknown }) => Promise<void>) | undefined;
+    // One folder, always: the one the user has open. There is no second place to
+    // execute any more, which is the whole point — the run's work is immediately
+    // visible in their editor, buildable, and testable.
+    const executionRoot = root;
+    const refused = new Set<string>();
+    const beforeMutation = writesFiles ? agentWriteGuard((file) => refused.add(file)) : undefined;
 
-    // Build the conversation: the original request, then any follow-up messages
-    // (with the previous run's summary as the assistant turn between them) so the
-    // agent continues the same task instead of starting over.
-    const followUps = repositories.listComments(issueId)
-      .filter((c) => c.authorType === "user")
-      .sort((a, b) => a.createdAt - b.createdAt);
-    const messages: { role: "user" | "assistant"; content: string }[] = [
-      { role: "user", content: issue.detail || issue.title },
-    ];
-    if (followUps.length) {
-      if (issue.summary) messages.push({ role: "assistant", content: issue.summary });
-      for (const c of followUps) messages.push({ role: "user", content: c.body });
-    }
+    // Build the conversation — the original request, then any follow-up messages
+    // — and remember which of them this run is answering, so a message that
+    // arrives while it works is recognised as still owed a reply.
+    const { messages, answered } = openConversation(issue, repositories.listComments(issueId));
+    const unanswered = () => hasUnansweredFollowUp(repositories.listComments(issueId), answered);
 
     let result: { text: string; summary: string; completion: import("./run-transcript").RunCompletion } =
       { text: "", summary: "", completion: "complete" };
+    // Set when the run changed files and the user has asked to look before the
+    // task closes. The files are already in their folder either way — this only
+    // decides whether the task parks in review or finishes.
+    let awaitingReview = false;
     try {
-      // Provision the isolated worktree inside the run's try/catch so a
-      // preparation failure (e.g. `git worktree add`) is reported as a failed
-      // run and transitions the issue out of `in_progress`, instead of leaving
-      // it stranded as "running" while the run itself is already failed.
+      // Record the folder before a single byte is written, so Revert has
+      // somewhere to go back to. Deliberately outside the failure path: capture
+      // never throws, and a run without a safety net is still a run — it just
+      // says so. The old worktree provisioning had the opposite contract,
+      // rightly, because a failure there meant nowhere to execute at all.
       if (writesFiles) {
-        const assignment = await workspaceManager.provision({ projectId, issueId, identifier: issue.ref, runId, repositoryPath: root });
-        executionRoot = assignment.workspacePath;
-        beforeMutation = workspaceManager.mutationGuard(issueId, runId);
+        const snapshot = await capture(root, runId);
+        if (snapshot.available) {
+          await repositories.recordSnapshot(runId, snapshot.commit, snapshot.head).catch(() => null);
+        } else {
+          // Said out loud rather than swallowed: without this the run edits the
+          // user's folder with no way back and nothing anywhere admits it.
+          await heartbeat.emit(RUN_SNAPSHOT_EVENT_TYPE, { reason: snapshot.reason, detail: snapshot.detail, thread: "lead" });
+        }
       }
       // The agent's first instruction is to call graph_query before reading
       // files, so the index wants to be current *before* the run starts, not
@@ -211,46 +242,39 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
         run, apiKey, model, root: executionRoot, mode, agentName: agent.name, messages, beforeMutation,
       });
       if (mode === "lead-execute") {
-        // Persist the work to the isolated worktree, then fast-forward it into the
-        // user's own branch. The commit is an internal implementation detail — the
-        // user sees the agent's own summary, not a raw commit hash — but the files
-        // are not: a run that reports "done" while the project folder is untouched
-        // is indistinguishable from one that did nothing.
-        const finalized = await workspaceManager.finalizeCommit(issueId, runId, issue.ref);
-        const integration = await workspaceManager.integrate(runId);
-        // Held-back files are the one outcome the integration notice below cannot
-        // describe. It is gated on a commit, and a run whose *every* changed path
-        // was excluded produces none — so the user was told nothing at all: no
-        // notice, no branch to merge, a folder that never changed, and a summary
-        // claiming the files were written. Reported before integration because it
-        // is true regardless of what integration then decides.
-        if (finalized.excluded.length) {
-          const files = finalized.excluded.join(", ");
-          const notice = `\n\n> Left out of the commit — agent instruction files stay local and are not committed: ${files}. `
-            + `They are still on disk in the working copy.`;
-          await heartbeat.emit(RUN_EXCLUSION_EVENT_TYPE, { files: finalized.excluded, thread: "lead" });
+        // Refused writes are the one outcome the changes notice below cannot
+        // describe. A run whose every attempted write was refused changes
+        // nothing, so the user would be told nothing at all: no notice, an
+        // unchanged folder, and a summary claiming the files were written.
+        if (refused.size) {
+          const files = [...refused].join(", ");
+          const notice = `\n\n> Not written — agent instruction files are local-only and a run may not edit them: ${files}.`;
+          await heartbeat.emit(RUN_EXCLUSION_EVENT_TYPE, { files: [...refused], thread: "lead" });
           result.text += notice;
           if (result.summary) result.summary += notice;
         }
-        // A refusal is not a failed run: the work is committed and recoverable, so
-        // the only thing at stake is that the user knows where it is. Three places
-        // need telling, because each is read by a different surface and none of
-        // them can be reached from the others at this point: the transcript reads
-        // durable events (and every event the agent wrote was written before
-        // integration was even attempted), the board reads the issue summary, and
-        // the answer text is what a follow-up run sees as the prior turn.
-        if (integration.reason && integration.commit) {
-          // A fourth reader, and the only one that outlives the run: the files
-          // panel. The three below are all transcript-shaped — they answer "what
-          // happened in this run?" — but the user's next question is "where are
-          // my files?", asked from a folder view that has no run attached. That
-          // needs the refusal recorded on the workspace itself, where a later
-          // read can find it without replaying events.
-          await repositories.markWorkspaceState(runId, "rejected", integration.reason).catch(() => {});
-          await heartbeat.emit(RUN_INTEGRATION_EVENT_TYPE, {
-            branch: integration.branch, reason: integration.reason, thread: "lead",
+        // The files are already in the user's folder — the agent wrote them
+        // there. What is left to decide is whether the task may close on the
+        // agent's own say-so, and that is the user's setting: "review" parks it
+        // until they have looked, "auto" finishes it and leaves the diff and
+        // Revert available anyway.
+        //
+        // Told in the same three places a refusal is, because each is read by a
+        // different surface and none can be reached from the others at this
+        // point: the transcript reads durable events, the board reads the issue
+        // summary, and the answer text is what a follow-up run sees as the prior
+        // turn.
+        const snapshotRow = repositories.getHeartbeat(runId);
+        const changes = snapshotRow?.snapshotCommit
+          ? await changedSince(root, snapshotRow.snapshotCommit, runId).catch(() => [])
+          : [];
+        if (awaitsReview(changes.length, (await getConfig()).reviewMode)) {
+          awaitingReview = true;
+          await heartbeat.emit(RUN_REVIEW_EVENT_TYPE, {
+            files: changes.slice(0, 50).map((change) => change.path), thread: "lead",
           });
-          const notice = `\n\n> Your project folder was left as it is — ${integration.reason}. Merge it with \`git merge ${integration.branch}\`.`;
+          const notice = `\n\n> Waiting for your review — ${changes.length} file${changes.length === 1 ? "" : "s"} changed in your project folder. `
+            + `Keep them, or revert them back to how they were before this run.`;
           result.text += notice;
           if (result.summary) result.summary += notice;
         }
@@ -270,8 +294,11 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     } catch (e: any) {
       run.push({ type: "error", error: String(e?.message ?? e) });
       result = { text: `Failed: ${String(e?.message ?? e)}`, summary: "", completion: "complete" };
+      // A failed run does not make the message that arrived during it any less
+      // unanswered. Hardcoding `false` here filed the task in review with the
+      // follow-up sitting in the thread and nothing left to ever read it.
       if (run.cancelled) await I.updateIssue(issueId, { status: "cancelled", summary: "Cancelled by user" }, { type: "agent", id: agent.id, runId });
-      else await onIssueFinished(projectId, issue, agent, result, false, false);
+      else await onIssueFinished(projectId, issue, agent, result, false, unanswered, false);
       throw e;
     } finally {
       await eventWrites;
@@ -280,8 +307,7 @@ async function startIssue(job: ClaimedHeartbeat, heartbeat: HeartbeatContext) {
     }
     // A follow-up message that landed while this run was executing isn't answered
     // yet — reopen the task so the lead picks it up in a fresh run.
-    const queued = repositories.listComments(issueId).some((c) => c.authorType === "user" && c.createdAt > startedAt);
-    await onIssueFinished(projectId, issue, agent, result, true, queued);
+    await onIssueFinished(projectId, issue, agent, result, true, unanswered, awaitingReview);
 }
 
 async function onIssueFinished(
@@ -290,27 +316,41 @@ async function onIssueFinished(
   agent: I.Agent,
   result: { text: string; summary?: string; completion?: import("./run-transcript").RunCompletion },
   ok: boolean,
-  requeue: boolean,
+  unanswered: () => boolean,
+  awaitingReview: boolean,
 ) {
   // An agent that ran out of steps was still mid-task. Calling that "done" is
   // what made finished-looking tasks trail off mid-sentence with nothing to
   // show for them; it goes to review instead, where the user can continue it.
   const truncated = result.completion === "truncated";
-  const status = settledIssueStatus({ ok, truncated, requeue });
+  const status = settledIssueStatus({ ok, truncated, requeue: unanswered(), review: awaitingReview });
   // The closing report is what the user reads on the board, so it is preferred
   // over the raw stream of mid-task thinking that used to land here.
   const summary = result.summary?.trim() || result.text;
   await I.updateIssue(issue.id, { status, summary }, { type: "agent", id: agent.id, runId: issue.runId });
+  // One window is left and it is the narrowest one: a message posted between the
+  // check above and the write. `reopen` sees a task that is still `in_progress`
+  // and leaves it for this run to notice — and this run has already decided. So
+  // the last thing the run does before it stops looking is look once more, now
+  // that the task is no longer checked out to it and a re-open would stick.
+  if (status === "done" && unanswered()) {
+    await I.reopenIssue(issue.id, { type: "system", runId: issue.runId }).catch(() => null);
+  }
   // Record the run, then fold it into the work-history graph incrementally. Both
   // are fire-and-forget so run completion isn't slowed or blocked by indexing.
   addAgentRun(projectId, { agent: agent.name, task: issue.title, summary: summary.slice(0, 400), ok: ok && !truncated })
     .then((run) => appendRunToWorkGraph(projectId, { run, issue: { identifier: issue.ref, title: issue.title, status } }))
     .catch(() => {});
-  // The run's work has just been fast-forwarded into the user's branch, so this
-  // is where the new code lands in the canonical root. Fire-and-forget for the
-  // same reason as the work graph above: nothing about finishing waits on it.
+  // Re-index the canonical root. Every run that wrote anything wrote it here,
+  // so unlike the worktree era this is a real refresh rather than a no-op
+  // waiting on an approval. Fire-and-forget for the same reason as the work
+  // graph above.
   getProject(projectId)
     .then((project) => (project ? refreshCodeIndex(projectId, project.path, { mode: "fast" }) : null))
     .catch(() => {});
+  // Collect the snapshot refs of runs nobody is waiting on. A task parked in
+  // review holds its own, so a follow-up conversation reclaims the refs of the
+  // exchanges before it instead of adding to them.
+  void sweepRunSnapshots(projectId);
   tick(projectId);
 }

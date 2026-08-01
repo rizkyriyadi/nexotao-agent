@@ -134,26 +134,27 @@ export async function updateIssue(
   actor: IssueActor = { type: "system" },
 ): Promise<Issue | null> {
   const database = await getDatabase();
-  const lifecycle = new IssueLifecycleService(database);
   const before = await getIssue(id);
   if (!before) return null;
   if (patch.runId !== undefined) throw new IssueDomainError("conflict", "Checkout locks must be changed through checkout or release");
-  await database.write((db) => {
-    db.update(issues).set({
+  // One call, one transaction. These used to be four separate writes, so an edit
+  // that renamed a task and moved it somewhere the lifecycle refuses committed
+  // the rename and then threw — the user saw an error and half their change.
+  await new IssueLifecycleService(database).edit({
+    issueId: id,
+    fields: {
       ...(patch.title !== undefined ? { title: patch.title } : {}), ...(patch.detail !== undefined ? { description: patch.detail } : {}),
       ...(patch.parentId !== undefined ? { parentId: patch.parentId } : {}),
       ...(patch.stage !== undefined ? { stage: patch.stage } : {}),
       ...(patch.priority !== undefined ? { priority: patch.priority } : {}),
       ...(patch.model !== undefined ? { model: patch.model } : {}),
-      ...(patch.summary !== undefined ? { summary: patch.summary } : {}), updatedAt: Date.now(),
-    }).where(eq(issues.id, id)).run();
+      ...(patch.summary !== undefined ? { summary: patch.summary } : {}),
+    },
+    ...(patch.assigneeAgentId !== undefined ? { assigneeAgentId: patch.assigneeAgentId } : {}),
+    ...(patch.blockedBy !== undefined ? { blockerIds: patch.blockedBy } : {}),
+    ...(patch.status !== undefined ? { status: patch.status as Exclude<IssueStatusValue, "in_progress"> } : {}),
+    actor,
   });
-  if (patch.assigneeAgentId !== undefined) await lifecycle.assign(id, patch.assigneeAgentId, actor);
-  if (patch.blockedBy !== undefined) await lifecycle.setDependencies(id, patch.blockedBy, actor);
-  if (patch.status !== undefined && patch.status !== before.status) {
-    if (patch.status === "in_progress") throw new IssueDomainError("invalid_transition", "Issues enter in_progress only through checkout");
-    await lifecycle.transition(id, patch.status, actor);
-  }
   return getIssue(id);
 }
 export async function reopenIssue(id: string, actor: IssueActor = { type: "user" }, runMode?: RunMode): Promise<Issue | null> {

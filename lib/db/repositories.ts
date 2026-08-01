@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, asc, desc, eq, gt, inArray } from "drizzle-orm";
 import type { AppDatabase } from "./database";
 import {
-  activityLog, agents, approvals, documentRevisions, documents, gitWorkspaces, heartbeatRuns,
+  activityLog, agents, approvals, documentRevisions, documents, heartbeatRuns,
   issueComments, issueDependencies, issueDocuments, issues, runEvents, wakeupRequests,
 } from "./schema";
 import { IssueDomainError, IssueLifecycleService } from "../issue-lifecycle";
@@ -14,7 +14,6 @@ import {
 export type NewAgent = typeof agents.$inferInsert;
 export type AgentRow = typeof agents.$inferSelect;
 export type NewIssue = typeof issues.$inferInsert;
-export type GitWorkspaceRow = typeof gitWorkspaces.$inferSelect;
 export type IssueRow = typeof issues.$inferSelect;
 export type WakeupReason = "assignment" | "invoke" | "mention" | "approval" | "dependency" | "retry";
 export type HeartbeatStatus = "queued" | "running" | "waiting" | "succeeded" | "failed" | "cancelled";
@@ -26,6 +25,16 @@ export type ClaimedHeartbeat = {
  *  one is set by whichever task happened to fail last, so treating it as a gate
  *  would let a single failure strand the agent's entire queue. */
 export const HUMAN_GATED_AGENT_STATUS = ["paused", "terminated"];
+
+/** How many times one wakeup may be claimed before the queue gives up on it.
+ *
+ *  `attempt` was incremented on every claim and read by nothing, so a run that
+ *  took the server down with it was requeued by boot recovery, claimed again,
+ *  and took the server down again — indefinitely, with no surface anywhere
+ *  saying why. Four is enough to ride out a transient fault (a locked file, a
+ *  network blip) and few enough that a genuinely poisonous run stops mattering
+ *  within one restart cycle rather than never. */
+export const MAX_WAKEUP_ATTEMPTS = 4;
 
 export interface AgentRepository {
   list(projectId: string): AgentRow[];
@@ -159,78 +168,124 @@ export class ControlPlaneRepositories {
       return { wakeup, heartbeat };
     });
   }
-  getWorkspace(runId: string) {
-    return this.database.read((db) => db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get() ?? null);
-  }
-  listWorkspaces(projectId?: string) {
-    return this.database.read((db) => db.select().from(gitWorkspaces).where(projectId ? eq(gitWorkspaces.projectId, projectId) : undefined).orderBy(asc(gitWorkspaces.createdAt)).all());
-  }
-  listWorkspacesForIssue(issueId: string) {
-    return this.database.read((db) => db.select().from(gitWorkspaces).where(eq(gitWorkspaces.issueId, issueId)).orderBy(asc(gitWorkspaces.createdAt)).all());
-  }
-  assignWorkspace(input: {
-    id: string; projectId: string; issueId: string; runId: string; repositoryPath: string; workspacePath: string;
-    branch: string; targetBranch: string; baseCommit: string;
-  }) {
+  /** Remember where a run's safety net lives, so Revert survives a restart.
+   *
+   *  Best effort by design: a run whose snapshot never captured is still a
+   *  perfectly good run, it simply has nothing to offer Revert. */
+  recordSnapshot(runId: string, snapshotCommit: string, snapshotHead: string | null) {
     return this.database.write((db) => {
-      const issue = db.select().from(issues).where(eq(issues.id, input.issueId)).get();
-      const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, input.runId)).get();
-      if (!issue || issue.projectId !== input.projectId || issue.checkoutRunId !== input.runId || issue.status !== "in_progress") {
-        throw new IssueDomainError("conflict", "Run does not own the issue workspace assignment");
-      }
-      if (!heartbeat || heartbeat.issueId !== input.issueId || !["running", "waiting"].includes(heartbeat.status)) {
-        throw new IssueDomainError("conflict", "Heartbeat is not active for the issue workspace assignment");
-      }
-      const existing = db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, input.runId)).get();
-      if (existing) {
-        if (existing.workspacePath !== input.workspacePath || existing.branch !== input.branch) {
-          throw new IssueDomainError("conflict", "Run already has a different workspace assignment");
+      db.update(heartbeatRuns).set({ snapshotCommit, snapshotHead, updatedAt: Date.now() }).where(eq(heartbeatRuns.id, runId)).run();
+      return db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get() ?? null;
+    });
+  }
+  /** Forget a run's safety net, once the ref behind it is gone.
+   *
+   *  Always paired with `dropSnapshot`: the ref is what keeps the commit
+   *  reachable, so a row still naming it after the ref is deleted would offer a
+   *  Revert that resolves to nothing the next time git runs its own gc. */
+  clearSnapshot(runId: string) {
+    return this.database.write((db) => {
+      db.update(heartbeatRuns).set({ snapshotCommit: null, snapshotHead: null, updatedAt: Date.now() })
+        .where(eq(heartbeatRuns.id, runId)).run();
+    });
+  }
+  /** The newest run on this issue that has a snapshot — the one Revert is
+   *  offered against. Newest wins: a follow-up run's snapshot records the folder
+   *  as the earlier run left it, so reverting to it undoes only the latest work,
+   *  which is what the button beside it claims to do. */
+  latestSnapshotForIssue(issueId: string) {
+    return this.database.read((db) => db.select().from(heartbeatRuns)
+      .where(eq(heartbeatRuns.issueId, issueId)).orderBy(desc(heartbeatRuns.startedAt)).all()
+      .find((row) => row.snapshotCommit) ?? null);
+  }
+  /** Runs whose snapshot must not be swept: their task is still parked in
+   *  review, so the button is still on offer. */
+  snapshotRunIdsInReview(projectId?: string) {
+    return this.database.read((db) => {
+      const parked = db.select().from(issues)
+        .where(projectId ? and(eq(issues.projectId, projectId), eq(issues.status, "in_review")) : eq(issues.status, "in_review")).all();
+      const held = new Set<string>();
+      for (const issue of parked) {
+        for (const run of db.select().from(heartbeatRuns).where(eq(heartbeatRuns.issueId, issue.id)).all()) {
+          if (run.snapshotCommit) held.add(run.id);
         }
-        return existing;
       }
-      const now = Date.now();
-      const row: typeof gitWorkspaces.$inferInsert = {
-        ...input, commitSha: null, state: "active", lastValidatedAt: now, recoveryNote: null, createdAt: now, updatedAt: now,
-      };
-      db.insert(gitWorkspaces).values(row).run();
-      db.update(issues).set({
-        workspacePath: input.workspacePath, workspaceBranch: input.branch, workspaceBaseCommit: input.baseCommit,
-        workspaceCommit: null, verificationStatus: "active", updatedAt: now,
-      }).where(eq(issues.id, input.issueId)).run();
-      db.update(heartbeatRuns).set({ workspacePath: input.workspacePath, workspaceBranch: input.branch, updatedAt: now })
-        .where(eq(heartbeatRuns.id, input.runId)).run();
-      return db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, input.runId)).get()!;
+      return held;
     });
   }
-  touchWorkspace(runId: string) {
-    return this.database.write((db) => {
-      const now = Date.now();
-      db.update(gitWorkspaces).set({ lastValidatedAt: now, updatedAt: now }).where(eq(gitWorkspaces.runId, runId)).run();
-      return db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get() ?? null;
+  /** Retire queued wakeups that have already been claimed too many times, before
+   *  anything can claim them again.
+   *
+   *  This is the only thing standing between a run that kills the process and an
+   *  endless crash loop: boot recovery requeues whatever was `running`, so
+   *  without a ceiling the same poisonous run is picked up on every start. Runs
+   *  retired here end in a terminal `failure` event, which is what makes them
+   *  visible in the transcript instead of silently vanishing from the queue. */
+  async abandonExhaustedHeartbeats(now = Date.now(), maxAttempts = MAX_WAKEUP_ATTEMPTS) {
+    const abandoned = await this.database.write((db) => {
+      const exhausted = db.select().from(wakeupRequests).where(eq(wakeupRequests.status, "queued")).all()
+        .filter((row) => row.attempt >= maxAttempts);
+      const events: DurableRunEvent[] = [];
+      const retired: Array<{ runId: string; reason: string }> = [];
+      for (const wakeup of exhausted) {
+        const reason = `Gave up after ${wakeup.attempt} attempts${wakeup.lastError ? `: ${wakeup.lastError}` : ""}`;
+        const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.wakeupId, wakeup.id)).get();
+        if (heartbeat) retired.push({ runId: heartbeat.id, reason });
+        db.update(wakeupRequests).set({ status: "failed", finishedAt: now, lastError: reason }).where(eq(wakeupRequests.id, wakeup.id)).run();
+        if (heartbeat) {
+          db.update(heartbeatRuns).set({ status: "failed", error: reason, updatedAt: now, finishedAt: now }).where(eq(heartbeatRuns.id, heartbeat.id)).run();
+          const last = db.select().from(runEvents).where(eq(runEvents.runId, heartbeat.id)).orderBy(desc(runEvents.seq)).get();
+          if (!last || !isTerminalRunEvent(last.type)) {
+            const event = {
+              runId: heartbeat.id, seq: (last?.seq ?? 0) + 1, type: "failure",
+              redactedPayload: sanitizeRunEventPayload({ status: "failed", error: reason }), createdAt: now,
+            };
+            db.insert(runEvents).values(event).run();
+            events.push(event);
+          }
+        }
+        const agent = db.select().from(agents).where(eq(agents.id, wakeup.agentId)).get();
+        if (agent && !HUMAN_GATED_AGENT_STATUS.includes(agent.status)) {
+          db.update(agents).set({ status: "error", errorReason: reason, updatedAt: now }).where(eq(agents.id, wakeup.agentId)).run();
+        }
+        db.insert(activityLog).values({
+          id: randomUUID(), actorType: "system", actorId: null, action: "heartbeat.abandoned",
+          entityType: "agent", entityId: wakeup.agentId, summary: { wakeupId: wakeup.id, attempts: wakeup.attempt, reason },
+          runId: heartbeat?.id ?? null, createdAt: now,
+        }).run();
+      }
+      return { events, retired, count: exhausted.length };
     });
+    for (const event of abandoned.events) publishRunEvent(event);
+    // Outside the transaction: the lifecycle opens its own write, and an issue
+    // still checked out to a retired run would otherwise render as running for
+    // good — the very state this whole path exists to escape.
+    for (const { runId } of abandoned.retired) await this.failRunIssue(runId).catch(() => null);
+    return abandoned.count;
   }
-  recordWorkspaceCommit(runId: string, commitSha: string, state: "committed" | "verified" | "rejected") {
-    return this.database.write((db) => {
-      const workspace = db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get();
-      if (!workspace) throw new IssueDomainError("not_found", "Workspace assignment not found");
-      const now = Date.now();
-      db.update(gitWorkspaces).set({ commitSha, state, updatedAt: now }).where(eq(gitWorkspaces.runId, runId)).run();
-      db.update(issues).set({ workspaceCommit: commitSha, verificationStatus: state, updatedAt: now }).where(eq(issues.id, workspace.issueId)).run();
-      return db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get()!;
-    });
-  }
-  markWorkspaceState(runId: string, state: "active" | "committed" | "verified" | "rejected" | "orphaned" | "recovered" | "cleaned", recoveryNote?: string | null) {
-    return this.database.write((db) => {
-      const now = Date.now();
-      db.update(gitWorkspaces).set({ state, recoveryNote: recoveryNote ?? null, updatedAt: now }).where(eq(gitWorkspaces.runId, runId)).run();
-      return db.select().from(gitWorkspaces).where(eq(gitWorkspaces.runId, runId)).get() ?? null;
-    });
+  /** Send an issue whose run was retired to review rather than leaving it checked
+   *  out. `in_review` is the honest destination: the work stopped partway and a
+   *  human has to decide what happens next. */
+  private async failRunIssue(runId: string) {
+    const issueId = this.getHeartbeat(runId)?.issueId;
+    if (!issueId) return null;
+    const issue = this.issues.get(issueId);
+    if (!issue || issue.status !== "in_progress" || issue.checkoutRunId !== runId) return null;
+    try {
+      return await new IssueLifecycleService(this.database).transition(issueId, "in_review", { type: "system", runId });
+    } catch (error) {
+      if (error instanceof IssueDomainError && ["invalid_transition", "conflict", "not_found"].includes(error.code)) return null;
+      throw error;
+    }
   }
   claimNextHeartbeat(now = Date.now()): Promise<ClaimedHeartbeat | null> {
     return this.database.write((db) => {
       const candidates = db.select().from(wakeupRequests).where(eq(wakeupRequests.status, "queued"))
         .orderBy(asc(wakeupRequests.availableAt), asc(wakeupRequests.createdAt)).all().filter((row) => row.availableAt <= now);
       for (const candidate of candidates) {
+        // Belt to abandonExhaustedHeartbeats' braces: whatever else requeues a
+        // wakeup, nothing gets to claim one that has already used up its budget.
+        if (candidate.attempt >= MAX_WAKEUP_ATTEMPTS) continue;
         const agent = db.select().from(agents).where(eq(agents.id, candidate.agentId)).get();
         // Only a human-gated status blocks the claim. An agent left in `error` by
         // a previous failure still picks up the next task — otherwise one bad run
@@ -267,17 +322,29 @@ export class ControlPlaneRepositories {
       return db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get() ?? null;
     });
   }
-  requeueHeartbeat(runId: string, availableAt: number, error?: string) {
+  /** Put a run back on the queue. `resetAttempts` distinguishes the two callers:
+   *  a person clicking retry has usually changed something and deserves a fresh
+   *  budget, while an automatic requeue must keep counting toward the ceiling or
+   *  the ceiling means nothing. */
+  requeueHeartbeat(runId: string, availableAt: number, error?: string, resetAttempts = false) {
     return this.database.write((db) => {
       const heartbeat = db.select().from(heartbeatRuns).where(eq(heartbeatRuns.id, runId)).get();
       if (!heartbeat?.wakeupId) return false;
       const now = Date.now();
       db.update(heartbeatRuns).set({ status: "queued", error: error ?? null, updatedAt: now, finishedAt: null }).where(eq(heartbeatRuns.id, runId)).run();
-      db.update(wakeupRequests).set({ status: "queued", availableAt, runId: null, claimedAt: null, finishedAt: null, lastError: error ?? null }).where(eq(wakeupRequests.id, heartbeat.wakeupId)).run();
+      db.update(wakeupRequests).set({
+        status: "queued", availableAt, runId: null, claimedAt: null, finishedAt: null, lastError: error ?? null,
+        ...(resetAttempts ? { attempt: 0 } : {}),
+      }).where(eq(wakeupRequests.id, heartbeat.wakeupId)).run();
       db.update(agents).set({ status: "queued", errorReason: null, updatedAt: now }).where(eq(agents.id, heartbeat.agentId)).run();
       return true;
     });
   }
+  /** Requeue whatever was mid-flight when the process died. The attempt counter
+   *  is deliberately left where the claim put it: a run that crashes the server
+   *  is recovered here, claimed again, and crashes it again, so this path is
+   *  exactly the loop `MAX_WAKEUP_ATTEMPTS` bounds. Retiring the exhausted ones
+   *  happens in `abandonExhaustedHeartbeats`, which the runtime calls next. */
   recoverOrphanedHeartbeats() {
     return this.database.write((db) => {
       const orphaned = db.select().from(wakeupRequests).where(eq(wakeupRequests.status, "running")).all();

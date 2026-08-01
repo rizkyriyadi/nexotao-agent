@@ -365,6 +365,107 @@ test("a worktree that cannot be traced does not abort the others", async () => {
   } finally { await f.cleanup(); }
 });
 
+/* ── the undo points left inside the user's repositories ─────────────────────
+ * Runs no longer make a worktree; they edit the user's folder directly and
+ * record a before-picture as a dangling commit under `refs/nexotao/snapshots/`.
+ * That ref lives in a repository we do not own, shows up in `git for-each-ref`,
+ * and travels with `git push --mirror`. Nothing collects it but us, so an
+ * uninstall that skips it leaves our name inside their repo permanently.
+ *
+ * The two tests below cover the two ways we can find such a repository, and the
+ * second matters more: after this release most projects never host a worktree
+ * at all, so the disk scan finds nothing and the database is the only record of
+ * where we have been writing. */
+
+const refsUnder = async (repo: string) =>
+  (await git(repo, "for-each-ref", "--format=%(refname)", "refs/nexotao/")).split("\n").filter(Boolean);
+
+/** A real `projects` table, because that is what the uninstaller reads. The
+ *  ordinary fixture writes garbage into `nexotao.sqlite` on purpose — proving
+ *  an unreadable database costs nothing but ref cleanup — so a test that wants
+ *  the rows has to lay them down itself.
+ *
+ *  The import goes through a variable because `@types/node` is pinned at ^20 and
+ *  `node:sqlite` landed in 22.5: a literal specifier is a compile error against
+ *  those types even though the module is there at runtime. The uninstaller has
+ *  the same import and no such problem — it is `.mjs`, and nothing typechecks
+ *  it. This is also why the module is optional there rather than assumed. */
+const NODE_SQLITE = "node:sqlite";
+type DatabaseSyncCtor = new (path: string, options?: { readOnly?: boolean }) => {
+  exec(sql: string): void;
+  prepare(sql: string): { run(...params: unknown[]): unknown; all(): Record<string, unknown>[] };
+  close(): void;
+};
+
+async function writeProjectsTable(dir: string, paths: string[]) {
+  const { DatabaseSync } = (await import(NODE_SQLITE)) as { DatabaseSync: DatabaseSyncCtor };
+  await rm(path.join(dir, "nexotao.sqlite"), { force: true });
+  const db = new DatabaseSync(path.join(dir, "nexotao.sqlite"));
+  db.exec("create table projects (id text primary key, path text)");
+  paths.forEach((p, i) => db.prepare("insert into projects (id, path) values (?, ?)").run(`p${i}`, p));
+  db.close();
+}
+
+const passThrough = async (file: string, args: string[], opts: any) => {
+  if (file === "npm") return { code: 0, stdout: "", stderr: "" };
+  return execFileAsync(file, args, { encoding: "utf8", cwd: opts?.cwd }).then(
+    (r) => ({ code: 0, stdout: r.stdout.trim(), stderr: r.stderr.trim() }),
+    (e: any) => ({ code: e.code ?? 1, stdout: String(e.stdout ?? "").trim(), stderr: String(e.stderr ?? "").trim() }),
+  );
+};
+
+test("snapshot refs are removed from a repository the worktree scan found", async () => {
+  const f = await fixture(1);
+  try {
+    await git(f.repo, "update-ref", "refs/nexotao/snapshots/run-a", "HEAD");
+    await git(f.repo, "update-ref", "refs/nexotao/snapshots/run-b", "HEAD");
+    // A ref of the user's own, in a namespace that is not ours, one character
+    // away from the prefix we match on.
+    await git(f.repo, "update-ref", "refs/nexotao-mine/keep", "HEAD");
+
+    let printed = "";
+    const { exitCode, report } = await runUninstall(
+      { yes: true }, { ...f.deps, exec: passThrough, log: (l: string) => { printed += l; } },
+    );
+
+    assert.equal(exitCode, 0);
+    assert.equal(report.refsReleased, 2);
+    assert.deepEqual(await refsUnder(f.repo), [], "both undo points are gone");
+    assert.match(await git(f.repo, "for-each-ref", "--format=%(refname)", "refs/nexotao-mine/"), /keep/);
+    assert.match(printed, /undo point/, "the user is told about a change inside their own repo");
+    // The commits themselves become unreachable rather than being rewritten —
+    // the user's history is exactly where it was.
+    assert.equal(await git(f.repo, "rev-parse", "--abbrev-ref", "HEAD"), "main");
+  } finally { await f.cleanup(); }
+});
+
+test("a repository known only from the database still has its refs swept", async () => {
+  const f = await fixture(1);
+  try {
+    // Never hosted a worktree, so nothing under <dir>/worktrees/ names it. It is
+    // also stored the way a user types a path — `~` and all — which is how the
+    // rows actually look.
+    const other = path.join(f.sandbox, "other-app");
+    await mkdir(other, { recursive: true });
+    await git(other, "init", "-b", "main");
+    await git(other, "config", "user.name", "Test");
+    await git(other, "config", "user.email", "test@example.test");
+    await writeFile(path.join(other, "a.txt"), "x\n");
+    await git(other, "add", "a.txt");
+    await git(other, "commit", "-m", "chore: init");
+    await git(other, "update-ref", "refs/nexotao/snapshots/run-c", "HEAD");
+    await writeProjectsTable(f.dir, ["~/other-app"]);
+
+    const { report } = await runUninstall({ yes: true }, { ...f.deps, exec: passThrough });
+
+    assert.equal(report.refsReleased, 1);
+    assert.deepEqual(await refsUnder(other), [], "the ref is gone from a repo the disk scan never saw");
+    // And the folder itself is untouched — it is the user's, and only the ref
+    // inside it was ever ours.
+    assert.equal(await stat(path.join(other, "a.txt")).then(() => true, () => false), true);
+  } finally { await f.cleanup(); }
+});
+
 /* ── a live server holding the database open ────────────────────────────────── */
 
 test("a running app stops the uninstall before it starts", async () => {

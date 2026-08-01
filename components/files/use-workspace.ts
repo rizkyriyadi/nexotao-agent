@@ -8,15 +8,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TreeNode, WorkspaceRoot } from "@/lib/workspace-files";
 
-export type WorkspaceNotice = { reference: string; branch: string; reason: string };
-
 export type WorkspaceState = {
   root: WorkspaceRoot | null;
   tree: TreeNode[];
   paths: string[];
   truncated: boolean;
-  /** Set when a finished run's work never reached the project folder. */
-  notice: WorkspaceNotice | null;
   loading: boolean;
   error: string | null;
   reload: () => void;
@@ -32,26 +28,16 @@ function flatten(nodes: TreeNode[], out: string[] = []) {
 
 /** How often the tree is re-read. A run writing files changes it several times a
  *  second, so a live run is polled briskly; the rest of the time it still moves
- *  — a finishing run merges its work into the project folder, the user edits in
- *  their own editor, a build drops files — just far more slowly. */
+ *  — the user edits in their own editor, a build drops files — just far more
+ *  slowly. */
 const LIVE_INTERVAL = 4_000;
 const IDLE_INTERVAL = 15_000;
 
-/** Fetch the tree for the one folder the server picks, re-reading it on an
- *  interval.
+/** Fetch the tree for the project folder, re-reading it on an interval.
  *
- *  There is no folder to choose any more. The server follows the work — a live
- *  run's worktree while it writes, the project folder once it lands — so the
- *  handover happens inside a poll the user never sees. Polling is what makes
- *  that possible: without it the panel would sit on a folder the run has
- *  finished with.
- *
- *  Polling used to stop the moment a run settled, on the reasoning that only a
- *  running agent changes these files. That is the one moment it is most wrong:
- *  a run's last act is to fast-forward its work into the project folder, so the
- *  files appear *after* the run stops being live. The panel would sit there
- *  showing the folder as it looked before the work landed, which reads as the
- *  agent having written nothing.
+ *  Polling rather than a one-shot read because the folder is shared: a run
+ *  writes into it while the user is looking at it, and a panel that only reloads
+ *  on mount would show the folder as it stood before the agent touched it.
  *
  *  Idle polling is paused while the tab is hidden and re-read on the way back —
  *  a background tab walking the tree every fifteen seconds buys nobody
@@ -60,7 +46,6 @@ export function useWorkspace({ live = false }: { live?: boolean } = {}): Workspa
   const [root, setRoot] = useState<WorkspaceRoot | null>(null);
   const [tree, setTree] = useState<TreeNode[]>([]);
   const [truncated, setTruncated] = useState(false);
-  const [notice, setNotice] = useState<WorkspaceNotice | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
@@ -78,7 +63,6 @@ export function useWorkspace({ live = false }: { live?: boolean } = {}): Workspa
         setRoot(body.root ?? null);
         setTree(body.tree ?? []);
         setTruncated(Boolean(body.truncated));
-        setNotice(body.notice ?? null);
       } catch (cause) {
         if (!stale) setError(String(cause));
       } finally {
@@ -106,5 +90,5 @@ export function useWorkspace({ live = false }: { live?: boolean } = {}): Workspa
   const paths = useMemo(() => flatten(tree), [tree]);
   const reload = useCallback(() => setNonce((n) => n + 1), []);
 
-  return { root, tree, paths, truncated, notice, loading, error, reload };
+  return { root, tree, paths, truncated, loading, error, reload };
 }

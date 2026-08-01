@@ -47,8 +47,6 @@ export const issues = sqliteTable("issues", {
   checkoutRunId: text("checkout_run_id"),
   executionLockedAt: integer("execution_locked_at"), summary: text("summary").notNull().default(""), startedAt: integer("started_at"),
   completedAt: integer("completed_at"), cancelledAt: integer("cancelled_at"),
-  workspacePath: text("workspace_path"), workspaceBranch: text("workspace_branch"), workspaceBaseCommit: text("workspace_base_commit"),
-  workspaceCommit: text("workspace_commit"), verificationStatus: text("verification_status"),
   // `stateId` picks the board column; `status` above stays authoritative for the
   // engine (see lib/issue-lifecycle.ts). The dates are plain scheduling metadata.
   stateId: text("state_id"), startDate: integer("start_date"), targetDate: integer("target_date"),
@@ -78,7 +76,13 @@ export const heartbeatRuns = sqliteTable("heartbeat_runs", {
   wakeupId: text("wakeup_id"),
   source: text("source").notNull(), status: text("status").notNull(), sessionBefore: text("session_before"), sessionAfter: text("session_after"),
   usage: text("usage", { mode: "json" }).$type<Record<string, unknown>>().notNull().default({}), error: text("error"),
-  workspacePath: text("workspace_path"), workspaceBranch: text("workspace_branch"),
+  // The folder as it stood when this run started, as a dangling commit under
+  // `refs/nexotao/snapshots/<runId>`. Per *run* and not per issue: a follow-up
+  // is a second run, and a per-issue slot would have it overwrite the first
+  // run's snapshot — making the first run's work permanently unrevertable.
+  // `snapshotHead` is HEAD at that moment (null in a repo with no commits), so
+  // "did anything get committed during the run?" is one comparison.
+  snapshotCommit: text("snapshot_commit"), snapshotHead: text("snapshot_head"),
   queuedAt: integer("queued_at"), startedAt: integer("started_at").notNull(), updatedAt: integer("updated_at"), finishedAt: integer("finished_at"),
 }, (t) => [uniqueIndex("heartbeat_runs_wakeup_uq").on(t.wakeupId), index("heartbeat_runs_agent_started_idx").on(t.agentId, t.startedAt), index("heartbeat_runs_issue_idx").on(t.issueId)]);
 export const wakeupRequests = sqliteTable("wakeup_requests", {
@@ -112,12 +116,4 @@ export const costEvents = sqliteTable("cost_events", {
 export const activityLog = sqliteTable("activity_log", {
   id: text("id").primaryKey(), actorType: text("actor_type").notNull(), actorId: text("actor_id"), action: text("action").notNull(), entityType: text("entity_type").notNull(), entityId: text("entity_id").notNull(), summary: text("summary", { mode: "json" }).$type<unknown>().notNull(), runId: text("run_id"), createdAt: integer("created_at").notNull(),
 }, (t) => [index("activity_entity_created_idx").on(t.entityType, t.entityId, t.createdAt), index("activity_created_idx").on(t.createdAt)]);
-export const gitWorkspaces = sqliteTable("git_workspaces", {
-  id: text("id").primaryKey(), projectId: text("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  issueId: text("issue_id").notNull().references(() => issues.id, { onDelete: "cascade" }),
-  runId: text("run_id").notNull().references(() => heartbeatRuns.id, { onDelete: "cascade" }), repositoryPath: text("repository_path").notNull(),
-  workspacePath: text("workspace_path").notNull(), branch: text("branch").notNull(), targetBranch: text("target_branch").notNull(),
-  baseCommit: text("base_commit").notNull(), commitSha: text("commit_sha"), state: text("state").notNull(),
-  lastValidatedAt: integer("last_validated_at"), recoveryNote: text("recovery_note"), ...timestamps,
-}, (t) => [uniqueIndex("git_workspaces_run_uq").on(t.runId), uniqueIndex("git_workspaces_path_uq").on(t.workspacePath), index("git_workspaces_state_idx").on(t.state)]);
-export const schema = { projects, sessions, tasks, agentRuns, runRecords, agents, issues, issueDependencies, issueMutationRequests, heartbeatRuns, wakeupRequests, runEvents, issueComments, documents, issueDocuments, documentRevisions, approvals, costEvents, activityLog, gitWorkspaces, workflowStates };
+export const schema = { projects, sessions, tasks, agentRuns, runRecords, agents, issues, issueDependencies, issueMutationRequests, heartbeatRuns, wakeupRequests, runEvents, issueComments, documents, issueDocuments, documentRevisions, approvals, costEvents, activityLog, workflowStates };

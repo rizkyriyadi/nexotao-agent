@@ -1,11 +1,30 @@
-import test from "node:test";
+import test, { after } from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { flattenPaths, readPreview, readTree, writeFile as saveFile, type TreeNode } from "../lib/workspace-files";
+import type { TreeNode } from "../lib/workspace-files";
+
+/* `listRoots` reads the active project, which means the config file and the
+   database — both anchored to NEXOTAO_DATA_DIR at module load. So the variable
+   is set before the module is imported, and the import is dynamic to make that
+   ordering explicit rather than a fact about hoisting. Without it these tests
+   would open the real ~/.nexotao belonging to whoever ran them. */
+const data = await mkdtemp(path.join(tmpdir(), "nexotao-files-data-"));
+process.env.NEXOTAO_DATA_DIR = data;
+
+const { activeRoot, flattenPaths, listRoots, readPreview, readTree, writeFile: saveFile } =
+  await import("../lib/workspace-files");
+const { getDatabase } = await import("../lib/db/database");
+const { addProject } = await import("../lib/store");
+const { saveConfig } = await import("../lib/config");
+
+after(async () => {
+  await (await getDatabase()).close();
+  await rm(data, { recursive: true, force: true });
+});
 
 const exec = promisify(execFile);
 
@@ -262,4 +281,34 @@ test("a PDF within the cap is still previewed", async () => {
 
   const preview = await readPreview(dir, "small.pdf");
   assert.equal(preview.kind, "pdf", "a normal PDF is unaffected by the ceiling");
+});
+
+/* Why: this used to return a list — the project, plus one entry per run writing
+   into a worktree of its own — and the panel put a picker on top of it. That is
+   what made the folder appear to change per task, and the terminal open in a
+   directory the user had never been to, with nothing installed in it. Runs write
+   into the project folder now, so "which folder am I looking at" has exactly one
+   answer, and this test is what keeps it that way: a second entry appearing here
+   is the picker coming back. */
+test("the panel has one folder to show, and it is the project", async () => {
+  const tree = await repository();
+  const project = await addProject({ name: "Shop", path: tree });
+  await saveConfig({ activeProjectId: project.id });
+
+  const roots = await listRoots();
+  assert.equal(roots.length, 1, "one folder, always");
+  assert.equal(roots[0].path, tree);
+  assert.equal(roots[0].id, "project");
+  assert.equal(roots[0].label, "Shop");
+  assert.deepEqual(await activeRoot(), roots[0], "and the active one is simply that folder");
+});
+
+/* Why: no project open is a real state — a fresh install, or the moment after
+   the last project is deleted. The panel has to render it as "nothing open"
+   rather than throwing, because it is mounted before any project exists. */
+test("with no project open the panel reports nothing rather than failing", async () => {
+  await saveConfig({ activeProjectId: undefined });
+
+  assert.deepEqual(await listRoots(), []);
+  assert.equal(await activeRoot(), null);
 });

@@ -1,12 +1,20 @@
 // `nexotao uninstall` — removes Nexotao and everything it created.
 //
-// The dangerous part of uninstalling this app is invisible: Nexotao registers
-// git worktrees *inside the user's own repositories*. Deleting ~/.nexotao by
-// hand pulls those directories out from under git and leaves every affected
+// The dangerous part of uninstalling this app is invisible: what it leaves
+// behind lives *inside the user's own repositories*, not under ~/.nexotao.
+//
+// Two kinds of litter, from two eras of the app. Runs used to execute in a git
+// worktree registered in the user's repository; deleting ~/.nexotao by hand
+// pulls those directories out from under git and leaves every affected
 // repository with a stranded worktree registry and dangling `nexotao/*`
-// branches — a mess the user did not make and has no reason to know how to
-// clean up. So this is not "delete a folder". It is **release, then delete**,
-// in that order, and shipping it as a command is the only way to guarantee the
+// branches. Runs now execute in the user's folder directly and record a
+// before-picture as a dangling commit under `refs/nexotao/snapshots/<runId>`,
+// one per run, visible in `git for-each-ref` and carried along by
+// `git push --mirror`.
+//
+// Both have to be handed back, and anyone uninstalling today may well have
+// both. So this is not "delete a folder". It is **release, then delete**, in
+// that order, and shipping it as a command is the only way to guarantee the
 // order is right.
 //
 // Deliberately dependency-free and self-contained: `package.json` publishes
@@ -167,6 +175,84 @@ async function isDirectory(target, d) {
   return d.fs.stat(target).then((s) => s.isDirectory()).catch(() => false);
 }
 
+/* ── repositories we have written into ──────────────────────────────────────── */
+
+/** Every project folder the app knows about, read straight out of its database.
+ *
+ *  Snapshot refs are the reason this exists. A worktree announces itself twice —
+ *  a directory under `<dir>/worktrees/` and a registration in the repository — so
+ *  scanning the disk finds it. A snapshot ref announces itself nowhere: it is a
+ *  ref inside the user's repository and nothing under ~/.nexotao names the folder
+ *  it is in. Miss that folder and the ref survives the uninstall for good.
+ *
+ *  `config.json` is not the answer despite holding the active project id — it
+ *  stores no paths at all. The `projects` table is where they are, so this opens
+ *  the SQLite file read-only and asks. Failure at every step is expected and
+ *  silent: `node:sqlite` only exists from Node 22.5 (package.json allows 18.18),
+ *  the database may predate the table, and an uninstall must not require either.
+ *  What is lost then is ref cleanup in repositories that never hosted a worktree;
+ *  everything else proceeds. */
+async function projectRepositories(d) {
+  let DatabaseSync;
+  try { ({ DatabaseSync } = await import("node:sqlite")); } catch { return []; }
+  const file = path.join(d.dir, "nexotao.sqlite");
+  if (!(await d.fs.stat(file).then(() => true).catch(() => false))) return [];
+  let db;
+  try {
+    db = new DatabaseSync(file, { readOnly: true });
+    return db.prepare("select path from projects").all()
+      .map((row) => row?.path)
+      .filter((value) => typeof value === "string" && value)
+      // Paths are stored as the user typed them, `~` and all (lib/paths.ts).
+      .map((value) => (value === "~" || value.startsWith("~/") ? path.join(d.home, value.slice(1)) : value));
+  } catch {
+    return [];
+  } finally {
+    try { db?.close(); } catch { /* already closed, or never opened */ }
+  }
+}
+
+/** Refs under `refs/nexotao/` in one repository, with the ref name we would
+ *  delete. The whole namespace rather than `refs/nexotao/snapshots/` alone: it is
+ *  ours entirely, and a version that wrote a different ref under it should not
+ *  outlive the uninstall on a technicality. */
+async function refsIn(repo, d) {
+  const r = await d.exec("git", ["-C", repo, "for-each-ref", "--format=%(refname)", "refs/nexotao/"], { timeoutMs: 30_000 });
+  if (r.code !== 0) return [];
+  return r.stdout.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.startsWith("refs/nexotao/"));
+}
+
+/** Every `refs/nexotao/` ref across every repository we can find, grouped by
+ *  repository so the plan can name them. The two sources are unioned because
+ *  neither is complete on its own: the worktree scan finds repositories the
+ *  database has forgotten, and the database finds repositories that never had a
+ *  worktree — which, after this release, is all of them. */
+export async function scanSnapshotRefs(owners, deps = {}) {
+  const d = resolveDeps(deps);
+  const repos = [...new Set([...owners, ...(await projectRepositories(d))].filter(Boolean).map((repo) => path.resolve(repo)))].sort();
+  const found = [];
+  for (const repo of repos) {
+    const refs = await refsIn(repo, d);
+    if (refs.length) found.push({ repo, refs });
+  }
+  return found;
+}
+
+/** Hand one repository's refs back. Best-effort per ref: a ref that is already
+ *  gone, or a repository that has become unreadable since the scan, must not
+ *  stop the others. */
+export async function releaseSnapshotRefs(entry, deps = {}) {
+  const d = resolveDeps(deps);
+  const problems = [];
+  let released = 0;
+  for (const ref of entry.refs) {
+    const r = await d.exec("git", ["-C", entry.repo, "update-ref", "-d", ref], { timeoutMs: 30_000 });
+    if (r.code === 0) released += 1;
+    else problems.push(`${entry.repo}: could not delete ${ref} (${firstLine(r.stderr || r.stdout) || `git exited ${r.code}`})`);
+  }
+  return { released, problems };
+}
+
 /** Recursive byte total. Best-effort: an unreadable subtree contributes 0
  *  rather than aborting a report whose only job is to inform. */
 async function measure(target, d) {
@@ -207,10 +293,13 @@ export async function planUninstall(deps = {}) {
     const key = wt.owner ?? "(unknown repository)";
     byRepo.set(key, (byRepo.get(key) ?? 0) + 1);
   }
+  const snapshotRefs = await scanSnapshotRefs(worktrees.map((wt) => wt.owner).filter(Boolean), deps);
   const cacheFiles = await ourCacheFiles(d.cacheDir, d);
   const dirExists = await d.fs.stat(d.dir).then(() => true).catch(() => false);
   const toolsSeparate = path.resolve(d.toolsDir) !== path.resolve(path.join(d.dir, "tools"));
   return {
+    snapshotRefs,
+    snapshotRefCount: snapshotRefs.reduce((sum, entry) => sum + entry.refs.length, 0),
     dir: d.dir,
     dirBytes: dirExists ? await measure(d.dir, d) : 0,
     dirExists,
@@ -262,6 +351,15 @@ export function renderPlan(plan, opts = {}) {
     lines.push("", `  ${plan.worktrees.length} worktree${plan.worktrees.length === 1 ? "" : "s"} released back to ${plan.repos.length} repositor${plan.repos.length === 1 ? "y" : "ies"}:`, "");
     const repoWidth = Math.max(...plan.repos.map(({ repo }) => repo.length));
     for (const { repo, count } of plan.repos) lines.push(`    ${repo.padEnd(repoWidth)}   ${String(count).padStart(3)}`);
+  }
+
+  // Its own section, because it is the one thing here a user cannot see for
+  // themselves: these refs are inside repositories they own and `git branch`
+  // never shows them.
+  if (plan.snapshotRefCount) {
+    lines.push("", `  ${plan.snapshotRefCount} undo point${plan.snapshotRefCount === 1 ? "" : "s"} (refs/nexotao/) removed from ${plan.snapshotRefs.length} repositor${plan.snapshotRefs.length === 1 ? "y" : "ies"}:`, "");
+    const refWidth = Math.max(...plan.snapshotRefs.map(({ repo }) => repo.length));
+    for (const { repo, refs } of plan.snapshotRefs) lines.push(`    ${repo.padEnd(refWidth)}   ${String(refs.length).padStart(3)}`);
   }
 
   lines.push("", "  NOT touched:", "", "    your code, commits and branches", `    other indexes in ${plan.cacheDir}`);
@@ -362,7 +460,7 @@ export function promptTty(question) {
  */
 export async function runUninstall(opts = {}, deps = {}) {
   const d = resolveDeps(deps);
-  const report = { released: 0, repos: [], problems: [], freedBytes: 0, packageRemoved: false, cancelled: null };
+  const report = { released: 0, repos: [], refsReleased: 0, problems: [], freedBytes: 0, packageRemoved: false, cancelled: null };
 
   if (opts.help) { d.log(USAGE); return { exitCode: 0, report }; }
   if (opts.unknown?.length) {
@@ -378,7 +476,7 @@ export async function runUninstall(opts = {}, deps = {}) {
   const plan = await planUninstall(deps);
 
   // Nothing at all to do reads as success, not as a failure to find anything.
-  if (!plan.dirExists && !plan.worktrees.length && !plan.cacheFiles.length && opts.keepPackage) {
+  if (!plan.dirExists && !plan.worktrees.length && !plan.snapshotRefCount && !plan.cacheFiles.length && opts.keepPackage) {
     d.log("\nNothing to remove — no Nexotao data found.\n");
     return { exitCode: 0, report };
   }
@@ -423,6 +521,15 @@ export async function runUninstall(opts = {}, deps = {}) {
   }
   report.repos = plan.repos;
 
+  // After the worktrees, and before the data directory goes: once ~/.nexotao is
+  // deleted the database that named these repositories is gone, and a ref left
+  // in one of them has nothing left pointing at it.
+  for (const entry of plan.snapshotRefs) {
+    const result = await releaseSnapshotRefs(entry, deps);
+    report.refsReleased += result.released;
+    report.problems.push(...result.problems);
+  }
+
   const removeDir = async (target, bytes) => {
     const outcome = await d.fs.rm(target, { recursive: true, force: true }).then(() => true, (e) => e);
     if (outcome === true) report.freedBytes += bytes;
@@ -464,6 +571,9 @@ export function renderReport(report) {
     const width = Math.max(...report.repos.map(({ repo }) => repo.length));
     for (const { repo, count } of report.repos) lines.push(`    ${repo.padEnd(width)}   ${String(count).padStart(3)}`);
     lines.push("");
+  }
+  if (report.refsReleased) {
+    lines.push(`  Removed ${report.refsReleased} undo point${report.refsReleased === 1 ? "" : "s"} from refs/nexotao/.`);
   }
   lines.push(`  Freed ${formatBytes(report.freedBytes)}.`);
   if (report.packageRemoved) lines.push(`  Removed the ${PACKAGE_NAME} package.`);

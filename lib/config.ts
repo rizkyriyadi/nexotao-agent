@@ -14,6 +14,12 @@ export type Config = {
   // Default paperclip-style run mode for new runs. `agent` (auto) is the
   // default so file edits and commands run without an approval prompt.
   defaultMode?: AgentMode;
+  // What happens after a run writes files. "review" (the default): the task
+  // parks in `in_review` until you click Keep or Revert, and its snapshot is
+  // held for as long as that takes. "auto": the task finishes immediately —
+  // the Changes panel and Revert are still there, but the snapshot is swept on
+  // age rather than on whether you have looked at it.
+  reviewMode?: "review" | "auto";
   searchApiKey?: string; // optional Tavily key for reliable web search
   // Redacted log/event retention windows in days. null / 0 / absent = keep
   // forever. Applied deterministically by lib/governance.applyRetention.
@@ -67,6 +73,7 @@ export function publicView(c: Config) {
     model: c.model ?? null,
     activeProjectId: c.activeProjectId ?? null,
     defaultMode: c.defaultMode ?? "agent",
+    reviewMode: c.reviewMode ?? "review",
     hasSearchKey: !!c.searchApiKey,
     retention: { ...DEFAULT_RETENTION, ...(c.retention ?? {}) },
     telemetry: c.telemetry === true,

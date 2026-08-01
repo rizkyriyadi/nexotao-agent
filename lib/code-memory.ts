@@ -14,12 +14,13 @@
 //      non-zero exit, `isError`, timeout, unparseable output. An error on the
 //      first tool call of a run is the first thing the user sees, and there is
 //      nothing they could do about it.
-//   2. One index per project, named by us. Runs execute in throwaway git
-//      worktrees; indexing one would register a project keyed by a path that is
-//      deleted minutes later — a dead multi-MB index per run, forever. So we
-//      always index the canonical repo root under an explicit `nexotao-idx-<id>`
-//      name, which also makes teardown unambiguous: that prefix is ours, and an
-//      index the user built by hand for their own CLI use is never touched.
+//   2. One index per project, named by us. A folder can be opened at a
+//      subdirectory, or as one of the user's own linked worktrees; indexing it
+//      as given would key a second multi-MB index to the same source under a
+//      different path. So we always index the canonical repo root under an
+//      explicit `nexotao-idx-<id>` name, which also makes teardown unambiguous:
+//      that prefix is ours, and an index the user built by hand for their own
+//      CLI use is never touched.
 import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
@@ -191,16 +192,20 @@ export function codeIndexName(projectId: string): string {
   return `${INDEX_PREFIX}${projectId}`;
 }
 
-// A run root is a git worktree; its canonical repo is what we index. Cached
+// What we index is the repository that owns a root, not the root itself. Cached
 // because graph_query is the first call of every run and resolving it must not
 // mean a git spawn each time.
 const canonicalRoots = new Map<string, string>();
 
 /**
- * Map any root — including a run's throwaway worktree — to the canonical repo
- * root. `git rev-parse --git-common-dir` points at the *owning* repository's
- * `.git` even from a linked worktree, which is precisely the distinction we need.
- * Falls back to the input when git is absent or the path is not a repo.
+ * Map any root to the canonical repo root. A run's root is now the project
+ * folder itself, so this is usually the identity — but the folder a user opens
+ * can still be a linked worktree of their own, or a subdirectory of a repo, and
+ * indexing it as if it were its own repository would build a second index of the
+ * same source under a different key. `git rev-parse --git-common-dir` points at
+ * the *owning* repository's `.git` in both cases, which is precisely the
+ * distinction we need. Falls back to the input when git is absent or the path is
+ * not a repo.
  */
 export async function canonicalRoot(root: string, deps?: { exec?: CliExec }): Promise<string> {
   const start = expandHome(root);
@@ -271,8 +276,9 @@ export async function detectCodeMemory(deps?: CliDeps): Promise<boolean> {
 
 /**
  * Index one project. Always indexes the canonical repo root under our own name,
- * whatever root the caller happened to have — a run passing its worktree still
- * reads and writes the project's single index.
+ * whatever root the caller happened to have — a caller passing a subdirectory,
+ * or a worktree of the user's own, still reads and writes the project's single
+ * index.
  */
 export async function indexProject(
   projectId: string,
